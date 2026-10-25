@@ -24,6 +24,7 @@
  */
 package net.runelite.rsbuddy.script;
 
+import java.awt.Color;
 import java.util.Collections;
 import java.util.List;
 
@@ -128,5 +129,50 @@ public abstract class Script
 	public List<String> getOverlayLines()
 	{
 		return Collections.emptyList();
+	}
+
+	/**
+	 * Progress bars rendered by the XP overlay while this script is running.
+	 * Each bar represents progress from the current level to the next level.
+	 */
+	public List<ProgressBar> getProgressBars()
+	{
+		return Collections.emptyList();
+	}
+
+	public static final class ProgressBar
+	{
+		private final String label;
+		private final double progress;
+		private final String value;
+		private final Color color;
+
+		public ProgressBar(String label, double progress, String value, Color color)
+		{
+			this.label = label;
+			this.progress = Math.max(0.0, Math.min(1.0, progress));
+			this.value = value;
+			this.color = color == null ? Color.CYAN : color;
+		}
+
+		public String getLabel()
+		{
+			return label;
+		}
+
+		public double getProgress()
+		{
+			return progress;
+		}
+
+		public String getValue()
+		{
+			return value;
+		}
+
+		public Color getColor()
+		{
+			return color;
+		}
 	}
 }

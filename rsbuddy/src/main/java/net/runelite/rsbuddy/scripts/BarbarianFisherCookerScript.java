@@ -24,7 +24,9 @@
  */
 package net.runelite.rsbuddy.scripts;
 
+import java.awt.Color;
 import java.awt.Rectangle;
+import java.awt.event.KeyEvent;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -70,7 +72,17 @@ public final class BarbarianFisherCookerScript extends Script
 	private static final int CLICK_COOLDOWN = 3;
 	private static final int MAX_CAMERA_PULSES = 60;
 	private static final int COOK_STABLE_TICKS = 2;
-	private static final int DROP_BATCH_SIZE = 2;
+
+	// Default camera: fully zoomed out, pitched all the way up, facing west.
+	// The camera is moved with the same keys and mouse wheel a player uses.
+	private static final int CAMERA_ZOOM_NOTCHES = 60;
+	private static final int CAMERA_MAX_PITCH = 383;
+	private static final int CAMERA_PITCH_TOLERANCE = 4;
+	private static final int CAMERA_HOLD_MS = 800;
+	private static final int CAMERA_WEST_YAW = 4096;
+	private static final int CAMERA_YAW_TOLERANCE = 256;
+	private static final int CAMERA_SCALE_TOLERANCE = 4;
+	private static final long CAMERA_IDLE_RESET_MS = 10_000L;
 
 	// After clicking a fishing spot, wait for the fishing animation instead of
 	// clicking again while the player is still walking to the spot.
@@ -88,6 +100,16 @@ public final class BarbarianFisherCookerScript extends Script
 	private int cameraAttempts;
 	private int lastCameraTarget = -1;
 
+	private boolean cameraSetupActive;
+	private int cameraPhase;
+	private boolean zoomStarted;
+	private int defaultCameraScale;
+	private long lastCameraMaintenanceAt;
+	private int pitchKey = KeyEvent.VK_UP;
+	private int pitchBeforeHold = -1;
+	private boolean pitchHoldPending;
+	private boolean pitchDirectionLearned;
+
 	private boolean awaitingFishingStart;
 	private boolean fishingAnimationSeen;
 	private long lastFishingClickAt;
@@ -104,6 +126,8 @@ public final class BarbarianFisherCookerScript extends Script
 	private int fishCooked;
 	private long startFishingXp;
 	private long startCookingXp;
+	private int fishingXpPerHour;
+	private int cookingXpPerHour;
 
 	public BarbarianFisherCookerScript()
 	{
@@ -120,6 +144,15 @@ public final class BarbarianFisherCookerScript extends Script
 		spacePressed = false;
 		cameraAttempts = 0;
 		lastCameraTarget = -1;
+		cameraSetupActive = true;
+		cameraPhase = 0;
+		zoomStarted = false;
+		defaultCameraScale = 0;
+		lastCameraMaintenanceAt = System.currentTimeMillis();
+		pitchKey = KeyEvent.VK_UP;
+		pitchBeforeHold = -1;
+		pitchHoldPending = false;
+		pitchDirectionLearned = false;
 		resetFishingAttempt();
 		resetFireInteraction();
 		resetStats();
@@ -144,6 +177,19 @@ public final class BarbarianFisherCookerScript extends Script
 		{
 			--cooldown;
 			return;
+		}
+
+		if (!ensureCamera(context))
+		{
+			return;
+		}
+
+		if (isIdleForCameraReset(context))
+		{
+			if (!ensureDefaultCamera(context))
+			{
+				return;
+			}
 		}
 
 		int rawFish = inventory.countRawFish();
@@ -193,15 +239,123 @@ public final class BarbarianFisherCookerScript extends Script
 		lines.add("Fishing");
 		lines.add("Total fish: " + formatNumber(fishCaught) + " (" + formatPerHour(fishCaught, elapsed) + "/hr)");
 		lines.add(formatXpToNextLevel(client, Skill.FISHING));
+		lines.add("XP per hour: " + formatNumber(fishingXpPerHour));
 		lines.add(formatTimeToNextLevel(client, Skill.FISHING, startFishingXp, elapsed));
+		lines.add("Actions to next level: " + formatActions(fishingActionsToNextLevel(client, Skill.FISHING)));
 		lines.add("");
 		lines.add("Cooking");
 		lines.add("Total cooked: " + formatNumber(fishCooked) + " (" + formatPerHour(fishCooked, elapsed) + "/hr)");
 		lines.add(formatXpToNextLevel(client, Skill.COOKING));
+		lines.add("XP per hour: " + formatNumber(cookingXpPerHour));
 		lines.add(formatTimeToNextLevel(client, Skill.COOKING, startCookingXp, elapsed));
+		lines.add("Actions to next level: " + formatActions(cookingActionsToNextLevel(client, Skill.COOKING)));
 		lines.add("");
 		lines.add("Total time: " + formatDuration(elapsed));
 		return lines;
+	}
+
+	@Override
+	public List<ProgressBar> getProgressBars()
+	{
+		if (!statsInitialized)
+		{
+			return Collections.emptyList();
+		}
+
+		Client client = getContext().getClient();
+
+		List<ProgressBar> bars = new ArrayList<>();
+		bars.add(fishingProgressBar(client));
+		bars.add(cookingProgressBar(client));
+		return bars;
+	}
+
+	private Script.ProgressBar fishingProgressBar(Client client)
+	{
+		int level = client.getRealSkillLevel(Skill.FISHING);
+		if (level >= Experience.MAX_REAL_LEVEL)
+		{
+			return new Script.ProgressBar("Fishing", 1.0, "Max level", Color.GREEN);
+		}
+
+		long xp = client.getSkillExperience(Skill.FISHING);
+		long currentLevelXp = Experience.getXpForLevel(level);
+		long nextLevelXp = Experience.getXpForLevel(level + 1);
+		long progressXp = Math.max(0L, xp - currentLevelXp);
+		long totalXp = Math.max(1L, nextLevelXp - currentLevelXp);
+		double progress = (double) progressXp / totalXp;
+		String value = formatNumber(xp) + " / " + formatNumber(nextLevelXp);
+		return new Script.ProgressBar("Fishing", progress, value, Color.GREEN);
+	}
+
+	private Script.ProgressBar cookingProgressBar(Client client)
+	{
+		int level = client.getRealSkillLevel(Skill.COOKING);
+		if (level >= Experience.MAX_REAL_LEVEL)
+		{
+			return new Script.ProgressBar("Cooking", 1.0, "Max level", Color.CYAN);
+		}
+
+		long xp = client.getSkillExperience(Skill.COOKING);
+		long currentLevelXp = Experience.getXpForLevel(level);
+		long nextLevelXp = Experience.getXpForLevel(level + 1);
+		long progressXp = Math.max(0L, xp - currentLevelXp);
+		long totalXp = Math.max(1L, nextLevelXp - currentLevelXp);
+		double progress = (double) progressXp / totalXp;
+		String value = formatNumber(xp) + " / " + formatNumber(nextLevelXp);
+		return new Script.ProgressBar("Cooking", progress, value, Color.CYAN);
+	}
+
+	private int fishingActionsToNextLevel(Client client, Skill skill)
+	{
+		int level = client.getRealSkillLevel(skill);
+		if (level >= Experience.MAX_REAL_LEVEL)
+		{
+			return 0;
+		}
+
+		long xp = client.getSkillExperience(skill);
+		long remaining = Math.max(0L, Experience.getXpForLevel(level + 1) - xp);
+		long gained = Math.max(0L, xp - startFishingXp);
+		if (fishCaught <= 0 || gained <= 0)
+		{
+			return -1;
+		}
+
+		long xpPerFish = gained / fishCaught;
+		if (xpPerFish <= 0)
+		{
+			return -1;
+		}
+
+		long actions = remaining / xpPerFish;
+		return actions > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) actions;
+	}
+
+	private int cookingActionsToNextLevel(Client client, Skill skill)
+	{
+		int level = client.getRealSkillLevel(skill);
+		if (level >= Experience.MAX_REAL_LEVEL)
+		{
+			return 0;
+		}
+
+		long xp = client.getSkillExperience(skill);
+		long remaining = Math.max(0L, Experience.getXpForLevel(level + 1) - xp);
+		long gained = Math.max(0L, xp - startCookingXp);
+		if (fishCooked <= 0 || gained <= 0)
+		{
+			return -1;
+		}
+
+		long xpPerCook = gained / fishCooked;
+		if (xpPerCook <= 0)
+		{
+			return -1;
+		}
+
+		long actions = remaining / xpPerCook;
+		return actions > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) actions;
 	}
 
 	private void fish(ScriptContext context)
@@ -686,31 +840,26 @@ public final class BarbarianFisherCookerScript extends Script
 		}
 
 		List<Integer> slots = inventory.findDroppableFishSlots();
-		List<Widget> items = new ArrayList<>();
-
-		for (int slot : slots)
+		if (slots.isEmpty())
 		{
-			if (items.size() >= DROP_BATCH_SIZE)
-			{
-				break;
-			}
-
-			Widget item = inventory.getSlotWidget(slot);
-			if (item == null || item.isHidden() || item.getBounds().isEmpty())
-			{
-				continue;
-			}
-
-			items.add(item);
+			cooldown = 1;
+			setStatus("Waiting for inventory");
+			return;
 		}
 
-		int dropped = input.fastClick(items);
-
-		if (dropped > 0)
+		// Drop one fish at a time with smooth mouse movement from slot to slot.
+		int slot = slots.get(0);
+		Widget item = inventory.getSlotWidget(slot);
+		if (item == null || item.isHidden() || item.getBounds().isEmpty())
 		{
-			// Two drops per tick is about twice as fast as dropping one fish
-			// per tick.
-			cooldown = 0;
+			cooldown = 1;
+			setStatus("Waiting for inventory");
+			return;
+		}
+
+		if (input.click(item))
+		{
+			cooldown = 1;
 			setStatus("Dropping fish");
 		}
 		else
@@ -755,6 +904,169 @@ public final class BarbarianFisherCookerScript extends Script
 		lastFireClickAt = 0;
 	}
 
+	/**
+	 * Sets up the default camera angle on startup and keeps it there while
+	 * idle: fully zoomed out, pitched all the way up, facing west. Uses the
+	 * same inputs a real player would (mouse wheel for zoom, arrow keys for
+	 * rotation).
+	 */
+	private boolean ensureCamera(ScriptContext context)
+	{
+		GameInput input = context.getInput();
+		Client client = context.getClient();
+
+		if (!cameraSetupActive)
+		{
+			return true;
+		}
+
+		if (!zoomStarted)
+		{
+			setStatus("Zooming camera out");
+			zoomStarted = input.zoomOut(CAMERA_ZOOM_NOTCHES);
+			return false;
+		}
+
+		if (input.isZooming())
+		{
+			setStatus("Zooming camera out");
+			return false;
+		}
+
+		if (cameraPhase == 0)
+		{
+			setStatus("Pitching camera up");
+			if (input.isCameraBusy())
+			{
+				return false;
+			}
+
+			if (client.getCameraPitchTarget() < CAMERA_MAX_PITCH - CAMERA_PITCH_TOLERANCE)
+			{
+				holdPitchUp(input, client);
+				return false;
+			}
+
+			cameraPhase = 1;
+			return true;
+		}
+
+		if (cameraPhase == 1)
+		{
+			setStatus("Facing camera west");
+			if (input.isCameraBusy())
+			{
+				return false;
+			}
+
+			if (Math.abs(normalizeYaw(CAMERA_WEST_YAW - client.getCameraYawTarget())) > CAMERA_YAW_TOLERANCE)
+			{
+				input.turnCameraToYaw(CAMERA_WEST_YAW);
+				return false;
+			}
+
+			cameraSetupActive = false;
+			defaultCameraScale = client.getScale();
+			lastCameraMaintenanceAt = System.currentTimeMillis();
+			setStatus("Camera ready");
+			return true;
+		}
+
+		return true;
+	}
+
+	/**
+	 * When the script has been idle for a while, reset the camera back to the
+	 * default angle so it doesn't drift.
+	 */
+	private boolean isIdleForCameraReset(ScriptContext context)
+	{
+		Player player = context.getPlayer();
+		if (cameraSetupActive || (player != null && player.getAnimation() != -1))
+		{
+			lastCameraMaintenanceAt = System.currentTimeMillis();
+			return false;
+		}
+
+		return System.currentTimeMillis() - lastCameraMaintenanceAt >= CAMERA_IDLE_RESET_MS;
+	}
+
+	private boolean ensureDefaultCamera(ScriptContext context)
+	{
+		GameInput input = context.getInput();
+		Client client = context.getClient();
+
+		if (input.isCameraBusy() || input.isZooming())
+		{
+			return false;
+		}
+
+		int pitch = client.getCameraPitchTarget();
+		boolean pitchLow = pitch < CAMERA_MAX_PITCH - CAMERA_PITCH_TOLERANCE;
+		boolean yawOff = Math.abs(normalizeYaw(CAMERA_WEST_YAW - client.getCameraYawTarget())) > CAMERA_YAW_TOLERANCE;
+		boolean zoomedIn = defaultCameraScale > 0
+			&& client.getScale() > defaultCameraScale + CAMERA_SCALE_TOLERANCE;
+
+		if (!pitchLow && !yawOff && !zoomedIn)
+		{
+			lastCameraMaintenanceAt = System.currentTimeMillis();
+			return true;
+		}
+
+		setStatus("Resetting camera");
+		if (zoomedIn)
+		{
+			input.zoomOut(CAMERA_ZOOM_NOTCHES);
+			return false;
+		}
+
+		if (pitchLow)
+		{
+			holdPitchUp(input, client);
+			return false;
+		}
+
+		input.turnCameraToYaw(CAMERA_WEST_YAW);
+		return false;
+	}
+
+	/**
+	 * Holds the arrow key that raises the camera pitch. The key direction is
+	 * confirmed from the resulting pitch change, so the script still works if
+	 * the client maps the arrows the other way around.
+	 */
+	private void holdPitchUp(GameInput input, Client client)
+	{
+		int pitch = client.getCameraPitchTarget();
+
+		if (pitchHoldPending)
+		{
+			pitchHoldPending = false;
+			if (!pitchDirectionLearned && pitchBeforeHold >= 0)
+			{
+				int change = pitch - pitchBeforeHold;
+				if (change < -2)
+				{
+					pitchKey = pitchKey == KeyEvent.VK_UP ? KeyEvent.VK_DOWN : KeyEvent.VK_UP;
+				}
+				else if (change > 2)
+				{
+					pitchDirectionLearned = true;
+				}
+			}
+		}
+
+		pitchBeforeHold = pitch;
+		pitchHoldPending = true;
+		input.holdKey(pitchKey, CAMERA_HOLD_MS);
+	}
+
+	private static int normalizeYaw(int yaw)
+	{
+		int normalized = yaw & 16383;
+		return normalized >= 8192 ? normalized - 16384 : normalized;
+	}
+
 	private void resetStats()
 	{
 		statsInitialized = false;
@@ -765,17 +1077,21 @@ public final class BarbarianFisherCookerScript extends Script
 		fishCooked = 0;
 		startFishingXp = 0;
 		startCookingXp = 0;
+		fishingXpPerHour = 0;
+		cookingXpPerHour = 0;
 	}
 
 	private void updateStats()
 	{
 		Inventory inventory = getContext().getInventory();
 		Client client = getContext().getClient();
+		long now = System.currentTimeMillis();
+		long elapsed = Math.max(1L, now - statsStartedAt);
 
 		if (!statsInitialized)
 		{
 			statsInitialized = true;
-			statsStartedAt = System.currentTimeMillis();
+			statsStartedAt = now;
 			lastRawCount = inventory.countRawFish();
 			lastCookedCount = inventory.countCookedFish();
 			startFishingXp = client.getSkillExperience(Skill.FISHING);
@@ -798,6 +1114,17 @@ public final class BarbarianFisherCookerScript extends Script
 
 		lastRawCount = rawCount;
 		lastCookedCount = cookedCount;
+
+		long fishingXp = client.getSkillExperience(Skill.FISHING);
+		long cookingXp = client.getSkillExperience(Skill.COOKING);
+
+		fishingXpPerHour = (int) Math.round((fishingXp - startFishingXp) * 3_600_000.0 / elapsed);
+		cookingXpPerHour = (int) Math.round((cookingXp - startCookingXp) * 3_600_000.0 / elapsed);
+	}
+
+	private static String formatActions(int actions)
+	{
+		return actions < 0 ? "--" : formatNumber(actions);
 	}
 
 	private static String formatPerHour(int amount, long elapsedMs)

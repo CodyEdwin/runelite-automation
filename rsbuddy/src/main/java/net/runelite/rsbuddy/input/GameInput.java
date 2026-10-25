@@ -33,6 +33,7 @@ import java.awt.Shape;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseEvent;
+import java.awt.event.MouseWheelEvent;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
@@ -49,6 +50,7 @@ import net.runelite.api.Player;
 import net.runelite.api.TileObject;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.widgets.Widget;
 
 /**
@@ -89,6 +91,7 @@ public final class GameInput
 	private volatile int cameraPulseYaw;
 	private int cameraLeftSign = 1;
 	private int cameraRightSign = -1;
+	private volatile boolean zooming;
 
 	public GameInput(Client client)
 	{
@@ -559,6 +562,74 @@ public final class GameInput
 	}
 
 	/**
+	 * @return true while the mouse wheel is being scrolled to zoom the camera
+	 */
+	public boolean isZooming()
+	{
+		return zooming;
+	}
+
+	/**
+	 * Scrolls the mouse wheel down to zoom the camera out, one notch at a
+	 * time with a small human-like delay between notches.
+	 *
+	 * @param notches number of wheel notches to scroll
+	 * @return true if zooming was started
+	 */
+	public boolean zoomOut(int notches)
+	{
+		if (notches <= 0)
+		{
+			return false;
+		}
+
+		if (zooming)
+		{
+			return true;
+		}
+
+		Canvas canvas = client.getCanvas();
+		if (canvas == null)
+		{
+			return false;
+		}
+
+		Dimension size = canvas.getSize();
+		if (size.width <= 0 || size.height <= 0)
+		{
+			return false;
+		}
+
+		final int x = size.width / 2;
+		final int y = size.height / 2;
+		zooming = true;
+
+		SwingUtilities.invokeLater(() ->
+		{
+			canvas.requestFocusInWindow();
+			zoomStep(canvas, x, y, notches);
+		});
+
+		return true;
+	}
+
+	private void zoomStep(Canvas canvas, int x, int y, int remaining)
+	{
+		if (remaining <= 0)
+		{
+			zooming = false;
+			return;
+		}
+
+		canvas.dispatchEvent(new MouseWheelEvent(canvas, MouseEvent.MOUSE_WHEEL,
+			System.currentTimeMillis(), 0, x, y, 0, false, MouseWheelEvent.WHEEL_UNIT_SCROLL, 3, 1));
+
+		Timer timer = new Timer(80 + random.nextInt(70), event -> zoomStep(canvas, x, y, remaining - 1));
+		timer.setRepeats(false);
+		timer.start();
+	}
+
+	/**
 	 * Starts turning the camera toward a world position by holding the
 	 * appropriate arrow key, exactly as a player would. The key is released
 	 * automatically after a short hold, or immediately with
@@ -595,6 +666,25 @@ public final class GameInput
 
 		int desired = (int) Math.round(Math.atan2(-dx, dy) * CAMERA_YAW_UNITS / TAU)
 			& (CAMERA_YAW_UNITS - 1);
+		return turnCameraToYaw(desired);
+	}
+
+	/**
+	 * Starts turning the camera toward an absolute yaw by holding the
+	 * appropriate arrow key, using the direction learned from earlier pulses.
+	 *
+	 * @param desiredYaw target yaw in JAU14 units
+	 * @return true if the camera is already turning or a turn was started,
+	 * false if the camera already faces the target yaw
+	 */
+	public boolean turnCameraToYaw(int desiredYaw)
+	{
+		if (cameraKey != -1)
+		{
+			return true;
+		}
+
+		int desired = desiredYaw & (CAMERA_YAW_UNITS - 1);
 		int current = client.getCameraYawTarget() & (CAMERA_YAW_UNITS - 1);
 		int delta = normalizeYaw(desired - current);
 		if (Math.abs(delta) <= CAMERA_DEADBAND)
@@ -1183,7 +1273,7 @@ public final class GameInput
 		{
 			int x = (int) Math.round(centerX + (random.nextDouble() * 2.0 - 1.0) * bounds.width * 0.36);
 			int y = (int) Math.round(centerY + (random.nextDouble() * 2.0 - 1.0) * bounds.height * 0.36);
-			if (shape.contains(x, y) && isInViewport(x, y))
+			if (shape.contains(x, y) && isInViewport(x, y) && !isCoveredByInterface(x, y))
 			{
 				return new Point(x, y);
 			}
@@ -1191,7 +1281,32 @@ public final class GameInput
 
 		int x = (int) Math.round(centerX);
 		int y = (int) Math.round(centerY);
-		return shape.contains(x, y) && isInViewport(x, y) ? new Point(x, y) : null;
+		return shape.contains(x, y) && isInViewport(x, y) && !isCoveredByInterface(x, y)
+			? new Point(x, y)
+			: null;
+	}
+
+	/**
+	 * @return true if the inventory or chat interface covers the given canvas
+	 * point, so a click there would hit the interface instead of the game
+	 * world
+	 */
+	private boolean isCoveredByInterface(int x, int y)
+	{
+		return isWithinWidget(InterfaceID.Inventory.ITEMS, x, y)
+			|| isWithinWidget(InterfaceID.Chatbox.UNIVERSE, x, y);
+	}
+
+	private boolean isWithinWidget(int widgetId, int x, int y)
+	{
+		Widget widget = client.getWidget(widgetId);
+		if (widget == null || widget.isHidden())
+		{
+			return false;
+		}
+
+		Rectangle bounds = widget.getBounds();
+		return bounds != null && !bounds.isEmpty() && bounds.contains(x, y);
 	}
 
 	private Point randomPoint(Rectangle bounds)

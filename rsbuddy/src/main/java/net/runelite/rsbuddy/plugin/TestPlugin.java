@@ -90,6 +90,9 @@ public class TestPlugin extends Plugin
 	private TestOverlay overlay;
 
 	@Inject
+	private XpProgressOverlay xpProgressOverlay;
+
+	@Inject
 	private MouseOverlay mouseOverlay;
 
 	private volatile GameInput input;
@@ -130,6 +133,7 @@ public class TestPlugin extends Plugin
 
 		clientToolbar.addNavigation(navButton);
 		overlayManager.add(overlay);
+		overlayManager.add(xpProgressOverlay);
 		overlayManager.add(mouseOverlay);
 		mouseManager.registerMouseListener(mouseOverlay);
 		log.info("RSBuddy started");
@@ -154,6 +158,7 @@ public class TestPlugin extends Plugin
 		}
 
 		overlayManager.remove(overlay);
+		overlayManager.remove(xpProgressOverlay);
 		overlayManager.remove(mouseOverlay);
 		mouseManager.unregisterMouseListener(mouseOverlay);
 		input = null;
