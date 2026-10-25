@@ -103,6 +103,16 @@ dependencies {
     testImplementation(libs.okhttp.mockserver)
 }
 
+tasks.register<JavaExec>("run") {
+    group = "application"
+    description = "Run the RuneLite client in developer mode"
+    dependsOn(":rsbuddy:installPlugin")
+    mainClass.set("net.runelite.client.RuneLite")
+    classpath = sourceSets.main.get().runtimeClasspath
+    jvmArgs("-ea")
+    args("--developer-mode")
+}
+
 val shadowJar = tasks.register<Jar>("shadowJar") {
     dependsOn(configurations.runtimeClasspath)
     manifest {
