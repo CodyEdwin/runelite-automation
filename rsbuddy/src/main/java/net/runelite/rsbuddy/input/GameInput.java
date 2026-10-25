@@ -229,6 +229,154 @@ public final class GameInput
 	}
 
 	/**
+	 * Moves the mouse onto an NPC without clicking it, using the same curved
+	 * path as a click.
+	 *
+	 * @return true if a movement was started
+	 */
+	public boolean hover(NPC npc)
+	{
+		if (npc == null)
+		{
+			return false;
+		}
+
+		Shape hull = npc.getConvexHull();
+		if (hull != null)
+		{
+			return hover(hull);
+		}
+
+		Polygon tilePoly = npc.getCanvasTilePoly();
+		return tilePoly != null && hover(tilePoly);
+	}
+
+	/**
+	 * Moves the mouse onto a tile object without clicking it, using the same
+	 * curved path as a click.
+	 *
+	 * @return true if a movement was started
+	 */
+	public boolean hover(TileObject object)
+	{
+		if (object == null)
+		{
+			return false;
+		}
+
+		Shape clickbox = object.getClickbox();
+		if (clickbox != null)
+		{
+			return hover(clickbox);
+		}
+
+		Polygon tilePoly = object.getCanvasTilePoly();
+		if (tilePoly != null)
+		{
+			return hover(tilePoly);
+		}
+
+		net.runelite.api.Point canvasLocation = object.getCanvasLocation();
+		return canvasLocation != null
+			&& moveTo(new Point(canvasLocation.getX(), canvasLocation.getY()));
+	}
+
+	/**
+	 * Moves the mouse to a random point inside the shape without clicking.
+	 *
+	 * @return true if a movement was started
+	 */
+	public boolean hover(Shape shape)
+	{
+		Point point = randomPoint(shape);
+		return point != null && moveTo(point);
+	}
+
+	/**
+	 * Animates the mouse to a point in game canvas coordinates without
+	 * pressing a button.
+	 *
+	 * @return true if a movement was started
+	 */
+	public boolean moveTo(Point gamePoint)
+	{
+		if (gamePoint == null)
+		{
+			return false;
+		}
+
+		Canvas canvas = client.getCanvas();
+		if (canvas == null)
+		{
+			return false;
+		}
+
+		Point canvasPoint = toCanvasPoint(gamePoint);
+		if (!canvas.contains(canvasPoint))
+		{
+			return false;
+		}
+
+		busy = true;
+		SwingUtilities.invokeLater(() -> beginMove(canvas, canvasPoint));
+		return true;
+	}
+
+	/**
+	 * @return true if the simulated mouse is currently inside the shape
+	 */
+	public boolean isMouseOver(Shape shape)
+	{
+		if (shape == null)
+		{
+			return false;
+		}
+
+		Point location = getMouseLocation();
+		return location != null && shape.contains(location);
+	}
+
+	/**
+	 * @return true if the simulated mouse is currently over the NPC's model
+	 */
+	public boolean isMouseOver(NPC npc)
+	{
+		if (npc == null)
+		{
+			return false;
+		}
+
+		Shape hull = npc.getConvexHull();
+		if (hull != null && isMouseOver(hull))
+		{
+			return true;
+		}
+
+		Polygon tilePoly = npc.getCanvasTilePoly();
+		return tilePoly != null && isMouseOver(tilePoly);
+	}
+
+	/**
+	 * @return true if the simulated mouse is currently over the object
+	 */
+	public boolean isMouseOver(TileObject object)
+	{
+		if (object == null)
+		{
+			return false;
+		}
+
+		Shape clickbox = object.getClickbox();
+		if (clickbox != null && isMouseOver(clickbox))
+		{
+			return true;
+		}
+
+		Polygon tilePoly = object.getCanvasTilePoly();
+		return tilePoly != null && isMouseOver(tilePoly);
+	}
+
+	/**
 	 * Clicks several widgets in quick succession without the animated mouse
 	 * path. This is intended for rapid inventory actions such as
 	 * power-dropping fish. The clicks are sequenced so each one lands after the
@@ -773,6 +921,39 @@ public final class GameInput
 
 	private void beginClick(Canvas canvas, Point target, int button)
 	{
+		Point start = beginMovement(canvas);
+		if (start == null)
+		{
+			busy = false;
+			return;
+		}
+
+		List<MouseStep> steps = buildMoveSteps(start, target);
+		appendClickSteps(steps, target, button);
+		playSteps(canvas, steps);
+	}
+
+	private void beginMove(Canvas canvas, Point target)
+	{
+		Point start = beginMovement(canvas);
+		if (start == null)
+		{
+			busy = false;
+			return;
+		}
+
+		playSteps(canvas, buildMoveSteps(start, target));
+	}
+
+	/**
+	 * Sets up the starting point for a movement and updates the simulated
+	 * mouse position to it. Must be called on the Swing event thread.
+	 *
+	 * @return the canvas point the movement starts from, or null if the canvas
+	 * has no usable size
+	 */
+	private Point beginMovement(Canvas canvas)
+	{
 		stopMovement();
 
 		Point start = lastMousePoint;
@@ -781,8 +962,7 @@ public final class GameInput
 			Dimension size = canvas.getSize();
 			if (size.width <= 0 || size.height <= 0)
 			{
-				busy = false;
-				return;
+				return null;
 			}
 
 			start = new Point(
@@ -793,8 +973,11 @@ public final class GameInput
 
 		canvas.requestFocusInWindow();
 		mouseLocation = toGamePoint(start);
+		return start;
+	}
 
-		List<MouseStep> steps = buildClickSteps(start, target, button);
+	private void playSteps(Canvas canvas, List<MouseStep> steps)
+	{
 		final long startedAt = System.nanoTime();
 		final int[] index = {0};
 
@@ -837,7 +1020,7 @@ public final class GameInput
 		timer.start();
 	}
 
-	private List<MouseStep> buildClickSteps(Point start, Point target, int button)
+	private List<MouseStep> buildMoveSteps(Point start, Point target)
 	{
 		List<MouseStep> steps = new ArrayList<>();
 
@@ -901,6 +1084,11 @@ public final class GameInput
 			}
 		}
 
+		return steps;
+	}
+
+	private void appendClickSteps(List<MouseStep> steps, Point target, int button)
+	{
 		long pressDelay = steps.get(steps.size() - 1).delayMs + 30 + random.nextInt(70);
 		int downMask = button == MouseEvent.BUTTON3
 			? InputEvent.BUTTON3_DOWN_MASK
@@ -911,8 +1099,6 @@ public final class GameInput
 		steps.add(new MouseStep(MouseEvent.MOUSE_RELEASED, target, button, 1, 0, releaseDelay));
 		steps.add(new MouseStep(MouseEvent.MOUSE_CLICKED, target, button, 1, 0,
 			releaseDelay + 15 + random.nextInt(35)));
-
-		return steps;
 	}
 
 	private static double cubic(double a, double b, double c, double d, double t)

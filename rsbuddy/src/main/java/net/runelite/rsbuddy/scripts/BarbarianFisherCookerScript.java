@@ -30,6 +30,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Random;
 import net.runelite.api.Client;
 import net.runelite.api.Experience;
 import net.runelite.api.NPC;
@@ -82,12 +83,23 @@ public final class BarbarianFisherCookerScript extends Script
 	// instead of clicking the fire again while the player is walking to it.
 	private static final long FIRE_INTERACTION_TIMEOUT_MS = 8000L;
 
+	// While fishing or cooking, keep the mouse over the target. If the spot
+	// moves and the mouse is no longer over it, move the mouse back. Once the
+	// mouse is settled, occasionally nudge it within the target so it does not
+	// look frozen.
+	private static final long HOVER_IDLE_ADJUST_MS = 2500L;
+	private static final double HOVER_IDLE_ADJUST_CHANCE = 0.2;
+
+	private final Random random = new Random();
+
 	private int cooldown;
 	private int lastRawFish;
 	private int rawStableTicks;
 	private boolean spacePressed;
 	private int cameraAttempts;
 	private int lastCameraTarget = -1;
+	private long lastFishingHoverAt;
+	private long lastFireHoverAt;
 
 	private boolean awaitingFishingStart;
 	private boolean fishingAnimationSeen;
@@ -125,6 +137,8 @@ public final class BarbarianFisherCookerScript extends Script
 		spacePressed = false;
 		cameraAttempts = 0;
 		lastCameraTarget = -1;
+		lastFishingHoverAt = 0;
+		lastFireHoverAt = 0;
 		resetFishingAttempt();
 		resetFireInteraction();
 		resetStats();
@@ -214,12 +228,6 @@ public final class BarbarianFisherCookerScript extends Script
 		GameInput input = context.getInput();
 		Player player = context.getPlayer();
 
-		if (input.isBusy())
-		{
-			setStatus("Moving mouse");
-			return;
-		}
-
 		long now = System.currentTimeMillis();
 
 		if (player.getAnimation() != -1)
@@ -229,6 +237,7 @@ public final class BarbarianFisherCookerScript extends Script
 			fishingAnimationSeen = true;
 			awaitingFishingStart = false;
 			lastFishingAnimationAt = now;
+			hoverFishingSpot(context);
 			setStatus("Fishing");
 			return;
 		}
@@ -239,6 +248,7 @@ public final class BarbarianFisherCookerScript extends Script
 			// spot, so give it time to start fishing before clicking again.
 			if (now - lastFishingClickAt < FISHING_START_TIMEOUT_MS)
 			{
+				hoverFishingSpot(context);
 				setStatus("Fishing");
 				return;
 			}
@@ -251,11 +261,18 @@ public final class BarbarianFisherCookerScript extends Script
 			// treat a longer gap as the end of the fishing session.
 			if (now - lastFishingAnimationAt < FISHING_ANIMATION_GAP_MS)
 			{
+				hoverFishingSpot(context);
 				setStatus("Fishing");
 				return;
 			}
 
 			fishingAnimationSeen = false;
+		}
+
+		if (input.isBusy())
+		{
+			setStatus("Moving mouse");
+			return;
 		}
 
 		Optional<NPC> visibleSpot = context.getTargets().findVisibleNpc(FISHING_SPOT_ID, FISHING_DISTANCE);
@@ -279,6 +296,7 @@ public final class BarbarianFisherCookerScript extends Script
 			if (clicked)
 			{
 				noteFishingClick();
+				lastFishingHoverAt = now;
 				cooldown = CLICK_COOLDOWN;
 				setStatus("Fishing");
 			}
@@ -320,6 +338,7 @@ public final class BarbarianFisherCookerScript extends Script
 			if (input.interact(fishingSpot, FISH_ACTION))
 			{
 				noteFishingClick();
+				lastFishingHoverAt = now;
 				cameraAttempts = 0;
 				cooldown = CLICK_COOLDOWN;
 				setStatus("Fishing");
@@ -337,6 +356,85 @@ public final class BarbarianFisherCookerScript extends Script
 		lastCameraTarget = -1;
 		cooldown = 2;
 		setStatus("No fishing spot nearby - move to Barbarian Village");
+	}
+
+	/**
+	 * Keeps the mouse over the fishing spot while the player is fishing. The
+	 * spot drifts around, so this moves the mouse back whenever it is no longer
+	 * over the spot.
+	 */
+	private void hoverFishingSpot(ScriptContext context)
+	{
+		GameInput input = context.getInput();
+		if (input.isBusy())
+		{
+			return;
+		}
+
+		Optional<NPC> spot = context.getTargets().findVisibleNpc(FISHING_SPOT_ID, FISHING_DISTANCE);
+		if (!spot.isPresent())
+		{
+			return;
+		}
+
+		NPC fishingSpot = spot.get();
+		long now = System.currentTimeMillis();
+
+		if (!input.isMouseOver(fishingSpot))
+		{
+			if (input.hover(fishingSpot))
+			{
+				lastFishingHoverAt = now;
+			}
+			return;
+		}
+
+		if (shouldAdjustHover(lastFishingHoverAt, now) && input.hover(fishingSpot))
+		{
+			lastFishingHoverAt = now;
+		}
+	}
+
+	/**
+	 * Keeps the mouse over the fire while the player is cooking, including
+	 * after the cooking interface has been dismissed.
+	 */
+	private void hoverFire(ScriptContext context)
+	{
+		GameInput input = context.getInput();
+		if (input.isBusy())
+		{
+			return;
+		}
+
+		Optional<TileObject> fire = context.getTargets().findVisibleTileObject(FIRE_ID, FIRE_DISTANCE);
+		if (!fire.isPresent())
+		{
+			return;
+		}
+
+		TileObject cookingFire = fire.get();
+		long now = System.currentTimeMillis();
+
+		if (!input.isMouseOver(cookingFire))
+		{
+			if (input.hover(cookingFire))
+			{
+				lastFireHoverAt = now;
+			}
+			return;
+		}
+
+		if (shouldAdjustHover(lastFireHoverAt, now) && input.hover(cookingFire))
+		{
+			lastFireHoverAt = now;
+		}
+	}
+
+	private boolean shouldAdjustHover(long lastHoverAt, long now)
+	{
+		return now - lastHoverAt >= HOVER_IDLE_ADJUST_MS
+			&& random.nextDouble() < HOVER_IDLE_ADJUST_CHANCE;
 	}
 
 	private void cook(ScriptContext context, int rawFish)
@@ -395,6 +493,7 @@ public final class BarbarianFisherCookerScript extends Script
 			awaitingFireInteraction = false;
 			lastRawFish = rawFish;
 			rawStableTicks = 0;
+			hoverFire(context);
 			setStatus("Cooking (" + rawFish + " raw left)");
 			return;
 		}
@@ -407,12 +506,14 @@ public final class BarbarianFisherCookerScript extends Script
 		if (context.getPlayer().getAnimation() != -1)
 		{
 			awaitingFireInteraction = false;
+			hoverFire(context);
 			setStatus("Cooking (" + rawFish + " raw left)");
 			return;
 		}
 
 		if (rawStableTicks < COOK_STABLE_TICKS)
 		{
+			hoverFire(context);
 			setStatus("Waiting for cooking");
 			return;
 		}
@@ -430,6 +531,7 @@ public final class BarbarianFisherCookerScript extends Script
 			// time before clicking the fire again.
 			if (System.currentTimeMillis() - lastFireClickAt < FIRE_INTERACTION_TIMEOUT_MS)
 			{
+				hoverFire(context);
 				setStatus("Waiting for fire");
 				return;
 			}
@@ -458,10 +560,12 @@ public final class BarbarianFisherCookerScript extends Script
 			if (clicked)
 			{
 				noteFireClick();
+				lastFireHoverAt = System.currentTimeMillis();
 				lastRawFish = rawFish;
 				rawStableTicks = 0;
 				spacePressed = false;
 				cooldown = CLICK_COOLDOWN;
+				hoverFire(context);
 				setStatus("Clicking fire");
 			}
 			else
@@ -500,11 +604,13 @@ public final class BarbarianFisherCookerScript extends Script
 			if (input.interact(cookingFire, COOK_ACTION))
 			{
 				noteFireClick();
+				lastFireHoverAt = System.currentTimeMillis();
 				cameraAttempts = 0;
 				lastRawFish = rawFish;
 				rawStableTicks = 0;
 				spacePressed = false;
 				cooldown = CLICK_COOLDOWN;
+				hoverFire(context);
 				setStatus("Clicking fire");
 			}
 			else
