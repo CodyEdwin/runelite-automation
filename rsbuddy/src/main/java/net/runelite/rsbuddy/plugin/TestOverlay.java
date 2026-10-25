@@ -48,7 +48,9 @@ public class TestOverlay extends Overlay
 {
 	private static final int PADDING = 6;
 	private static final int LINE_GAP = 2;
-	private static final Color BACKGROUND = new Color(0, 0, 0, 160);
+	private static final int PANEL_WIDTH = 280;
+	private static final Color BACKGROUND = new Color(56, 43, 28, 220);
+	private static final Color BORDER = new Color(120, 95, 62, 255);
 
 	private final Client client;
 	private final TestConfig config;
@@ -95,30 +97,52 @@ public class TestOverlay extends Overlay
 		graphics.setFont(FontManager.getRunescapeSmallFont());
 		FontMetrics metrics = graphics.getFontMetrics();
 
-		int width = 0;
-		for (String line : lines)
-		{
-			width = Math.max(width, metrics.stringWidth(line));
-		}
-		width += PADDING * 2;
+		int width = PANEL_WIDTH;
+		int textWidth = width - PADDING * 2;
 
 		int lineHeight = metrics.getHeight() + LINE_GAP;
 		int height = lines.size() * lineHeight - LINE_GAP + PADDING * 2;
 
 		graphics.setColor(BACKGROUND);
 		graphics.fillRoundRect(0, 0, width, height, 6, 6);
+		graphics.setColor(BORDER);
+		graphics.drawRoundRect(0, 0, width - 1, height - 1, 6, 6);
 
 		Color textColor = config.textColor() == null ? Color.WHITE : config.textColor();
 		int y = PADDING + metrics.getAscent();
 		for (String line : lines)
 		{
+			String text = fitText(metrics, line, textWidth);
 			graphics.setColor(Color.BLACK);
-			graphics.drawString(line, PADDING + 1, y + 1);
+			graphics.drawString(text, PADDING + 1, y + 1);
 			graphics.setColor(textColor);
-			graphics.drawString(line, PADDING, y);
+			graphics.drawString(text, PADDING, y);
 			y += lineHeight;
 		}
 
 		return new Dimension(width, height);
+	}
+
+	private static String fitText(FontMetrics metrics, String text, int maxWidth)
+	{
+		if (text == null)
+		{
+			return "";
+		}
+
+		if (metrics.stringWidth(text) <= maxWidth)
+		{
+			return text;
+		}
+
+		String ellipsis = "...";
+		int ellipsisWidth = metrics.stringWidth(ellipsis);
+		int end = text.length();
+		while (end > 0 && metrics.stringWidth(text.substring(0, end)) + ellipsisWidth > maxWidth)
+		{
+			--end;
+		}
+
+		return text.substring(0, end) + ellipsis;
 	}
 }

@@ -30,7 +30,6 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
-import java.util.Random;
 import net.runelite.api.Client;
 import net.runelite.api.Experience;
 import net.runelite.api.NPC;
@@ -41,7 +40,6 @@ import net.runelite.api.Skill;
 import net.runelite.api.TileObject;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.InterfaceID;
-import net.runelite.api.gameval.ItemID;
 import net.runelite.api.gameval.NpcID;
 import net.runelite.api.gameval.ObjectID;
 import net.runelite.api.widgets.Widget;
@@ -83,23 +81,12 @@ public final class BarbarianFisherCookerScript extends Script
 	// instead of clicking the fire again while the player is walking to it.
 	private static final long FIRE_INTERACTION_TIMEOUT_MS = 8000L;
 
-	// While fishing or cooking, keep the mouse over the target. If the spot
-	// moves and the mouse is no longer over it, move the mouse back. Once the
-	// mouse is settled, occasionally nudge it within the target so it does not
-	// look frozen.
-	private static final long HOVER_IDLE_ADJUST_MS = 2500L;
-	private static final double HOVER_IDLE_ADJUST_CHANCE = 0.2;
-
-	private final Random random = new Random();
-
 	private int cooldown;
 	private int lastRawFish;
 	private int rawStableTicks;
 	private boolean spacePressed;
 	private int cameraAttempts;
 	private int lastCameraTarget = -1;
-	private long lastFishingHoverAt;
-	private long lastFireHoverAt;
 
 	private boolean awaitingFishingStart;
 	private boolean fishingAnimationSeen;
@@ -111,14 +98,10 @@ public final class BarbarianFisherCookerScript extends Script
 
 	private boolean statsInitialized;
 	private long statsStartedAt;
-	private int lastRawTrout;
-	private int lastRawSalmon;
-	private int lastCookedTrout;
-	private int lastCookedSalmon;
-	private int troutCaught;
-	private int salmonCaught;
-	private int troutCooked;
-	private int salmonCooked;
+	private int lastRawCount;
+	private int lastCookedCount;
+	private int fishCaught;
+	private int fishCooked;
 	private long startFishingXp;
 	private long startCookingXp;
 
@@ -137,8 +120,6 @@ public final class BarbarianFisherCookerScript extends Script
 		spacePressed = false;
 		cameraAttempts = 0;
 		lastCameraTarget = -1;
-		lastFishingHoverAt = 0;
-		lastFireHoverAt = 0;
 		resetFishingAttempt();
 		resetFireInteraction();
 		resetStats();
@@ -210,16 +191,16 @@ public final class BarbarianFisherCookerScript extends Script
 		List<String> lines = new ArrayList<>();
 		lines.add("");
 		lines.add("Fishing");
-		lines.add("Trout caught: " + troutCaught + " (" + formatPerHour(troutCaught, elapsed) + "/hr)");
-		lines.add("Salmon caught: " + salmonCaught + " (" + formatPerHour(salmonCaught, elapsed) + "/hr)");
+		lines.add("Total fish: " + formatNumber(fishCaught) + " (" + formatPerHour(fishCaught, elapsed) + "/hr)");
 		lines.add(formatXpToNextLevel(client, Skill.FISHING));
 		lines.add(formatTimeToNextLevel(client, Skill.FISHING, startFishingXp, elapsed));
 		lines.add("");
 		lines.add("Cooking");
-		lines.add("Trout cooked: " + troutCooked + " (" + formatPerHour(troutCooked, elapsed) + "/hr)");
-		lines.add("Salmon cooked: " + salmonCooked + " (" + formatPerHour(salmonCooked, elapsed) + "/hr)");
+		lines.add("Total cooked: " + formatNumber(fishCooked) + " (" + formatPerHour(fishCooked, elapsed) + "/hr)");
 		lines.add(formatXpToNextLevel(client, Skill.COOKING));
 		lines.add(formatTimeToNextLevel(client, Skill.COOKING, startCookingXp, elapsed));
+		lines.add("");
+		lines.add("Total time: " + formatDuration(elapsed));
 		return lines;
 	}
 
@@ -296,7 +277,6 @@ public final class BarbarianFisherCookerScript extends Script
 			if (clicked)
 			{
 				noteFishingClick();
-				lastFishingHoverAt = now;
 				cooldown = CLICK_COOLDOWN;
 				setStatus("Fishing");
 			}
@@ -338,7 +318,6 @@ public final class BarbarianFisherCookerScript extends Script
 			if (input.interact(fishingSpot, FISH_ACTION))
 			{
 				noteFishingClick();
-				lastFishingHoverAt = now;
 				cameraAttempts = 0;
 				cooldown = CLICK_COOLDOWN;
 				setStatus("Fishing");
@@ -355,7 +334,7 @@ public final class BarbarianFisherCookerScript extends Script
 		cameraAttempts = 0;
 		lastCameraTarget = -1;
 		cooldown = 2;
-		setStatus("No fishing spot nearby - move to Barbarian Village");
+		setStatus("No fishing spot nearby");
 	}
 
 	/**
@@ -378,20 +357,10 @@ public final class BarbarianFisherCookerScript extends Script
 		}
 
 		NPC fishingSpot = spot.get();
-		long now = System.currentTimeMillis();
 
 		if (!input.isMouseOver(fishingSpot))
 		{
-			if (input.hover(fishingSpot))
-			{
-				lastFishingHoverAt = now;
-			}
-			return;
-		}
-
-		if (shouldAdjustHover(lastFishingHoverAt, now) && input.hover(fishingSpot))
-		{
-			lastFishingHoverAt = now;
+			input.hover(fishingSpot);
 		}
 	}
 
@@ -414,27 +383,11 @@ public final class BarbarianFisherCookerScript extends Script
 		}
 
 		TileObject cookingFire = fire.get();
-		long now = System.currentTimeMillis();
 
 		if (!input.isMouseOver(cookingFire))
 		{
-			if (input.hover(cookingFire))
-			{
-				lastFireHoverAt = now;
-			}
-			return;
+			input.hover(cookingFire);
 		}
-
-		if (shouldAdjustHover(lastFireHoverAt, now) && input.hover(cookingFire))
-		{
-			lastFireHoverAt = now;
-		}
-	}
-
-	private boolean shouldAdjustHover(long lastHoverAt, long now)
-	{
-		return now - lastHoverAt >= HOVER_IDLE_ADJUST_MS
-			&& random.nextDouble() < HOVER_IDLE_ADJUST_CHANCE;
 	}
 
 	private void cook(ScriptContext context, int rawFish)
@@ -560,7 +513,6 @@ public final class BarbarianFisherCookerScript extends Script
 			if (clicked)
 			{
 				noteFireClick();
-				lastFireHoverAt = System.currentTimeMillis();
 				lastRawFish = rawFish;
 				rawStableTicks = 0;
 				spacePressed = false;
@@ -604,7 +556,6 @@ public final class BarbarianFisherCookerScript extends Script
 			if (input.interact(cookingFire, COOK_ACTION))
 			{
 				noteFireClick();
-				lastFireHoverAt = System.currentTimeMillis();
 				cameraAttempts = 0;
 				lastRawFish = rawFish;
 				rawStableTicks = 0;
@@ -808,14 +759,10 @@ public final class BarbarianFisherCookerScript extends Script
 	{
 		statsInitialized = false;
 		statsStartedAt = 0;
-		lastRawTrout = 0;
-		lastRawSalmon = 0;
-		lastCookedTrout = 0;
-		lastCookedSalmon = 0;
-		troutCaught = 0;
-		salmonCaught = 0;
-		troutCooked = 0;
-		salmonCooked = 0;
+		lastRawCount = 0;
+		lastCookedCount = 0;
+		fishCaught = 0;
+		fishCooked = 0;
 		startFishingXp = 0;
 		startCookingXp = 0;
 	}
@@ -829,44 +776,28 @@ public final class BarbarianFisherCookerScript extends Script
 		{
 			statsInitialized = true;
 			statsStartedAt = System.currentTimeMillis();
-			lastRawTrout = inventory.countItem(ItemID.RAW_TROUT);
-			lastRawSalmon = inventory.countItem(ItemID.RAW_SALMON);
-			lastCookedTrout = inventory.countItem(ItemID.TROUT);
-			lastCookedSalmon = inventory.countItem(ItemID.SALMON);
+			lastRawCount = inventory.countRawFish();
+			lastCookedCount = inventory.countCookedFish();
 			startFishingXp = client.getSkillExperience(Skill.FISHING);
 			startCookingXp = client.getSkillExperience(Skill.COOKING);
 			return;
 		}
 
-		int rawTrout = inventory.countItem(ItemID.RAW_TROUT);
-		int rawSalmon = inventory.countItem(ItemID.RAW_SALMON);
-		int cookedTrout = inventory.countItem(ItemID.TROUT);
-		int cookedSalmon = inventory.countItem(ItemID.SALMON);
+		int rawCount = inventory.countRawFish();
+		int cookedCount = inventory.countCookedFish();
 
-		if (rawTrout > lastRawTrout)
+		if (rawCount > lastRawCount)
 		{
-			troutCaught += rawTrout - lastRawTrout;
+			fishCaught += rawCount - lastRawCount;
 		}
 
-		if (rawSalmon > lastRawSalmon)
+		if (cookedCount > lastCookedCount)
 		{
-			salmonCaught += rawSalmon - lastRawSalmon;
+			fishCooked += cookedCount - lastCookedCount;
 		}
 
-		if (cookedTrout > lastCookedTrout)
-		{
-			troutCooked += cookedTrout - lastCookedTrout;
-		}
-
-		if (cookedSalmon > lastCookedSalmon)
-		{
-			salmonCooked += cookedSalmon - lastCookedSalmon;
-		}
-
-		lastRawTrout = rawTrout;
-		lastRawSalmon = rawSalmon;
-		lastCookedTrout = cookedTrout;
-		lastCookedSalmon = cookedSalmon;
+		lastRawCount = rawCount;
+		lastCookedCount = cookedCount;
 	}
 
 	private static String formatPerHour(int amount, long elapsedMs)
@@ -911,8 +842,7 @@ public final class BarbarianFisherCookerScript extends Script
 		}
 
 		long millis = Math.round(remaining * 3_600_000.0 / xpPerHour);
-		return "Time to level " + (level + 1) + ": " + formatDuration(millis)
-			+ " (" + formatNumber(xpPerHour) + " xp/hr)";
+		return "Time to level " + (level + 1) + ": " + formatDuration(millis);
 	}
 
 	private static String formatDuration(long millis)
