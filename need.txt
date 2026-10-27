@@ -1,0 +1,122 @@
+GE FLIP ADVISOR - jar rebuilt 16:19
+==================================
+
+This is now an advisor. It does not click, buy, sell or type anything. It
+watches the OSRS Wiki price feed, works out which items can be bought low and
+resold high *after* the 2% Grand Exchange tax, and shows you the exact
+numbers. You place every offer yourself.
+
+
+HOW TO OPEN IT
+--------------
+RuneLite sidebar -> "RSBuddy Scripts" -> choose "GE Flipper" in the script
+dropdown -> Start.
+
+A window called "GE Flip Advisor" opens (always on top). If you close it,
+press Start again to bring it back. If you are not logged in yet the status
+line says "Waiting for login"; prices start loading as soon as you are in
+game.
+
+
+WHAT TO DO WITH IT
+------------------
+1. "Starting capital (gp)" - type what you actually have. The window will not
+   suggest anything you cannot afford, and it sizes each buy to that amount.
+
+2. "Free to play only" - ticked by default. Leave it ticked and member items
+   are hidden. Untick it only if you want to see member trades.
+
+   This box re-scans the moment you change it; you do not need Apply.
+
+3. The orange card is the pick. It reads like this:
+
+       Buy 125 @ 3,403 gp  ->  list them at 3,614 gp
+
+   Those are exact prices. Type those exact numbers into the GE. The line
+   under it shows total profit after tax, total cost, 24h volume, buy limit,
+   the break-even price and "never list below".
+
+4. "Copy name" puts the item name on your clipboard so you can paste it into
+   the GE search box. "Next pick" cycles through the other candidates.
+
+5. Buy them, wait for the buy to fill, then sell them at the sell price. Do
+   not list below the "never list below" number - that is the price that
+   still covers what you paid plus tax plus your minimum profit.
+
+6. "Apply filters & rescan" after changing capital, min profit or anything in
+   the advanced section. The list also refreshes itself every few seconds.
+
+
+READING THE LIST
+----------------
+"All picks" is sorted by total profit, biggest first. Columns:
+
+    Item   Buy   Qty   Sell   Profit   ROI   Vol 24h   Limit
+
+Buy and Sell are the exact prices to use. Qty is how many the window thinks
+you can move: capped by your capital, the item's 4-hour buy limit, and 10% of
+its daily traded volume so you are not left holding a pile nobody buys.
+
+
+ADVANCED FILTERS (hidden by default)
+------------------------------------
+Min ROI %          - profit as a percentage of the buy price
+Min 24h volume     - ignore items that barely trade
+Buy offset         - how far above the current low you offer (default +1)
+Sell offset        - how far below the current high you list (default -1)
+Max 24h price drift- reject items whose price has moved too far from its
+                     24-hour average, which is how spikes and crashes get
+                     filtered out
+
+Defaults are deliberately picky: at least 50 gp profit per item, 1% ROI, 250
+items traded per day, and no more than 8% drift from the 24h average.
+
+
+IF IT SAYS "No pick right now"
+------------------------------
+That is not an error. It means nothing passed every filter at that moment.
+Usually the market is quiet, or your capital is too small for the items with
+real volume. Try, in this order:
+
+    1. Lower "Min profit per item" to 20-30 and press Apply.
+    2. Lower "Min 24h volume" to 100.
+    3. Raise "Max 24h price drift" to 12-15%.
+    4. Wait a few minutes; the feed refreshes constantly.
+
+
+THE HONEST CAVEATS
+------------------
+- Prices come from the OSRS Wiki, not from your client. They are recent, not
+  live: the low and high you see already happened. That is why the window
+  rejects quotes older than 30 minutes and prices far from the daily average.
+- A flip is only a plan. If the market moves between the scan and your offer,
+  you may buy and then have to wait, or sell at break-even. The "never list
+  below" number is what stops a bad sale from turning into a loss.
+- Tax is always assumed: 2% of the sale price, rounded down, capped at 5m per
+  item. A few items are exempt in game; assuming tax can only make the
+  estimate more cautious, never less.
+- The buy limit is per 4 hours, per item. The quantity already respects it.
+- Nothing here can guarantee a profit. It cannot see other players' offers,
+  only what has already traded.
+
+
+WHERE THE LOGS GO
+-----------------
+Every line the window logs is also written to:
+
+    %USERPROFILE%\.runelite\rsbuddy-flipper.log
+
+If something looks wrong, just say so - I read that file directly, you do not
+need to copy anything.
+
+
+WHAT CHANGED IN THIS BUILD (16:19)
+----------------------------------
+- Rewritten as an advisor: no clicking, no typing, no offers placed for you.
+- Free to play toggle, on by default.
+- Pick card with exact buy price, sell price, quantity and a hard floor.
+- Member filtering now also asks the game client which items are member-only,
+  so a wrong flag in the price feed cannot put a member item in your list.
+- Scanning moved onto the game thread, where item data is safe to read.
+- The old automation code (GeTrader) is still in the plugin but is not
+  connected to this window.

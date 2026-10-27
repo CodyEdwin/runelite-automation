@@ -859,7 +859,7 @@ public final class BarbarianFisherCookerScript extends Script
 
 		if (input.click(item))
 		{
-			cooldown = 1;
+			cooldown = 0;
 			setStatus("Dropping fish");
 		}
 		else

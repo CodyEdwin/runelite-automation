@@ -43,6 +43,9 @@ import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.ui.overlay.OverlayManager;
 import net.runelite.client.util.ImageUtil;
+import net.runelite.rsbuddy.debug.GeProbe;
+import net.runelite.rsbuddy.debug.WidgetDumper;
+import net.runelite.rsbuddy.debug.WidgetWatcher;
 import net.runelite.rsbuddy.input.GameInput;
 import net.runelite.rsbuddy.inventory.Inventory;
 import net.runelite.rsbuddy.script.Script;
@@ -51,6 +54,7 @@ import net.runelite.rsbuddy.script.ScriptLoader;
 import net.runelite.rsbuddy.script.ScriptManager;
 import net.runelite.rsbuddy.scripts.BarbarianFisherCookerScript;
 import net.runelite.rsbuddy.scripts.CombatTrainerScript;
+import net.runelite.rsbuddy.scripts.GrandExchangeFlipperScript;
 import net.runelite.rsbuddy.scripts.HillGiantScript;
 import net.runelite.rsbuddy.scripts.ObjectInteractScript;
 import net.runelite.rsbuddy.target.TargetLocator;
@@ -102,6 +106,8 @@ public class TestPlugin extends Plugin
 
 	private volatile GameInput input;
 	private volatile ScriptManager scriptManager;
+	private volatile WidgetWatcher watcher;
+	private volatile GeProbe probe;
 	private TestPluginPanel panel;
 	private NavigationButton navButton;
 
@@ -124,6 +130,7 @@ public class TestPlugin extends Plugin
 		scriptManager.register(new BarbarianFisherCookerScript());
 		scriptManager.register(new CombatTrainerScript());
 		scriptManager.register(new HillGiantScript());
+		scriptManager.register(new GrandExchangeFlipperScript());
 
 		String customScriptError = registerCustomScript(config.customScriptClass());
 
@@ -177,6 +184,35 @@ public class TestPlugin extends Plugin
 	@Subscribe
 	public void onGameTick(GameTick event)
 	{
+		WidgetWatcher current = watcher;
+		if (current != null)
+		{
+			if (current.isExpired())
+			{
+				watcher = null;
+				String error = current.getLastError();
+				chat("RSBuddy: watch finished after " + current.getSnapshots() + " snapshot(s)"
+					+ (error == null || error.isEmpty() ? "" : " (last error: " + error + ")"));
+			}
+			else
+			{
+				current.tick(client);
+			}
+		}
+
+		GeProbe currentProbe = probe;
+		if (currentProbe != null)
+		{
+			if (currentProbe.isFinished())
+			{
+				probe = null;
+			}
+			else
+			{
+				currentProbe.tick();
+			}
+		}
+
 		if (scriptManager != null)
 		{
 			scriptManager.onGameTick();
@@ -221,8 +257,17 @@ public class TestPlugin extends Plugin
 					.reduce((left, right) -> left + ", " + right)
 					.orElse("none"));
 				break;
+			case "widgets":
+				dumpWidgets(String.join(" ", java.util.Arrays.copyOfRange(args, 1, args.length)));
+				break;
+			case "watch":
+				startWatch(args.length > 1 ? args[1] : null);
+				break;
+			case "probe":
+				startProbe();
+				break;
 			default:
-				chat("Usage: ::rsbuddy [status|list|start [name]|stop]");
+				chat("Usage: ::rsbuddy [status|list|start [name]|stop|widgets [label]|watch [seconds]]");
 				break;
 		}
 	}
@@ -300,5 +345,77 @@ public class TestPlugin extends Plugin
 	{
 		clientThread.invokeLater(() ->
 			client.addChatMessage(ChatMessageType.GAMEMESSAGE, "", message, null));
+	}
+
+	/**
+	 * Starts a timed widget watch. Snapshots are taken automatically whenever
+	 * the visible interface changes, so interfaces that grab keyboard focus
+	 * (like the GE item search) can be captured without typing a command.
+	 */
+	private void startWatch(String secondsArg)
+	{
+		int seconds = 60;
+		if (secondsArg != null && !secondsArg.isEmpty())
+		{
+			try
+			{
+				seconds = Integer.parseInt(secondsArg.trim());
+			}
+			catch (NumberFormatException ignored)
+			{
+				// Keep the default.
+			}
+		}
+
+		seconds = Math.max(5, Math.min(300, seconds));
+		watcher = new WidgetWatcher(seconds);
+
+		chat("RSBuddy: watching widgets for " + seconds + "s. Just click through the screens now.");
+		chat("RSBuddy: snapshots append to " + WidgetDumper.getLogFile());
+	}
+
+	/**
+	 * Runs the sell-screen probe: it opens a sell offer, hovers an inventory
+	 * item, records the menu and setup widgets, then backs out without
+	 * confirming anything. Used to capture interface details automatically.
+	 */
+	private void startProbe()
+	{
+		GameInput currentInput = input;
+		if (currentInput == null)
+		{
+			chat("RSBuddy: input is not ready yet.");
+			return;
+		}
+
+		probe = new GeProbe(client, currentInput, new Inventory(client, currentInput),
+			message -> chat("RSBuddy: " + message));
+		chat("RSBuddy: probing the GE sell screen. Do not click until it says it is done.");
+	}
+
+	/**
+	 * Appends a snapshot of the visible interface to the widget dump file so
+	 * interface ids and actions can be read off disk instead of hovering each
+	 * element in RuneLite's widget inspector.
+	 */
+	private void dumpWidgets(String label)
+	{
+		if (label == null || label.isEmpty())
+		{
+			label = "manual";
+		}
+
+		try
+		{
+			int count = WidgetDumper.snapshot(client, label);
+			chat("RSBuddy: widget snapshot '" + label + "' (" + count + " widgets) -> "
+				+ WidgetDumper.getLogFile());
+		}
+		catch (Exception ex)
+		{
+			log.warn("Unable to write widget snapshot", ex);
+			chat("RSBuddy: widget snapshot failed: " + ex.getClass().getSimpleName()
+				+ ": " + ex.getMessage());
+		}
 	}
 }

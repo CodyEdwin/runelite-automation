@@ -872,6 +872,108 @@ public final class GameInput
 	}
 
 	/**
+	 * Types text into whatever currently has chatbox focus, one character at a
+	 * time so the game's input handler keeps up. The characters are dispatched
+	 * as KEY_TYPED events, which is what the chatbox listens for.
+	 */
+	public boolean typeText(String text)
+	{
+		Canvas canvas = client.getCanvas();
+		if (canvas == null || text == null || text.isEmpty())
+		{
+			return false;
+		}
+
+		final char[] characters = text.toCharArray();
+
+		SwingUtilities.invokeLater(() ->
+		{
+			canvas.requestFocusInWindow();
+
+			final int[] index = {0};
+			Timer timer = new Timer(60, null);
+			timer.addActionListener(event ->
+			{
+				if (index[0] >= characters.length)
+				{
+					timer.stop();
+					return;
+				}
+
+				char character = characters[index[0]++];
+				canvas.dispatchEvent(new KeyEvent(canvas, KeyEvent.KEY_TYPED,
+					System.currentTimeMillis(), 0, KeyEvent.VK_UNDEFINED, character));
+				timer.setDelay(55 + random.nextInt(45));
+			});
+			timer.setInitialDelay(0);
+			timer.start();
+		});
+
+		return true;
+	}
+
+	/**
+	 * Submits the active chatbox input.
+	 */
+	public boolean pressEnter()
+	{
+		Canvas canvas = client.getCanvas();
+		if (canvas == null)
+		{
+			return false;
+		}
+
+		SwingUtilities.invokeLater(() ->
+		{
+			canvas.requestFocusInWindow();
+			long when = System.currentTimeMillis();
+			canvas.dispatchEvent(new KeyEvent(canvas, KeyEvent.KEY_PRESSED, when, 0,
+				KeyEvent.VK_ENTER, '\n'));
+			canvas.dispatchEvent(new KeyEvent(canvas, KeyEvent.KEY_TYPED, when + 20, 0,
+				KeyEvent.VK_UNDEFINED, '\n'));
+			canvas.dispatchEvent(new KeyEvent(canvas, KeyEvent.KEY_RELEASED, when + 45, 0,
+				KeyEvent.VK_ENTER, '\n'));
+		});
+
+		return true;
+	}
+
+	/**
+	 * Clicks a widget option while ignoring colour tags, so an action stored as
+	 * {@code Create <col=ff9040>Buy</col> offer} can be matched with plain
+	 * {@code Create Buy offer}.
+	 */
+	public boolean interactStripped(Widget widget, String action)
+	{
+		if (widget == null || widget.isHidden() || action == null)
+		{
+			return false;
+		}
+
+		String[] actions = widget.getActions();
+		if (actions == null)
+		{
+			return false;
+		}
+
+		for (int i = 0; i < actions.length; i++)
+		{
+			if (actions[i] != null && stripTags(actions[i]).equalsIgnoreCase(stripTags(action)))
+			{
+				client.menuAction(-1, widget.getId(), MenuAction.CC_OP, i + 1, -1, actions[i], "");
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	private static String stripTags(String value)
+	{
+		return value.replaceAll("<[^>]*>", "").trim();
+	}
+
+	/**
 	 * Interacts with a tile object by opening its right-click menu and then
 	 * clicking the matching option in that menu. Using the real context menu
 	 * avoids relying on synthesised menu actions, which the client does not
@@ -1208,6 +1310,97 @@ public final class GameInput
 		client.menuAction(entry.getParam0(), entry.getParam1(), entry.getType(),
 			entry.getIdentifier(), entry.getItemId(), entry.getOption(), entry.getTarget());
 		return true;
+	}
+
+	/**
+	 * Runs a context-menu entry directly. This lets callers use an option that
+	 * is not the default left-click action without opening the menu, and it
+	 * never falls back to a plain click, so nothing unexpected is triggered.
+	 */
+	public boolean invokeMenu(MenuEntry entry)
+	{
+		return entry != null && invokeMenuEntry(entry);
+	}
+
+	/**
+	 * Finds an entry in the client's current context menu. The menu is built
+	 * from whatever the mouse is hovering, so callers must hover the target and
+	 * wait a frame before asking.
+	 *
+	 * @param option option text, colour tags ignored
+	 * @param itemId item id to require, or -1 to accept any
+	 */
+	public MenuEntry findMenuEntry(String option, int itemId)
+	{
+		if (option == null)
+		{
+			return null;
+		}
+
+		MenuEntry untyped = null;
+		int untypedCount = 0;
+
+		for (MenuEntry entry : currentMenuEntries())
+		{
+			if (entry == null || entry.getOption() == null
+				|| !stripTags(entry.getOption()).equalsIgnoreCase(stripTags(option)))
+			{
+				continue;
+			}
+
+			if (entry.getItemId() == itemId)
+			{
+				return entry;
+			}
+
+			if (entry.getItemId() <= 0)
+			{
+				untyped = entry;
+				untypedCount++;
+			}
+		}
+
+		// Fall back only when there is exactly one candidate, so an ambiguous
+		// menu can never be resolved to the wrong item.
+		return untypedCount == 1 ? untyped : null;
+	}
+
+	/**
+	 * Lists the options in the current context menu, for logging when an
+	 * expected option is missing.
+	 */
+	public List<String> describeMenu()
+	{
+		List<String> options = new ArrayList<>();
+
+		for (MenuEntry entry : currentMenuEntries())
+		{
+			if (entry == null || entry.getOption() == null)
+			{
+				continue;
+			}
+
+			String target = stripTags(entry.getTarget() == null ? "" : entry.getTarget());
+			options.add(stripTags(entry.getOption()) + (target.isEmpty() ? "" : " " + target));
+		}
+
+		return options;
+	}
+
+	private MenuEntry[] currentMenuEntries()
+	{
+		net.runelite.api.Menu menu = client.getMenu();
+		if (menu != null)
+		{
+			MenuEntry[] entries = menu.getMenuEntries();
+			if (entries != null && entries.length > 0)
+			{
+				return entries;
+			}
+		}
+
+		MenuEntry[] entries = client.getMenuEntries();
+		return entries == null ? new MenuEntry[0] : entries;
 	}
 
 	/**
