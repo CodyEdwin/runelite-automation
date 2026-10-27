@@ -34,6 +34,7 @@ import java.util.regex.Pattern;
 import javax.swing.SwingUtilities;
 import net.runelite.api.Actor;
 import net.runelite.api.Client;
+import net.runelite.api.GameState;
 import net.runelite.api.Item;
 import net.runelite.api.ItemComposition;
 import net.runelite.api.NPC;
@@ -70,6 +71,7 @@ public final class CombatTrainerScript extends Script
 	private volatile CombatTrainerWindow window;
 
 	private int cooldown;
+	private boolean loggingOut;
 
 	public CombatTrainerScript()
 	{
@@ -84,6 +86,7 @@ public final class CombatTrainerScript extends Script
 		cooldown = 0;
 		refreshRequested = true;
 		training = false;
+		loggingOut = false;
 		setStatus("Choose NPCs in the Combat Trainer window");
 
 		SwingUtilities.invokeLater(this::showWindow);
@@ -113,6 +116,13 @@ public final class CombatTrainerScript extends Script
 			return;
 		}
 
+		// If the player logged back in with food, cancel the safety logout
+		// instead of immediately logging out again.
+		if (loggingOut && hasFood(context))
+		{
+			loggingOut = false;
+		}
+
 		// The nearby NPC list is refreshed on demand from the configuration
 		// window. Scans happen here because reading the world is only safe
 		// on the game thread.
@@ -135,6 +145,12 @@ public final class CombatTrainerScript extends Script
 		}
 
 		eatIfNeeded(context);
+
+		if (loggingOut)
+		{
+			logout(context);
+			return;
+		}
 
 		if (cooldown > 0)
 		{
@@ -165,13 +181,22 @@ public final class CombatTrainerScript extends Script
 		Actor interacting = player == null ? null : player.getInteracting();
 		if (interacting instanceof NPC)
 		{
+			// Auto-retaliate can already have us in combat with an NPC that
+			// is not in the selected list, and the game refuses a new attack
+			// until the current interaction ends. Keep fighting whatever we
+			// are already on instead of clicking another NPC every tick.
 			NPC current = (NPC) interacting;
 			String currentName = getNpcName(current);
-			if (!current.isDead() && isTarget(currentName))
-			{
-				setStatus("Fighting " + currentName);
-				return;
-			}
+			setStatus((current.isDead() ? "Finishing " : "Fighting ") + currentName);
+			return;
+		}
+
+		// Once the current fight is over, do not start another one without
+		// food. Logging out is safer than dying while waiting for a kill.
+		if (!hasFood(context))
+		{
+			beginLogout();
+			return;
 		}
 
 		Optional<NPC> target = findTarget(context);
@@ -248,7 +273,18 @@ public final class CombatTrainerScript extends Script
 		int slot = findFoodSlot(context);
 		if (slot < 0)
 		{
-			setStatus("Out of food");
+			beginLogout();
+			return;
+		}
+
+		// The inventory tab is not always open. Without opening it the food
+		// slot has no widget and the player cannot eat.
+		if (!inventory.isOpen())
+		{
+			if (!input.isBusy() && inventory.open())
+			{
+				setStatus("Opening inventory");
+			}
 			return;
 		}
 
@@ -298,6 +334,88 @@ public final class CombatTrainerScript extends Script
 		}
 
 		return -1;
+	}
+
+	private boolean hasFood(ScriptContext context)
+	{
+		return findFoodSlot(context) >= 0;
+	}
+
+	private void beginLogout()
+	{
+		if (!loggingOut)
+		{
+			loggingOut = true;
+			setStatus("Out of food - logging out");
+		}
+	}
+
+	/**
+	 * Opens the logout tab and clicks its logout button. The click is retried
+	 * every tick because logging out during combat is rejected by the game.
+	 */
+	private void logout(ScriptContext context)
+	{
+		Client client = context.getClient();
+		if (client.getGameState() != GameState.LOGGED_IN)
+		{
+			setStatus("Out of food - logged out");
+			return;
+		}
+
+		GameInput input = context.getInput();
+		if (client.isMenuOpen())
+		{
+			input.closeMenu();
+			return;
+		}
+
+		if (input.isBusy())
+		{
+			setStatus("Logging out...");
+			return;
+		}
+
+		Widget logoutButton = client.getWidget(InterfaceID.Logout.LOGOUT);
+		if (logoutButton != null && !logoutButton.isHidden())
+		{
+			if (input.click(logoutButton))
+			{
+				setStatus("Logging out...");
+			}
+			return;
+		}
+
+		Widget logoutTab = findLogoutTab(client);
+		if (logoutTab != null && input.click(logoutTab))
+		{
+			setStatus("Out of food - opening logout");
+		}
+		else
+		{
+			setStatus("Out of food - cannot find logout");
+		}
+	}
+
+	private static Widget findLogoutTab(Client client)
+	{
+		int topLevel = client.getTopLevelInterfaceId();
+		int widgetId;
+		if (topLevel == InterfaceID.TOPLEVEL_OSRS_STRETCH)
+		{
+			widgetId = InterfaceID.ToplevelOsrsStretch.STONE10;
+		}
+		else if (topLevel == InterfaceID.TOPLEVEL_PRE_EOC)
+		{
+			widgetId = InterfaceID.ToplevelPreEoc.STONE10;
+		}
+		else
+		{
+			widgetId = InterfaceID.Toplevel.STONE10;
+		}
+
+		Widget tab = client.getWidget(widgetId);
+		return tab != null && !tab.isHidden() ? tab : null;
 	}
 
 	private Map<String, Integer> scanNearbyNpcs(ScriptContext context)
@@ -369,6 +487,7 @@ public final class CombatTrainerScript extends Script
 		targetNames.addAll(names);
 		eatAtHpPercent = Math.max(1, Math.min(99, hpPercent));
 		cooldown = 0;
+		loggingOut = false;
 		training = true;
 		setStatus("Training: " + describeTargets());
 	}
@@ -409,11 +528,6 @@ public final class CombatTrainerScript extends Script
 		}
 
 		return false;
-	}
-
-	private boolean isTarget(String name)
-	{
-		return isTargetSelected(name);
 	}
 
 	private String describeTargets()

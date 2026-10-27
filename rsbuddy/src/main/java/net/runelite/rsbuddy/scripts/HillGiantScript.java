@@ -256,10 +256,14 @@ public final class HillGiantScript extends Script
 		NPC interacting = player != null && player.getInteracting() instanceof NPC
 			? (NPC) player.getInteracting()
 			: null;
-		if (interacting != null && !interacting.isDead()
-			&& NPC_NAME.equalsIgnoreCase(getNpcName(interacting)))
+		if (interacting != null)
 		{
-			setStatus("Fighting " + NPC_NAME);
+			// Any active NPC interaction blocks a new attack. Auto-retaliate
+			// may have started a fight with something other than a hill
+			// giant, so wait for that fight to finish instead of spamming
+			// attack clicks that the game will reject.
+			String interactingName = getNpcName(interacting);
+			setStatus((interacting.isDead() ? "Finishing " : "Fighting ") + interactingName);
 			return;
 		}
 
@@ -708,6 +712,18 @@ public final class HillGiantScript extends Script
 		GameInput input = context.getInput();
 		if (input.isBusy())
 		{
+			return;
+		}
+
+		// The inventory tab might not be open; the food slot has no widget
+		// until it is, which would otherwise make the player stand there and
+		// die without eating.
+		if (!inventory.isOpen())
+		{
+			if (inventory.open())
+			{
+				setStatus("Opening inventory");
+			}
 			return;
 		}
 
