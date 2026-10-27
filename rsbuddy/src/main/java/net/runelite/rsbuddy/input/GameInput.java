@@ -42,6 +42,7 @@ import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import net.runelite.api.Client;
 import net.runelite.api.MenuAction;
+import net.runelite.api.MenuEntry;
 import net.runelite.api.NPC;
 import net.runelite.api.NPCComposition;
 import net.runelite.api.ObjectComposition;
@@ -176,6 +177,11 @@ public final class GameInput
 
 	public boolean click(TileObject object)
 	{
+		return click(object, MouseEvent.BUTTON1);
+	}
+
+	public boolean click(TileObject object, int button)
+	{
 		if (object == null)
 		{
 			return false;
@@ -184,17 +190,20 @@ public final class GameInput
 		Shape clickbox = object.getClickbox();
 		if (clickbox != null)
 		{
-			return click(clickbox);
+			Point point = randomPoint(clickbox);
+			return point != null && click(point, button);
 		}
 
 		Polygon tilePoly = object.getCanvasTilePoly();
 		if (tilePoly != null)
 		{
-			return click(tilePoly);
+			Point point = randomPoint(tilePoly);
+			return point != null && click(point, button);
 		}
 
 		net.runelite.api.Point canvasLocation = object.getCanvasLocation();
-		return canvasLocation != null && click(new Point(canvasLocation.getX(), canvasLocation.getY()));
+		return canvasLocation != null
+			&& click(new Point(canvasLocation.getX(), canvasLocation.getY()), button);
 	}
 
 	public boolean click(NPC npc)
@@ -216,6 +225,11 @@ public final class GameInput
 
 	public boolean click(Widget widget)
 	{
+		return click(widget, MouseEvent.BUTTON1);
+	}
+
+	public boolean click(Widget widget, int button)
+	{
 		if (widget == null || widget.isHidden())
 		{
 			return false;
@@ -228,7 +242,7 @@ public final class GameInput
 		}
 
 		Point point = randomPoint(bounds);
-		return point != null && click(point);
+		return point != null && click(point, button);
 	}
 
 	/**
@@ -857,28 +871,84 @@ public final class GameInput
 		return pressKey(KeyEvent.VK_SPACE);
 	}
 
-	public boolean interact(TileObject object, String action)
+	/**
+	 * Interacts with a tile object by opening its right-click menu and then
+	 * clicking the matching option in that menu. Using the real context menu
+	 * avoids relying on synthesised menu actions, which the client does not
+	 * always resolve for tile objects.
+	 */
+	public boolean interact(TileObject object, String... actions)
 	{
-		if (object == null)
+		if (object == null || actions == null || actions.length == 0)
 		{
 			return false;
+		}
+
+		if (client.isMenuOpen())
+		{
+			MenuEntry entry = findObjectMenuEntry(object, actions);
+			if (entry != null)
+			{
+				return clickMenuEntry(entry);
+			}
+
+			// The menu is open for something else or does not contain the
+			// requested option. Close it so the next attempt can start over.
+			closeMenu();
+			return false;
+		}
+
+		// Right-click the object to open its menu. The next tick picks the
+		// matching option from the menu.
+		return click(object, MouseEvent.BUTTON3);
+	}
+
+	private MenuEntry findObjectMenuEntry(TileObject object, String... actions)
+	{
+		net.runelite.api.Menu menu = client.getMenu();
+		MenuEntry[] entries = menu == null ? null : menu.getMenuEntries();
+		if (entries == null)
+		{
+			return null;
 		}
 
 		ObjectComposition composition = client.getObjectDefinition(object.getId());
-		if (composition == null)
+		String name = composition == null ? null : composition.getName();
+		int objectId = object.getId() & 0xFFFF;
+		MenuEntry optionOnly = null;
+		boolean multipleOptions = false;
+
+		for (MenuEntry entry : entries)
 		{
-			return false;
+			if (entry == null || !matchesOption(entry.getOption(), actions))
+			{
+				continue;
+			}
+
+			if ((entry.getIdentifier() & 0xFFFF) == objectId)
+			{
+				return entry;
+			}
+
+			String target = entry.getTarget();
+			if (target != null && name != null && target.equalsIgnoreCase(name))
+			{
+				return entry;
+			}
+
+			if (optionOnly == null)
+			{
+				optionOnly = entry;
+			}
+			else if (optionOnly != entry)
+			{
+				multipleOptions = true;
+			}
 		}
 
-		int actionIndex = findAction(composition.getActions(), action);
-		MenuAction menuAction = objectMenuAction(actionIndex);
-		if (menuAction == null)
-		{
-			return false;
-		}
-
-		client.menuAction(object.getX(), object.getY(), menuAction, object.getId(), -1, action, composition.getName());
-		return true;
+		// Some wall objects use a packed identifier rather than the object
+		// id. If there is exactly one entry with the wanted option, use it.
+		return multipleOptions ? null : optionOnly;
 	}
 
 	public boolean interact(NPC npc, String action)
@@ -895,13 +965,25 @@ public final class GameInput
 		}
 
 		int actionIndex = findAction(composition.getActions(), action);
-		MenuAction menuAction = npcMenuAction(actionIndex);
-		if (menuAction == null)
+		if (actionIndex < 0)
 		{
 			return false;
 		}
 
-		client.menuAction(npc.getIndex(), 0, menuAction, npc.getIndex(), -1, action, npc.getName());
+		// The first option is what a normal left click selects. Using a real
+		// click makes the cursor visibly travel to the NPC instead of the
+		// action appearing out of nowhere.
+		if (actionIndex == 0)
+		{
+			return click(npc);
+		}
+
+		// Other options need a right-click menu in game. Move onto the NPC
+		// like a player would, then invoke the exact option. Hovering keeps
+		// the pointer movement visible while avoiding a menu left open
+		// across ticks.
+		hover(npc);
+		client.menuAction(npc.getIndex(), 0, npcMenuAction(actionIndex), npc.getIndex(), -1, action, npc.getName());
 		return true;
 	}
 
@@ -922,6 +1004,254 @@ public final class GameInput
 		return true;
 	}
 
+	/**
+	 * Finds the visible bank widget for an item in the main bank tab.
+	 */
+	public Widget findBankItemWidget(int itemId)
+	{
+		Widget items = client.getWidget(InterfaceID.Bankmain.ITEMS);
+		if (items == null)
+		{
+			return null;
+		}
+
+		Widget[] children = items.getChildren();
+		if (children == null)
+		{
+			return null;
+		}
+
+		for (Widget child : children)
+		{
+			if (child == null || child.isSelfHidden() || child.getItemId() != itemId)
+			{
+				continue;
+			}
+
+			return child;
+		}
+
+		return null;
+	}
+
+	/**
+	 * Withdraws an item from the bank by right-clicking its bank slot and
+	 * clicking the requested withdraw option in the real context menu.
+	 */
+	public boolean withdrawBankItem(int itemId, String withdrawOption)
+	{
+		if (client.isMenuOpen())
+		{
+			MenuEntry entry = findBankMenuEntry(itemId, withdrawOption);
+			if (entry != null)
+			{
+				return clickMenuEntry(entry);
+			}
+
+			closeMenu();
+			return false;
+		}
+
+		Widget widget = findBankItemWidget(itemId);
+		return widget != null && click(widget, MouseEvent.BUTTON3);
+	}
+
+	private MenuEntry findBankMenuEntry(int itemId, String withdrawOption)
+	{
+		net.runelite.api.Menu menu = client.getMenu();
+		MenuEntry[] entries = menu == null ? null : menu.getMenuEntries();
+		if (entries == null)
+		{
+			return null;
+		}
+
+		MenuEntry optionMatch = null;
+		for (MenuEntry entry : entries)
+		{
+			if (entry == null
+				|| (entry.getType() != MenuAction.CC_OP
+					&& entry.getType() != MenuAction.CC_OP_LOW_PRIORITY)
+				|| !matchesOption(entry.getOption(), withdrawOption))
+			{
+				continue;
+			}
+
+			// Bank item entries carry the item id; prefer the entry that
+			// belongs to the slot we right-clicked.
+			if (entry.getItemId() == itemId
+				&& entry.getParam1() == InterfaceID.Bankmain.ITEMS)
+			{
+				return entry;
+			}
+
+			if (optionMatch == null)
+			{
+				optionMatch = entry;
+			}
+		}
+
+		return optionMatch;
+	}
+
+	/**
+	 * Finds the Take entry for a ground item in the currently open menu.
+	 */
+	private MenuEntry findGroundItemMenuEntry(int itemId, int sceneX, int sceneY)
+	{
+		net.runelite.api.Menu menu = client.getMenu();
+		MenuEntry[] entries = menu == null ? null : menu.getMenuEntries();
+		if (entries == null)
+		{
+			return null;
+		}
+
+		int id = itemId & 0xFFFF;
+		MenuEntry fallback = null;
+
+		for (MenuEntry entry : entries)
+		{
+			if (entry == null || !isGroundItemAction(entry.getType())
+				|| !matchesOption(entry.getOption(), "Take", "Pick up", "Pickup")
+				|| (entry.getIdentifier() & 0xFFFF) != id)
+			{
+				continue;
+			}
+
+			// The menu only contains items from the tile that was
+			// right-clicked, but prefer an entry with matching coordinates.
+			if (entry.getParam0() == sceneX && entry.getParam1() == sceneY)
+			{
+				return entry;
+			}
+
+			if (fallback == null)
+			{
+				fallback = entry;
+			}
+		}
+
+		return fallback;
+	}
+
+	private static boolean isGroundItemAction(MenuAction type)
+	{
+		if (type == null)
+		{
+			return false;
+		}
+
+		int id = type.getId();
+		return id >= MenuAction.GROUND_ITEM_FIRST_OPTION.getId()
+			&& id <= MenuAction.GROUND_ITEM_FIFTH_OPTION.getId();
+	}
+
+	private static boolean matchesOption(String option, String... actions)
+	{
+		if (option == null)
+		{
+			return false;
+		}
+
+		for (String action : actions)
+		{
+			if (action != null && option.trim().equalsIgnoreCase(action.trim()))
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Clicks a row in the client's currently open context menu. The client
+	 * lays the menu out with a 19px header and 15px rows, with the array's
+	 * last entry at the top.
+	 */
+	public boolean clickMenuEntry(MenuEntry entry)
+	{
+		if (entry == null)
+		{
+			return false;
+		}
+
+		net.runelite.api.Menu menu = client.getMenu();
+		MenuEntry[] entries = menu == null ? null : menu.getMenuEntries();
+		if (!client.isMenuOpen() || entries == null || entries.length == 0)
+		{
+			return invokeMenuEntry(entry);
+		}
+
+		int index = -1;
+		for (int i = 0; i < entries.length; i++)
+		{
+			if (entries[i] == entry)
+			{
+				index = i;
+				break;
+			}
+		}
+
+		if (index < 0 || client.isMenuScrollable())
+		{
+			return invokeMenuEntry(entry);
+		}
+
+		int row = entries.length - 1 - index;
+		int x = menu.getMenuX() + Math.max(8, menu.getMenuWidth() / 2);
+		int y = menu.getMenuY() + 19 + row * 15 + 7;
+		return clickMenuPoint(new Point(x, y));
+	}
+
+	private boolean invokeMenuEntry(MenuEntry entry)
+	{
+		client.menuAction(entry.getParam0(), entry.getParam1(), entry.getType(),
+			entry.getIdentifier(), entry.getItemId(), entry.getOption(), entry.getTarget());
+		return true;
+	}
+
+	/**
+	 * Closes the currently open right-click menu, if any.
+	 */
+	public boolean closeMenu()
+	{
+		if (!client.isMenuOpen())
+		{
+			return false;
+		}
+
+		return pressKey(KeyEvent.VK_ESCAPE);
+	}
+
+	/**
+	 * Picks up a ground item by right-clicking its tile and then clicking the
+	 * Take entry in the context menu.
+	 */
+	public boolean takeGroundItem(int sceneX, int sceneY, int itemId, String itemName)
+	{
+		if (client.isMenuOpen())
+		{
+			MenuEntry entry = findGroundItemMenuEntry(itemId, sceneX, sceneY);
+			if (entry != null)
+			{
+				return clickMenuEntry(entry);
+			}
+
+			closeMenu();
+			return false;
+		}
+
+		LocalPoint localPoint = LocalPoint.fromScene(sceneX, sceneY, client.getTopLevelWorldView());
+		if (localPoint == null)
+		{
+			return false;
+		}
+
+		Polygon tilePoly = Perspective.getCanvasTilePoly(client, localPoint);
+		Point point = randomPoint(tilePoly);
+		return point != null && click(point, MouseEvent.BUTTON3);
+	}
+
 	public boolean walkTo(WorldPoint worldPoint)
 	{
 		if (worldPoint == null)
@@ -937,6 +1267,60 @@ public final class GameInput
 
 		Polygon tilePoly = Perspective.getCanvasTilePoly(client, localPoint);
 		return tilePoly != null && click(tilePoly);
+	}
+
+	/**
+	 * Clicks a point inside the already-open context menu. The cursor is
+	 * moved there in a single event, because animated movement across the
+	 * game world can close the menu before the click lands.
+	 */
+	private boolean clickMenuPoint(Point gamePoint)
+	{
+		if (gamePoint == null)
+		{
+			return false;
+		}
+
+		Canvas canvas = client.getCanvas();
+		if (canvas == null)
+		{
+			return false;
+		}
+
+		Point canvasPoint = toCanvasPoint(gamePoint);
+		if (!canvas.contains(canvasPoint))
+		{
+			return false;
+		}
+
+		stopCamera();
+		stopMovement();
+		busy = true;
+		SwingUtilities.invokeLater(() ->
+		{
+			canvas.requestFocusInWindow();
+			lastMousePoint = canvasPoint;
+			mouseLocation = new Point(gamePoint);
+			dispatch(canvas, MouseEvent.MOUSE_MOVED, canvasPoint, MouseEvent.NOBUTTON, 0, 0);
+
+			Timer timer = new Timer(45 + random.nextInt(45), event ->
+			{
+				long now = System.currentTimeMillis();
+				clickLocation = new Point(gamePoint);
+				clickStartedAt = now;
+				clickButton = MouseEvent.BUTTON1;
+				addClickEffect(new Point(gamePoint), MouseEvent.BUTTON1, now);
+
+				dispatch(canvas, MouseEvent.MOUSE_PRESSED, canvasPoint, MouseEvent.BUTTON1, 1,
+					InputEvent.BUTTON1_DOWN_MASK);
+				dispatch(canvas, MouseEvent.MOUSE_RELEASED, canvasPoint, MouseEvent.BUTTON1, 1, 0);
+				dispatch(canvas, MouseEvent.MOUSE_CLICKED, canvasPoint, MouseEvent.BUTTON1, 1, 0);
+				busy = false;
+			});
+			timer.setRepeats(false);
+			timer.start();
+		});
+		return true;
 	}
 
 	private boolean click(Point gamePoint, int button)
@@ -1124,7 +1508,7 @@ public final class GameInput
 		}
 		else
 		{
-			int moveSteps = Math.max(8, Math.min(42, (int) (distance / 13.0) + 7));
+			int moveSteps = Math.max(12, Math.min(50, (int) (distance / 11.0) + 9));
 			double length = Math.max(1.0, distance);
 			double perpX = -dy / length;
 			double perpY = dx / length;
@@ -1162,10 +1546,10 @@ public final class GameInput
 					y = target.y;
 				}
 
-				delay += 8 + random.nextInt(9);
-				if (i < moveSteps && random.nextInt(14) == 0)
+				delay += 12 + random.nextInt(10);
+				if (i < moveSteps && random.nextInt(12) == 0)
 				{
-					delay += 30 + random.nextInt(55);
+					delay += 25 + random.nextInt(50);
 				}
 
 				steps.add(new MouseStep(MouseEvent.MOUSE_MOVED,

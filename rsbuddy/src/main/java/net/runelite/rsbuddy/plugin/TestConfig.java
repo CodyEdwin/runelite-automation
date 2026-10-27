@@ -115,4 +115,15 @@ public interface TestConfig extends Config
 	{
 		return "net.runelite.rsbuddy.scripts.CustomScript";
 	}
+
+	@ConfigItem(
+		keyName = "showXpLogger",
+		name = "Show XP logger",
+		description = "Display XP gained, XP per hour, XP to next level and time to level",
+		position = 7
+	)
+	default boolean showXpLogger()
+	{
+		return true;
+	}
 }

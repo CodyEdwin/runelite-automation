@@ -50,6 +50,8 @@ import net.runelite.rsbuddy.script.ScriptContext;
 import net.runelite.rsbuddy.script.ScriptLoader;
 import net.runelite.rsbuddy.script.ScriptManager;
 import net.runelite.rsbuddy.scripts.BarbarianFisherCookerScript;
+import net.runelite.rsbuddy.scripts.CombatTrainerScript;
+import net.runelite.rsbuddy.scripts.HillGiantScript;
 import net.runelite.rsbuddy.scripts.ObjectInteractScript;
 import net.runelite.rsbuddy.target.TargetLocator;
 import org.slf4j.Logger;
@@ -93,6 +95,9 @@ public class TestPlugin extends Plugin
 	private XpProgressOverlay xpProgressOverlay;
 
 	@Inject
+	private XpLoggerOverlay xpLoggerOverlay;
+
+	@Inject
 	private MouseOverlay mouseOverlay;
 
 	private volatile GameInput input;
@@ -117,6 +122,8 @@ public class TestPlugin extends Plugin
 			config.targetAction(),
 			config.maxDistance()));
 		scriptManager.register(new BarbarianFisherCookerScript());
+		scriptManager.register(new CombatTrainerScript());
+		scriptManager.register(new HillGiantScript());
 
 		String customScriptError = registerCustomScript(config.customScriptClass());
 
@@ -134,6 +141,7 @@ public class TestPlugin extends Plugin
 		clientToolbar.addNavigation(navButton);
 		overlayManager.add(overlay);
 		overlayManager.add(xpProgressOverlay);
+		overlayManager.add(xpLoggerOverlay);
 		overlayManager.add(mouseOverlay);
 		mouseManager.registerMouseListener(mouseOverlay);
 		log.info("RSBuddy started");
@@ -159,6 +167,7 @@ public class TestPlugin extends Plugin
 
 		overlayManager.remove(overlay);
 		overlayManager.remove(xpProgressOverlay);
+		overlayManager.remove(xpLoggerOverlay);
 		overlayManager.remove(mouseOverlay);
 		mouseManager.unregisterMouseListener(mouseOverlay);
 		input = null;
