@@ -30,14 +30,19 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 import net.runelite.api.Actor;
+import net.runelite.api.Client;
 import net.runelite.api.NPC;
 import net.runelite.api.ObjectComposition;
 import net.runelite.api.Player;
+import net.runelite.api.Skill;
 import net.runelite.api.TileObject;
 import net.runelite.api.WorldView;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.gameval.ItemID;
 import net.runelite.api.gameval.NpcID;
+import net.runelite.api.widgets.Widget;
 import net.runelite.rsbuddy.input.GameInput;
+import net.runelite.rsbuddy.inventory.Inventory;
 import net.runelite.rsbuddy.script.Script;
 import net.runelite.rsbuddy.script.ScriptContext;
 
@@ -78,6 +83,26 @@ public final class GemCrabKillerScript extends Script
 	private static final int ANTI_IDLE_MIN_HOLD_MS = 150;
 	private static final int ANTI_IDLE_MAX_HOLD_MS = 450;
 
+	/** Drink another strength potion once the boost has dropped to this. */
+	private static final int STRENGTH_BOOST_THRESHOLD = 3;
+	/** Ticks to wait for a drink to register before trying again. */
+	private static final int DRINK_TIMEOUT_TICKS = 5;
+
+	/**
+	 * Strength potions in the order they are drunk: regular strength
+	 * potions lowest dose first, then super strength as a fallback.
+	 */
+	private static final int[] STRENGTH_POTIONS = {
+		ItemID._1DOSE1STRENGTH,  // Strength potion(1)
+		ItemID._2DOSE1STRENGTH,  // Strength potion(2)
+		ItemID._3DOSE1STRENGTH,  // Strength potion(3)
+		ItemID.STRENGTH4,        // Strength potion(4)
+		ItemID._1DOSE2STRENGTH,  // Super strength(1)
+		ItemID._2DOSE2STRENGTH,  // Super strength(2)
+		ItemID._3DOSE2STRENGTH,  // Super strength(3)
+		ItemID._4DOSE2STRENGTH   // Super strength(4)
+	};
+
 	private enum State
 	{
 		FIND_CRAB,
@@ -96,6 +121,9 @@ public final class GemCrabKillerScript extends Script
 	private int kills;
 	private long startedAt;
 	private long nextAntiIdleAt;
+	private int drinkWaitTicks;
+	private int boostBeforeDrink;
+	private int potionsDrunk;
 
 	public GemCrabKillerScript()
 	{
@@ -116,6 +144,9 @@ public final class GemCrabKillerScript extends Script
 		kills = 0;
 		startedAt = System.currentTimeMillis();
 		scheduleAntiIdle();
+		drinkWaitTicks = 0;
+		boostBeforeDrink = 0;
+		potionsDrunk = 0;
 		setStatus("Ready");
 	}
 
@@ -129,6 +160,7 @@ public final class GemCrabKillerScript extends Script
 			return;
 		}
 
+		drinkStrengthIfNeeded(context);
 		antiIdle(context);
 
 		if (cooldown > 0)
@@ -383,6 +415,86 @@ public final class GemCrabKillerScript extends Script
 	}
 
 	/**
+	 * Drinks a strength potion whenever the Strength boost (boosted level
+	 * minus real level) is {@value #STRENGTH_BOOST_THRESHOLD} or less, which
+	 * includes being unboosted. Does nothing when no strength potions are in
+	 * the inventory. Drinking does not interrupt combat, so this runs in
+	 * every state, but never while the mouse is moving, the camera is
+	 * turning, or a menu is open.
+	 */
+	private void drinkStrengthIfNeeded(ScriptContext context)
+	{
+		Client client = context.getClient();
+		int boost = client.getBoostedSkillLevel(Skill.STRENGTH) - client.getRealSkillLevel(Skill.STRENGTH);
+
+		if (drinkWaitTicks > 0)
+		{
+			// Wait for the last drink to show up in the boosted level so the
+			// same potion is not drunk twice.
+			if (boost > boostBeforeDrink)
+			{
+				drinkWaitTicks = 0;
+			}
+			else
+			{
+				--drinkWaitTicks;
+				return;
+			}
+		}
+
+		if (boost > STRENGTH_BOOST_THRESHOLD)
+		{
+			return;
+		}
+
+		Inventory inventory = context.getInventory();
+		int slot = findStrengthPotionSlot(inventory);
+		if (slot < 0)
+		{
+			return;
+		}
+
+		GameInput input = context.getInput();
+		if (input.isBusy() || input.isCameraBusy() || client.isMenuOpen())
+		{
+			return;
+		}
+
+		// The potion slot has no widget until the inventory tab is open.
+		if (!inventory.isOpen())
+		{
+			if (inventory.open())
+			{
+				setStatus("Opening inventory");
+			}
+			return;
+		}
+
+		// Drink is the potion's left-click option.
+		Widget widget = inventory.getSlotWidget(slot);
+		if (widget != null && input.click(widget))
+		{
+			boostBeforeDrink = boost;
+			drinkWaitTicks = DRINK_TIMEOUT_TICKS;
+			++potionsDrunk;
+			setStatus("Drinking strength potion");
+		}
+	}
+
+	private static int findStrengthPotionSlot(Inventory inventory)
+	{
+		for (int potion : STRENGTH_POTIONS)
+		{
+			int slot = inventory.findSlot(potion);
+			if (slot >= 0)
+			{
+				return slot;
+			}
+		}
+		return -1;
+	}
+
+	/**
 	 * Keeps the client from idling out by rotating the camera a small random
 	 * amount left or right every 30 to 60 seconds. It only fires while the
 	 * mouse is idle and no menu is open, so it never interrupts a click; the
@@ -526,6 +638,7 @@ public final class GemCrabKillerScript extends Script
 		long perHour = kills * 3_600_000L / elapsed;
 		return Arrays.asList(
 			"State: " + (state == null ? "-" : state.name()),
-			"Kills: " + kills + " (" + perHour + "/hr)");
+			"Kills: " + kills + " (" + perHour + "/hr)",
+			"Strength potions: " + potionsDrunk);
 	}
 }

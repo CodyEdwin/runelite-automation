@@ -183,6 +183,10 @@ To avoid the idle logout, every 30 to 60 seconds (re-randomized each time) the s
 holds the left or right arrow key (random direction, 150-450 ms) to rotate the camera a little.
 The nudge only happens while the simulated mouse is idle and no menu is open.
 
+If strength potions are in the inventory, the script drinks one (lowest dose first) whenever the
+Strength boost is 3 or less, including at the start when unboosted. Super strength potions are used
+as a fallback. Without potions it simply keeps fighting.
+
 ## Panel and commands
 
 The sidebar panel lists registered scripts and provides Start/Stop controls with live status and
