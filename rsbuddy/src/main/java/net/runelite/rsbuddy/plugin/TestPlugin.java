@@ -66,6 +66,7 @@ import net.runelite.rsbuddy.scripts.BarbarianFisherCookerScript;
 import net.runelite.rsbuddy.scripts.CatherbySharkFisherScript;
 import net.runelite.rsbuddy.scripts.CombatTrainerScript;
 import net.runelite.rsbuddy.scripts.FruitStallStealerScript;
+import net.runelite.rsbuddy.scripts.GemCrabKillerScript;
 import net.runelite.rsbuddy.scripts.GrandExchangeFlipperScript;
 import net.runelite.rsbuddy.scripts.HillGiantScript;
 import net.runelite.rsbuddy.scripts.ObjectInteractScript;
@@ -150,6 +151,7 @@ public class TestPlugin extends Plugin
 			config.fruitStallKeepStrangeFruit(),
 			config.fruitStallKeepJangerberries()));
 		scriptManager.register(new HillGiantScript());
+		scriptManager.register(new GemCrabKillerScript());
 		scriptManager.register(new GrandExchangeFlipperScript());
 
 		String customScriptError = registerCustomScript(config.customScriptClass());
