@@ -26,6 +26,14 @@ package net.runelite.rsbuddy.plugin;
 
 import com.google.inject.Provides;
 import java.awt.image.BufferedImage;
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.net.MalformedURLException;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import javax.inject.Inject;
@@ -48,12 +56,16 @@ import net.runelite.rsbuddy.debug.WidgetDumper;
 import net.runelite.rsbuddy.debug.WidgetWatcher;
 import net.runelite.rsbuddy.input.GameInput;
 import net.runelite.rsbuddy.inventory.Inventory;
+import net.runelite.rsbuddy.script.ReloadingClassLoader;
 import net.runelite.rsbuddy.script.Script;
 import net.runelite.rsbuddy.script.ScriptContext;
 import net.runelite.rsbuddy.script.ScriptLoader;
 import net.runelite.rsbuddy.script.ScriptManager;
+import net.runelite.rsbuddy.scripts.ArdougneBakerStallStealerScript;
 import net.runelite.rsbuddy.scripts.BarbarianFisherCookerScript;
+import net.runelite.rsbuddy.scripts.CatherbySharkFisherScript;
 import net.runelite.rsbuddy.scripts.CombatTrainerScript;
+import net.runelite.rsbuddy.scripts.FruitStallStealerScript;
 import net.runelite.rsbuddy.scripts.GrandExchangeFlipperScript;
 import net.runelite.rsbuddy.scripts.HillGiantScript;
 import net.runelite.rsbuddy.scripts.ObjectInteractScript;
@@ -127,14 +139,22 @@ public class TestPlugin extends Plugin
 			config.targetObjectName(),
 			config.targetAction(),
 			config.maxDistance()));
+		scriptManager.register(new ArdougneBakerStallStealerScript());
 		scriptManager.register(new BarbarianFisherCookerScript());
+		scriptManager.register(new CatherbySharkFisherScript());
 		scriptManager.register(new CombatTrainerScript());
+		scriptManager.register(new FruitStallStealerScript(
+			config.fruitStallStayAtOneStall(),
+			config.fruitStallKeepPapaya(),
+			config.fruitStallKeepGolovanova(),
+			config.fruitStallKeepStrangeFruit(),
+			config.fruitStallKeepJangerberries()));
 		scriptManager.register(new HillGiantScript());
 		scriptManager.register(new GrandExchangeFlipperScript());
 
 		String customScriptError = registerCustomScript(config.customScriptClass());
 
-		panel = new TestPluginPanel(scriptManager, config, configManager, this::startScript);
+		panel = new TestPluginPanel(scriptManager, config, configManager, this::startScript, this::reloadScript);
 		panel.setCustomScriptError(customScriptError);
 
 		BufferedImage icon = ImageUtil.loadImageResource(getClass(), "rsbuddy_icon.png");
@@ -319,26 +339,272 @@ public class TestPlugin extends Plugin
 		startScript(script.get());
 	}
 
-	void startScript(Script script)
+	Script startScript(Script script)
 	{
 		if (script == null || scriptManager == null)
 		{
-			return;
+			return script;
 		}
 
 		Script target = script;
 
-		// Recreate config-backed scripts so changes are picked up when starting from the panel.
-		if (script instanceof ObjectInteractScript)
+		// Recreate the script with the current config. Reloaded scripts are
+		// created through their own class loader so the new code is kept.
+		try
 		{
-			target = new ObjectInteractScript(
-				config.targetObjectName(),
-				config.targetAction(),
-				config.maxDistance());
+			target = createScript(script.getClass().getName(), script.getClass().getClassLoader());
+		}
+		catch (ScriptLoader.ScriptLoadException ex)
+		{
+			log.warn("Unable to recreate script {}, keeping the existing instance",
+				script.getClass().getName(), ex);
+			chat("RSBuddy: could not recreate " + script.getName() + ": " + ex.getMessage());
 		}
 
+		scriptManager.replace(script, target);
 		scriptManager.start(target);
 		chat("RSBuddy: started " + target.getName());
+		return target;
+	}
+
+	/**
+	 * Loads the selected script again from the newest compiled classes and
+	 * replaces the registered instance. The running script is stopped if it is
+	 * the one being reloaded.
+	 */
+	Script reloadScript(Script script)
+	{
+		if (script == null || scriptManager == null)
+		{
+			return script;
+		}
+
+		// When the client is running from the source tree, rebuild the module
+		// first so the reload always picks up the latest edits.
+		File projectDirectory = resolveProjectDirectory();
+		if (projectDirectory != null)
+		{
+			rebuildScripts(projectDirectory);
+		}
+
+		File classesRoot = resolveScriptClassesDirectory();
+		if (classesRoot == null || !classesRoot.isDirectory())
+		{
+			throw new IllegalStateException("Compiled script classes not found. Build the rsbuddy module first.");
+		}
+
+		String className = script.getClass().getName();
+		File classFile = new File(classesRoot, className.replace('.', '/') + ".class");
+		if (!classFile.isFile())
+		{
+			throw new IllegalStateException("No compiled class for " + className + " in " + classesRoot);
+		}
+
+		Script replacement;
+		try
+		{
+			ClassLoader loader = new ReloadingClassLoader(classesRoot, getClass().getClassLoader());
+			replacement = createScript(className, loader);
+		}
+		catch (MalformedURLException ex)
+		{
+			throw new IllegalStateException("Invalid script classes directory: " + classesRoot, ex);
+		}
+		catch (ScriptLoader.ScriptLoadException ex)
+		{
+			throw new IllegalStateException(ex.getMessage(), ex);
+		}
+
+		scriptManager.replace(script, replacement);
+		log.info("Reloaded script {} from {}", className, classesRoot);
+		return replacement;
+	}
+
+	private Script createScript(String className, ClassLoader classLoader)
+		throws ScriptLoader.ScriptLoadException
+	{
+		if (ObjectInteractScript.class.getName().equals(className))
+		{
+			return ScriptLoader.load(className, classLoader,
+				config.targetObjectName(), config.targetAction(), config.maxDistance());
+		}
+
+		if (FruitStallStealerScript.class.getName().equals(className))
+		{
+			return ScriptLoader.load(className, classLoader,
+				config.fruitStallStayAtOneStall(),
+				config.fruitStallKeepPapaya(),
+				config.fruitStallKeepGolovanova(),
+				config.fruitStallKeepStrangeFruit(),
+				config.fruitStallKeepJangerberries());
+		}
+
+		return ScriptLoader.load(className, classLoader);
+	}
+
+	private File resolveProjectDirectory()
+	{
+		File workingDirectory = new File(System.getProperty("user.dir", "."));
+		for (File directory = workingDirectory; directory != null; directory = directory.getParentFile())
+		{
+			if (new File(directory, "gradlew").isFile()
+				&& new File(directory, "rsbuddy/build.gradle.kts").isFile())
+			{
+				return directory;
+			}
+		}
+
+		return null;
+	}
+
+	private void rebuildScripts(File projectDirectory)
+	{
+		File wrapper = new File(projectDirectory, "gradlew");
+		if (!wrapper.isFile())
+		{
+			return;
+		}
+
+		List<String> command = new ArrayList<>();
+		if (wrapper.canExecute())
+		{
+			command.add(wrapper.getAbsolutePath());
+		}
+		else
+		{
+			command.add("sh");
+			command.add(wrapper.getAbsolutePath());
+		}
+		command.add(":rsbuddy:classes");
+		command.add("--console=plain");
+
+		ProcessBuilder builder = new ProcessBuilder(command);
+		builder.directory(projectDirectory);
+		builder.redirectErrorStream(true);
+
+		try
+		{
+			Process process = builder.start();
+			StringBuilder output = new StringBuilder();
+			try (BufferedReader reader = new BufferedReader(
+				new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8)))
+			{
+				String line;
+				while ((line = reader.readLine()) != null)
+				{
+					output.append(line).append('\n');
+				}
+			}
+
+			int exitCode = process.waitFor();
+			if (exitCode != 0)
+			{
+				log.warn("Script rebuild failed:\n{}", output);
+				throw new IllegalStateException("Build failed: " + lastLines(output.toString(), 4));
+			}
+
+			log.info("Rebuilt scripts in {}", projectDirectory);
+		}
+		catch (IOException ex)
+		{
+			throw new IllegalStateException("Unable to run Gradle: " + ex.getMessage(), ex);
+		}
+		catch (InterruptedException ex)
+		{
+			Thread.currentThread().interrupt();
+			throw new IllegalStateException("Build interrupted", ex);
+		}
+	}
+
+	private static String lastLines(String output, int count)
+	{
+		if (output == null || output.trim().isEmpty())
+		{
+			return "(no output)";
+		}
+
+		String[] lines = output.trim().split("\\R");
+		int start = Math.max(0, lines.length - count);
+		return String.join(" | ", java.util.Arrays.copyOfRange(lines, start, lines.length));
+	}
+
+	private File resolveScriptClassesDirectory()
+	{
+		String configured = config.scriptClassesDirectory();
+		if (configured != null && !configured.trim().isEmpty())
+		{
+			return resolveAgainstWorkingDirectory(configured.trim());
+		}
+
+		String property = System.getProperty("rsbuddy.scriptClasses");
+		if (property != null && !property.trim().isEmpty())
+		{
+			return resolveAgainstWorkingDirectory(property.trim());
+		}
+
+		File workingDirectory = new File(System.getProperty("user.dir", "."));
+		for (File directory = workingDirectory; directory != null; directory = directory.getParentFile())
+		{
+			File candidate = new File(directory, "rsbuddy/build/classes/java/main");
+			if (isScriptClassesDirectory(candidate))
+			{
+				return candidate;
+			}
+
+			if ("rsbuddy".equals(directory.getName()))
+			{
+				candidate = new File(directory, "build/classes/java/main");
+				if (isScriptClassesDirectory(candidate))
+				{
+					return candidate;
+				}
+			}
+		}
+
+		try
+		{
+			File codeSource = new File(getClass().getProtectionDomain().getCodeSource()
+				.getLocation().toURI());
+			if (codeSource.isDirectory() && isScriptClassesDirectory(codeSource))
+			{
+				return codeSource;
+			}
+
+			if (codeSource.isFile())
+			{
+				File buildDirectory = codeSource.getParentFile() == null
+					? null
+					: codeSource.getParentFile().getParentFile();
+				if (buildDirectory != null)
+				{
+					File candidate = new File(buildDirectory, "classes/java/main");
+					if (isScriptClassesDirectory(candidate))
+					{
+						return candidate;
+					}
+				}
+			}
+		}
+		catch (Exception ex)
+		{
+			log.debug("Unable to inspect plugin code source", ex);
+		}
+
+		return null;
+	}
+
+	private static File resolveAgainstWorkingDirectory(String path)
+	{
+		File file = new File(path);
+		return file.isAbsolute()
+			? file
+			: new File(System.getProperty("user.dir", "."), path);
+	}
+
+	private static boolean isScriptClassesDirectory(File directory)
+	{
+		return directory != null
+			&& new File(directory, "net/runelite/rsbuddy/scripts").isDirectory();
 	}
 
 	private void chat(String message)

@@ -241,7 +241,7 @@ public final class GameInput
 			return false;
 		}
 
-		Point point = randomPoint(bounds);
+		Point point = centerPoint(bounds);
 		return point != null && click(point, button);
 	}
 
@@ -266,6 +266,30 @@ public final class GameInput
 
 		Polygon tilePoly = npc.getCanvasTilePoly();
 		return tilePoly != null && hover(tilePoly);
+	}
+
+	/**
+	 * Moves the mouse onto a widget without clicking it, using the same curved
+	 * path as a click. The point is the widget's centre, matching
+	 * {@link #click(Widget)}.
+	 *
+	 * @return true if a movement was started
+	 */
+	public boolean hover(Widget widget)
+	{
+		if (widget == null || widget.isHidden())
+		{
+			return false;
+		}
+
+		Rectangle bounds = widget.getBounds();
+		if (bounds == null || bounds.isEmpty())
+		{
+			return false;
+		}
+
+		Point point = centerPoint(bounds);
+		return point != null && moveTo(point);
 	}
 
 	/**
@@ -462,6 +486,101 @@ public final class GameInput
 	public void rightClick(Point gamePoint)
 	{
 		click(gamePoint, MouseEvent.BUTTON3);
+	}
+
+	/**
+	 * Clicks several widgets one after another using the animated mouse path.
+	 * The speed multiplier scales the movement and click timing, so a value of
+	 * 2.0 makes the whole sequence twice as fast as normal clicking.
+	 *
+	 * @return true if the click sequence was started
+	 */
+	public boolean clickEach(List<Widget> widgets, double speedMultiplier)
+	{
+		if (widgets == null || widgets.isEmpty())
+		{
+			return false;
+		}
+
+		Canvas canvas = client.getCanvas();
+		if (canvas == null)
+		{
+			return false;
+		}
+
+		List<Point> gamePoints = new ArrayList<>();
+
+		for (Widget widget : widgets)
+		{
+			if (widget == null || widget.isHidden())
+			{
+				continue;
+			}
+
+			Rectangle bounds = widget.getBounds();
+			if (bounds == null || bounds.isEmpty())
+			{
+				continue;
+			}
+
+			Point point = centerPoint(bounds);
+			if (point == null)
+			{
+				continue;
+			}
+
+			Point canvasPoint = toCanvasPoint(point);
+			if (!canvas.contains(canvasPoint))
+			{
+				continue;
+			}
+
+			gamePoints.add(point);
+		}
+
+		if (gamePoints.isEmpty())
+		{
+			return false;
+		}
+
+		stopCamera();
+		busy = true;
+		final double speed = Math.max(0.1, speedMultiplier);
+		final List<Point> targets = gamePoints;
+		SwingUtilities.invokeLater(() -> beginClickEach(canvas, targets, speed));
+		return true;
+	}
+
+	private void beginClickEach(Canvas canvas, List<Point> targets, double speed)
+	{
+		Point start = beginMovement(canvas);
+		if (start == null)
+		{
+			busy = false;
+			return;
+		}
+
+		List<MouseStep> steps = new ArrayList<>();
+		Point cursor = start;
+		long offset = 0;
+
+		for (Point target : targets)
+		{
+			List<MouseStep> segment = buildMoveSteps(cursor, target);
+			appendClickSteps(segment, target, MouseEvent.BUTTON1);
+
+			for (MouseStep step : segment)
+			{
+				long delay = Math.round(step.delayMs / speed);
+				steps.add(new MouseStep(step.id, step.point, step.button,
+					step.clickCount, step.modifiers, offset + delay));
+			}
+
+			offset += Math.round(segment.get(segment.size() - 1).delayMs / speed);
+			cursor = target;
+		}
+
+		playSteps(canvas, steps);
 	}
 
 	public void rightClick(NPC npc)
@@ -1884,6 +2003,25 @@ public final class GameInput
 
 		Rectangle bounds = widget.getBounds();
 		return bounds != null && !bounds.isEmpty() && bounds.contains(x, y);
+	}
+
+	/**
+	 * Picks a point near the middle of the bounds, with a small random offset.
+	 * Widgets are clicked in their centre so the cursor lands on the item or
+	 * button itself instead of its edge.
+	 */
+	private Point centerPoint(Rectangle bounds)
+	{
+		if (bounds == null || bounds.isEmpty())
+		{
+			return null;
+		}
+
+		int spreadX = Math.max(1, bounds.width / 6);
+		int spreadY = Math.max(1, bounds.height / 6);
+		int x = bounds.x + bounds.width / 2 + random.nextInt(spreadX * 2 + 1) - spreadX;
+		int y = bounds.y + bounds.height / 2 + random.nextInt(spreadY * 2 + 1) - spreadY;
+		return new Point(x, y);
 	}
 
 	private Point randomPoint(Rectangle bounds)

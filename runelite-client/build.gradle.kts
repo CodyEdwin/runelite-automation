@@ -113,6 +113,14 @@ tasks.register<JavaExec>("run") {
     args("--developer-mode")
 }
 
+tasks.register<JavaExec>("runNorm") {
+    group = "application"
+    description = "Run the RuneLite client in normal mode"
+    dependsOn(":rsbuddy:installPlugin")
+    mainClass.set("net.runelite.client.RuneLite")
+    classpath = sourceSets.main.get().runtimeClasspath
+}
+
 val shadowJar = tasks.register<Jar>("shadowJar") {
     dependsOn(configurations.runtimeClasspath)
     manifest {

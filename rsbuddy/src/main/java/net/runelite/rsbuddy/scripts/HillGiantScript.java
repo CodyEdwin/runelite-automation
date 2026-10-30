@@ -50,7 +50,6 @@ import net.runelite.rsbuddy.input.GameInput;
 import net.runelite.rsbuddy.inventory.Inventory;
 import net.runelite.rsbuddy.script.Script;
 import net.runelite.rsbuddy.script.ScriptContext;
-import net.runelite.rsbuddy.target.TargetLocator;
 
 /**
  * Kills hill giants in the Edgeville Dungeon, picks up big bones, body

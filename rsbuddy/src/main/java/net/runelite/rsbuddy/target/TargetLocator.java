@@ -139,6 +139,27 @@ public final class TargetLocator
 			.min(Comparator.comparingInt(object -> distance(object.getWorldLocation(), playerLocation)));
 	}
 
+	/**
+	 * Finds every tile object within the given radius of a world position.
+	 */
+	public List<TileObject> getTileObjects(WorldPoint location, int radius)
+	{
+		if (location == null)
+		{
+			return Collections.emptyList();
+		}
+
+		return tileObjects()
+			.filter(object ->
+			{
+				WorldPoint objectLocation = object.getWorldLocation();
+				return objectLocation != null
+					&& objectLocation.getPlane() == location.getPlane()
+					&& objectLocation.distanceTo(location) <= Math.max(0, radius);
+			})
+			.collect(Collectors.toList());
+	}
+
 	public List<GameObject> getObjects(String name)
 	{
 		return objects().filter(object -> matchesName(object, name)).collect(Collectors.toList());

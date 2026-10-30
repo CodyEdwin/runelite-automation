@@ -58,6 +58,34 @@ public final class ScriptManager
 		}
 	}
 
+	/**
+	 * Replaces a registered script, stopping it first if it is currently
+	 * running. Used when a script has been reloaded from newly compiled
+	 * classes.
+	 */
+	public synchronized void replace(Script oldScript, Script newScript)
+	{
+		if (oldScript == null || newScript == null)
+		{
+			return;
+		}
+
+		int index = scripts.indexOf(oldScript);
+		if (index >= 0)
+		{
+			scripts.set(index, newScript);
+		}
+		else if (!scripts.contains(newScript))
+		{
+			scripts.add(newScript);
+		}
+
+		if (activeScript == oldScript)
+		{
+			stop();
+		}
+	}
+
 	public synchronized List<Script> getScripts()
 	{
 		return Collections.unmodifiableList(new ArrayList<>(scripts));

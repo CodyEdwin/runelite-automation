@@ -34,6 +34,7 @@ import java.util.Locale;
 import java.util.Optional;
 import net.runelite.api.Client;
 import net.runelite.api.Experience;
+import net.runelite.api.Item;
 import net.runelite.api.NPC;
 import net.runelite.api.NPCComposition;
 import net.runelite.api.ObjectComposition;
@@ -65,6 +66,10 @@ public final class BarbarianFisherCookerScript extends Script
 
 	private static final String FISH_ACTION = "Lure";
 	private static final String COOK_ACTION = "Cook";
+
+	// How many ticks to wait for a drop to show up in the inventory before
+	// trying it again.
+	private static final int DROP_RETRY_TICKS = 3;
 
 	private static final int FISHING_DISTANCE = 20;
 	private static final int FIRE_DISTANCE = 20;
@@ -118,6 +123,10 @@ public final class BarbarianFisherCookerScript extends Script
 	private boolean awaitingFireInteraction;
 	private long lastFireClickAt;
 
+	private int pendingDropSlot = -1;
+	private int pendingDropItemId = -1;
+	private int pendingDropTicks;
+
 	private boolean statsInitialized;
 	private long statsStartedAt;
 	private int lastRawCount;
@@ -155,6 +164,7 @@ public final class BarbarianFisherCookerScript extends Script
 		pitchDirectionLearned = false;
 		resetFishingAttempt();
 		resetFireInteraction();
+		resetPendingDrop();
 		resetStats();
 		setStatus("Ready");
 	}
@@ -179,7 +189,7 @@ public final class BarbarianFisherCookerScript extends Script
 			return;
 		}
 
-		if (!ensureCamera(context))
+		/*if (!ensureCamera(context))
 		{
 			return;
 		}
@@ -190,7 +200,7 @@ public final class BarbarianFisherCookerScript extends Script
 			{
 				return;
 			}
-		}
+		}*/
 
 		int rawFish = inventory.countRawFish();
 		int droppableFish = inventory.countDroppableFish();
@@ -833,40 +843,120 @@ public final class BarbarianFisherCookerScript extends Script
 			return;
 		}
 
+		// Wait for the previous fish to leave the inventory before clicking the
+		// next one, so the same fish is never clicked twice. Retry after a few
+		// ticks in case the click did not register.
+		if (pendingDropSlot >= 0)
+		{
+			if (itemIdAt(inventory, pendingDropSlot) == pendingDropItemId
+				&& ++pendingDropTicks < DROP_RETRY_TICKS)
+			{
+				// Start moving onto the next fish while the current drop is
+				// processed, the way a player keeps the mouse ahead of the
+				// drops. Waiting for the click to finish first keeps the click
+				// from being cut short by the movement.
+				if (!input.isBusy())
+				{
+					hoverNextFish(input, inventory);
+				}
+
+				setStatus("Dropping fish");
+				return;
+			}
+
+			resetPendingDrop();
+		}
+
 		if (input.isBusy())
 		{
 			setStatus("Moving mouse");
 			return;
 		}
 
-		List<Integer> slots = inventory.findDroppableFishSlots();
-		if (slots.isEmpty())
-		{
-			cooldown = 1;
-			setStatus("Waiting for inventory");
-			return;
-		}
-
-		// Drop one fish at a time with smooth mouse movement from slot to slot.
-		int slot = slots.get(0);
+		// Click the first fish, then move on to the next one.
+		int slot = inventory.findDroppableFishSlot();
+		int itemId = itemIdAt(inventory, slot);
 		Widget item = inventory.getSlotWidget(slot);
-		if (item == null || item.isHidden() || item.getBounds().isEmpty())
+
+		if (itemId < 0 || item == null || item.isHidden())
 		{
 			cooldown = 1;
 			setStatus("Waiting for inventory");
 			return;
 		}
 
-		if (input.click(item))
-		{
-			cooldown = 0;
-			setStatus("Dropping fish");
-		}
-		else
+		Rectangle bounds = item.getBounds();
+		if (bounds == null || bounds.isEmpty())
 		{
 			cooldown = 1;
 			setStatus("Waiting for inventory");
+			return;
 		}
+
+		// The click animates the mouse onto the fish and then presses, so the
+		// cursor visibly travels from fish to fish instead of dropping them
+		// without any mouse movement.
+		if (!input.click(item))
+		{
+			cooldown = 1;
+			setStatus("Waiting for inventory");
+			return;
+		}
+
+		pendingDropSlot = slot;
+		pendingDropItemId = itemId;
+		pendingDropTicks = 0;
+		cooldown = 0;
+		setStatus("Dropping fish");
+	}
+
+	/**
+	 * Moves the mouse onto a fish that is still waiting to be dropped, so the
+	 * cursor arrives on the next fish while the current drop is being
+	 * processed.
+	 */
+	private void hoverNextFish(GameInput input, Inventory inventory)
+	{
+		for (int slot : inventory.findDroppableFishSlots())
+		{
+			if (slot == pendingDropSlot)
+			{
+				continue;
+			}
+
+			Widget next = inventory.getSlotWidget(slot);
+			if (next == null || next.isHidden())
+			{
+				continue;
+			}
+
+			Rectangle bounds = next.getBounds();
+			if (bounds != null && !bounds.isEmpty() && !input.isMouseOver(bounds))
+			{
+				input.hover(next);
+			}
+
+			return;
+		}
+	}
+
+	private static int itemIdAt(Inventory inventory, int slot)
+	{
+		Item[] items = inventory.getItems();
+		if (slot < 0 || slot >= items.length)
+		{
+			return -1;
+		}
+
+		Item item = items[slot];
+		return item == null ? -1 : item.getId();
+	}
+
+	private void resetPendingDrop()
+	{
+		pendingDropSlot = -1;
+		pendingDropItemId = -1;
+		pendingDropTicks = 0;
 	}
 
 	private void noteFishingClick()

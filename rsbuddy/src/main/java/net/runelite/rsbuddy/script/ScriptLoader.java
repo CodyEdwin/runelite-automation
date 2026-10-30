@@ -42,6 +42,17 @@ public final class ScriptLoader
 
 	public static Script load(String className, ClassLoader classLoader) throws ScriptLoadException
 	{
+		return load(className, classLoader, new Object[0]);
+	}
+
+	/**
+	 * Loads a script and calls the constructor matching the supplied
+	 * arguments. This allows reloaded scripts to be created with the same
+	 * options as the built-in registrations.
+	 */
+	public static Script load(String className, ClassLoader classLoader, Object... arguments)
+		throws ScriptLoadException
+	{
 		if (className == null || className.trim().isEmpty())
 		{
 			throw new ScriptLoadException("Enter a script class name");
@@ -75,13 +86,14 @@ public final class ScriptLoader
 
 		try
 		{
-			Constructor<?> constructor = type.getDeclaredConstructor();
+			Constructor<?> constructor = findConstructor(type, arguments);
 			constructor.setAccessible(true);
-			return (Script) constructor.newInstance();
+			return (Script) constructor.newInstance(arguments);
 		}
 		catch (NoSuchMethodException ex)
 		{
-			throw new ScriptLoadException(name + " needs a no-arg constructor", ex);
+			throw new ScriptLoadException(name + " has no constructor matching "
+				+ describeArguments(arguments), ex);
 		}
 		catch (InvocationTargetException ex)
 		{
@@ -92,6 +104,117 @@ public final class ScriptLoader
 		{
 			throw new ScriptLoadException("Unable to create " + name + ": " + ex, ex);
 		}
+	}
+
+	private static Constructor<?> findConstructor(Class<?> type, Object[] arguments)
+		throws NoSuchMethodException
+	{
+		if (arguments.length == 0)
+		{
+			return type.getDeclaredConstructor();
+		}
+
+		for (Constructor<?> constructor : type.getDeclaredConstructors())
+		{
+			Class<?>[] parameterTypes = constructor.getParameterTypes();
+			if (parameterTypes.length != arguments.length)
+			{
+				continue;
+			}
+
+			boolean matches = true;
+			for (int i = 0; i < parameterTypes.length; i++)
+			{
+				if (!accepts(parameterTypes[i], arguments[i]))
+				{
+					matches = false;
+					break;
+				}
+			}
+
+			if (matches)
+			{
+				return constructor;
+			}
+		}
+
+		throw new NoSuchMethodException();
+	}
+
+	private static boolean accepts(Class<?> parameterType, Object argument)
+	{
+		if (argument == null)
+		{
+			return !parameterType.isPrimitive();
+		}
+
+		Class<?> argumentType = argument.getClass();
+		if (!parameterType.isPrimitive())
+		{
+			return parameterType.isAssignableFrom(argumentType);
+		}
+
+		if (parameterType == boolean.class)
+		{
+			return argumentType == Boolean.class;
+		}
+		if (parameterType == byte.class)
+		{
+			return argumentType == Byte.class;
+		}
+		if (parameterType == short.class)
+		{
+			return argumentType == Short.class || argumentType == Byte.class;
+		}
+		if (parameterType == int.class)
+		{
+			return argumentType == Integer.class || argumentType == Short.class
+				|| argumentType == Byte.class;
+		}
+		if (parameterType == long.class)
+		{
+			return argumentType == Long.class || argumentType == Integer.class
+				|| argumentType == Short.class || argumentType == Byte.class;
+		}
+		if (parameterType == float.class)
+		{
+			return argumentType == Float.class || argumentType == Long.class
+				|| argumentType == Integer.class || argumentType == Short.class
+				|| argumentType == Byte.class;
+		}
+		if (parameterType == double.class)
+		{
+			return argumentType == Double.class || argumentType == Float.class
+				|| argumentType == Long.class || argumentType == Integer.class
+				|| argumentType == Short.class || argumentType == Byte.class;
+		}
+		if (parameterType == char.class)
+		{
+			return argumentType == Character.class;
+		}
+
+		return false;
+	}
+
+	private static String describeArguments(Object[] arguments)
+	{
+		if (arguments.length == 0)
+		{
+			return "()";
+		}
+
+		StringBuilder description = new StringBuilder("(");
+		for (int i = 0; i < arguments.length; i++)
+		{
+			if (i > 0)
+			{
+				description.append(", ");
+			}
+
+			description.append(arguments[i] == null ? "null" : arguments[i].getClass().getSimpleName());
+		}
+
+		return description.append(')').toString();
 	}
 
 	/**

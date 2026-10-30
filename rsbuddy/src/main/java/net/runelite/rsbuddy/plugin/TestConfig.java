@@ -126,4 +126,70 @@ public interface TestConfig extends Config
 	{
 		return true;
 	}
+
+	@ConfigItem(
+		keyName = "fruitStallStayAtOneStall",
+		name = "Fruit stall: stay at one stall",
+		description = "Stay at a single fruit stall and wait for it to respawn. Uncheck to run between both stalls.",
+		position = 8
+	)
+	default boolean fruitStallStayAtOneStall()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "fruitStallKeepPapaya",
+		name = "Fruit stall: keep papaya fruit",
+		description = "Keep papaya fruit and drop the other unwanted fruit instead.",
+		position = 9
+	)
+	default boolean fruitStallKeepPapaya()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "fruitStallKeepGolovanova",
+		name = "Fruit stall: keep Golovanova fruit top",
+		description = "Keep Golovanova fruit tops and drop the other unwanted fruit instead.",
+		position = 10
+	)
+	default boolean fruitStallKeepGolovanova()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "fruitStallKeepStrangeFruit",
+		name = "Fruit stall: keep strange fruit",
+		description = "Keep strange fruit and drop the other unwanted fruit instead.",
+		position = 11
+	)
+	default boolean fruitStallKeepStrangeFruit()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "fruitStallKeepJangerberries",
+		name = "Fruit stall: keep jangerberries",
+		description = "Keep jangerberries and drop the other unwanted fruit instead.",
+		position = 12
+	)
+	default boolean fruitStallKeepJangerberries()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "scriptClassesDirectory",
+		name = "Script classes directory",
+		description = "Directory containing freshly compiled script classes. Leave empty to auto-detect the rsbuddy build output.",
+		position = 13
+	)
+	default String scriptClassesDirectory()
+	{
+		return "";
+	}
 }
