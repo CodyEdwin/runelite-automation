@@ -165,6 +165,20 @@ walks; it expects you to already be at the spot.
 The status overlay shows the current session's trout and salmon caught/cooked totals with per-hour
 rates, plus the remaining XP and estimated time to the next Fishing and Cooking level.
 
+## Gem Crab Killer
+
+`GemCrabKillerScript` is registered automatically and appears in the panel as **Gem Crab Killer**.
+Start it next to the Gemstone Crab (NPC `14779`) or its cave.
+
+It will:
+
+1. Attack the Gemstone Crab and wait, without re-clicking, until it dies.
+2. Right-click the nearby **Cave** and choose **Crawl-through**.
+3. Wait up to about 36 seconds for the crab to spawn at the new location, attack it, and repeat.
+
+If the crab or cave is off screen, the camera is turned toward it first. The overlay shows the
+current state and kills per hour.
+
 ## Panel and commands
 
 The sidebar panel lists registered scripts and provides Start/Stop controls with live status and
