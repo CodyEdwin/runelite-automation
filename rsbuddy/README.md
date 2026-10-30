@@ -179,6 +179,10 @@ It will:
 If the crab or cave is off screen, the camera is turned toward it first. The overlay shows the
 current state and kills per hour.
 
+To avoid the idle logout, every 30 to 60 seconds (re-randomized each time) the script briefly
+holds the left or right arrow key (random direction, 150-450 ms) to rotate the camera a little.
+The nudge only happens while the simulated mouse is idle and no menu is open.
+
 ## Panel and commands
 
 The sidebar panel lists registered scripts and provides Start/Stop controls with live status and

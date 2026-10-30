@@ -28,6 +28,7 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.ThreadLocalRandom;
 import net.runelite.api.Actor;
 import net.runelite.api.NPC;
 import net.runelite.api.ObjectComposition;
@@ -70,6 +71,13 @@ public final class GemCrabKillerScript extends Script
 	/** Ticks (about 36 seconds) to wait for the crab to spawn after crawling. */
 	private static final int SPAWN_TIMEOUT_TICKS = 60;
 
+	/** Anti-idle camera nudges happen every 30 to 60 seconds. */
+	private static final long ANTI_IDLE_MIN_MS = 30_000L;
+	private static final long ANTI_IDLE_MAX_MS = 60_000L;
+	/** Arrow-key hold range for a small camera nudge. */
+	private static final int ANTI_IDLE_MIN_HOLD_MS = 150;
+	private static final int ANTI_IDLE_MAX_HOLD_MS = 450;
+
 	private enum State
 	{
 		FIND_CRAB,
@@ -87,6 +95,7 @@ public final class GemCrabKillerScript extends Script
 	private WorldPoint crawlStartLocation;
 	private int kills;
 	private long startedAt;
+	private long nextAntiIdleAt;
 
 	public GemCrabKillerScript()
 	{
@@ -106,6 +115,7 @@ public final class GemCrabKillerScript extends Script
 		crawlStartLocation = null;
 		kills = 0;
 		startedAt = System.currentTimeMillis();
+		scheduleAntiIdle();
 		setStatus("Ready");
 	}
 
@@ -118,6 +128,8 @@ public final class GemCrabKillerScript extends Script
 			setStatus("Waiting for login");
 			return;
 		}
+
+		antiIdle(context);
 
 		if (cooldown > 0)
 		{
@@ -368,6 +380,42 @@ public final class GemCrabKillerScript extends Script
 		}
 
 		setStatus("Waiting for crab to spawn (" + waitTicks + ")");
+	}
+
+	/**
+	 * Keeps the client from idling out by rotating the camera a small random
+	 * amount left or right every 30 to 60 seconds. It only fires while the
+	 * mouse is idle and no menu is open, so it never interrupts a click; the
+	 * held arrow key also makes the attack and cave logic wait until the
+	 * nudge has finished.
+	 */
+	private void antiIdle(ScriptContext context)
+	{
+		if (System.currentTimeMillis() < nextAntiIdleAt)
+		{
+			return;
+		}
+
+		GameInput input = context.getInput();
+		if (input.isBusy() || input.isCameraBusy() || context.getClient().isMenuOpen())
+		{
+			// Try again on a later tick once the current action is done.
+			return;
+		}
+
+		ThreadLocalRandom random = ThreadLocalRandom.current();
+		boolean left = random.nextBoolean();
+		int holdMillis = random.nextInt(ANTI_IDLE_MIN_HOLD_MS, ANTI_IDLE_MAX_HOLD_MS + 1);
+		if (input.nudgeCamera(left, holdMillis))
+		{
+			scheduleAntiIdle();
+		}
+	}
+
+	private void scheduleAntiIdle()
+	{
+		nextAntiIdleAt = System.currentTimeMillis()
+			+ ThreadLocalRandom.current().nextLong(ANTI_IDLE_MIN_MS, ANTI_IDLE_MAX_MS + 1);
 	}
 
 	private boolean hasTeleported(WorldPoint location)

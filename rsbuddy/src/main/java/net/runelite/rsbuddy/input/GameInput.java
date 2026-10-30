@@ -831,6 +831,28 @@ public final class GameInput
 	}
 
 	/**
+	 * Briefly holds the left or right arrow key to rotate the camera a small
+	 * amount, like a player idly nudging the view. Used for anti-idle.
+	 *
+	 * @param left true to hold the left arrow key, false for the right one
+	 * @param holdMillis how long to hold the key
+	 * @return true if the nudge was started, false if the camera is already
+	 * turning or the canvas is unavailable
+	 */
+	public boolean nudgeCamera(boolean left, int holdMillis)
+	{
+		if (cameraKey != -1)
+		{
+			return false;
+		}
+
+		// Record the starting yaw so the pulse still calibrates the arrow
+		// key directions used by turnCameraToYaw.
+		cameraPulseYaw = client.getCameraYawTarget() & (CAMERA_YAW_UNITS - 1);
+		return holdKey(left ? KeyEvent.VK_LEFT : KeyEvent.VK_RIGHT, holdMillis);
+	}
+
+	/**
 	 * Releases a held camera arrow key, if any.
 	 */
 	public void stopCamera()
