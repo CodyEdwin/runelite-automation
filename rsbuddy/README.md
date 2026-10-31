@@ -171,6 +171,13 @@ rates, plus the remaining XP and estimated time to the next Fishing and Cooking 
 diamonds, herbs and runes, and banks at Varrock West through the brass-key shed (brass key and
 sardines expected).
 
+Banking: keep the brass key in inventory slot 1 and lock that slot (the bank's inventory slot
+lock), so the bank's Deposit inventory button leaves the key in place. Banking is just Deposit
+inventory, close the bank, walk back; the key is no longer withdrawn each trip. Safety fallback:
+if the key is not in the inventory after depositing, the script logs a `[HillGiant]` warning and
+withdraws one from the bank. If the bank has none either, it stops at the bank with the status
+"Stopped: no brass key in inventory or bank" instead of walking back without a key.
+
 - Uses the fast mouse profile (`Script.useFastMouse()`): a 90-300 ms reaction delay, then a quick,
   nearly straight movement (about 160 ms for 50 px, 330 ms for 500 px).
 - Prefers a giant already attacking you, then the nearest one nobody else is fighting.
