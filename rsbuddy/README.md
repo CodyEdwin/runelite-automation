@@ -177,9 +177,10 @@ sardines expected).
 - Spots a kill on the tick the death animation starts, moves the mouse onto the next giant while
   the corpse fades, and loots as soon as the drops appear, nearest first.
 - Never clicks again while fighting, walking to loot, or climbing.
-- Getting back from the bank is a fixed sequence (walk to door, open, enter, climb). Inside vs
-  outside the shed is worked out from tiles and the door's wall edge, so it can't bounce between
-  the door and the ladder.
+- Getting back from the bank is a fixed sequence: walk to the door, open it, get inside, climb down.
+  The ladder is never clicked while the door is shut, unless the player is known to be inside
+  (just climbed up, or was moved through the door towards the ladder). A ladder click that
+  doesn't move the player sends it back to the door, and failed rounds are capped.
 
 ## Gem Crab Killer
 
