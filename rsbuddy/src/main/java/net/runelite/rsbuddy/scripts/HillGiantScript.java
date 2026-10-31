@@ -161,6 +161,9 @@ public final class HillGiantScript extends Script
 	private static final int CAMERA_STUCK_TICKS = 10;
 
 
+	// Giant key (Obor's key), item 20754; the gameval name is HILLGIANT_BOSS_KEY.
+	private static final int GIANT_KEY_ID = ItemID.HILLGIANT_BOSS_KEY;
+
 	/**
 	 * Only the requested hill giant drops are picked up.
 	 */
@@ -173,7 +176,8 @@ public final class HillGiantScript extends Script
 			ItemID.NATURERUNE,
 			ItemID.UNIDENTIFIED_KWUARM,
 			ItemID.UNIDENTIFIED_DWARF_WEED,
-			ItemID.LAWRUNE)));
+			ItemID.LAWRUNE,
+			GIANT_KEY_ID)));
 
 	private static boolean isLootItem(int itemId)
 	{
@@ -2438,6 +2442,12 @@ public final class HillGiantScript extends Script
 					if (groundItem.getId() != ItemID.BIG_BONES)
 					{
 						score -= 1;
+					}
+					if (groundItem.getId() == GIANT_KEY_ID)
+					{
+						// The rarest drop: take it before anything else
+						// within a few tiles.
+						score -= 25;
 					}
 
 					if (score < bestScore)
