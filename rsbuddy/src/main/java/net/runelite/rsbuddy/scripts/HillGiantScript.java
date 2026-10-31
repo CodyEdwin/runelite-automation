@@ -108,8 +108,16 @@ public final class HillGiantScript extends Script
 	// Brass-key shed footprint from the OSRS wiki: x 3113-3117, y 3450-3453,
 	// door on the south row, ladder on the north row. The player stands on
 	// DOOR_OUTSIDE (just south of the door) to open it.
-	private static final int SHED_MIN_X = 3113;
-	private static final int SHED_MAX_X = 3117;
+	// Walkable interior of the shed, from Cody's client logs plus the wiki.
+	// Inside seen: 3116,3451 / 3116,3450 / 3115,3450 (door row is inside; the
+	// door's wall edge is between y 3450 and 3449). Outside seen walking
+	// around the shed: x 3112 (west), y 3454-3455 (north), 3117,3453 /
+	// 3117,3454 / 3118,3452-3453 (east), 3114,3449 / 3115,3449 (south). The
+	// wiki footprint x 3113-3117 includes the walls, so the interior is
+	// x 3114-3116, y 3450-3453.
+	private static final int SHED_MIN_X = 3114;
+	private static final int SHED_MAX_X = 3116;
+	private static final int SHED_MIN_Y = 3450;
 	private static final int SHED_MAX_Y = 3453;
 	private static final WorldPoint DOOR_OUTSIDE = new WorldPoint(3115, 3449, 0);
 
@@ -961,7 +969,7 @@ public final class HillGiantScript extends Script
 		// through. Latch immediately.
 		if (doorClickFrom != null)
 		{
-			if (crossedDoorLine(location))
+			if (crossedDoorLine(location) && !isInShedInterior(doorClickFrom))
 			{
 				passedDoorThisTrip = true;
 				doorClickFrom = null;
@@ -987,6 +995,19 @@ public final class HillGiantScript extends Script
 				doorClickFrom = null;
 				logShed(context, location, "door click did nothing, will retry");
 			}
+		}
+
+		if (passedDoorThisTrip && !isInShedInterior(location))
+		{
+			// Latched but standing outside the shed: the latch is wrong.
+			// Drop it and start again from the door's outside tile.
+			passedDoorThisTrip = false;
+			ladderWaitTicks = 0;
+			ladderAttempts = 0;
+			ladderClickFrom = null;
+			ladderBlocked = false;
+			doorStepAttempts = 0;
+			logShed(context, location, "latched but outside the shed interior, latch cleared, back to door");
 		}
 
 		if (passedDoorThisTrip)
@@ -1145,10 +1166,19 @@ public final class HillGiantScript extends Script
 	 */
 	private static boolean crossedDoorLine(WorldPoint location)
 	{
+		return isInShedInterior(location);
+	}
+
+	/**
+	 * @return true if the tile is in the shed's walkable interior box,
+	 * x 3114-3116, y 3450-3453, plane 0 (bounded on both axes)
+	 */
+	private static boolean isInShedInterior(WorldPoint location)
+	{
 		return location != null
 			&& location.getPlane() == 0
 			&& location.getX() >= SHED_MIN_X && location.getX() <= SHED_MAX_X
-			&& location.getY() >= SURFACE_DOOR.getY() && location.getY() <= SHED_MAX_Y;
+			&& location.getY() >= SHED_MIN_Y && location.getY() <= SHED_MAX_Y;
 	}
 
 	private static boolean isInsideShedArea(WorldPoint location)
@@ -1156,7 +1186,7 @@ public final class HillGiantScript extends Script
 		return location != null
 			&& location.getPlane() == 0
 			&& location.getX() >= SHED_MIN_X && location.getX() <= SHED_MAX_X
-			&& location.getY() > SURFACE_DOOR.getY() && location.getY() <= SHED_MAX_Y;
+			&& location.getY() > SHED_MIN_Y && location.getY() <= SHED_MAX_Y;
 	}
 
 	/**
@@ -1285,9 +1315,10 @@ public final class HillGiantScript extends Script
 
 		// Hard guard: the shed ladder can only ever be clicked once the door
 		// latch is set on the return trip.
-		if (!up && !passedDoorThisTrip)
+		if (!up && (!passedDoorThisTrip || !isInShedInterior(location)))
 		{
-			logShed(context, location, "REFUSED ladder click (door latch not set): " + reason);
+			logShed(context, location, "REFUSED ladder click (latch=" + passedDoorThisTrip
+				+ ", inside=" + isInShedInterior(location) + "): " + reason);
 			return;
 		}
 		WorldPoint ladderTile = up ? DUNGEON_LADDER : SURFACE_LADDER;
