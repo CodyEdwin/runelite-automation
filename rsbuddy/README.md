@@ -165,6 +165,22 @@ walks; it expects you to already be at the spot.
 The status overlay shows the current session's trout and salmon caught/cooked totals with per-hour
 rates, plus the remaining XP and estimated time to the next Fishing and Cooking level.
 
+## Hill Giant (Edgeville)
+
+`HillGiantScript` kills hill giants in the Edgeville Dungeon, loots big bones, talismans, uncut
+diamonds, herbs and runes, and banks at Varrock West through the brass-key shed (brass key and
+sardines expected).
+
+- Uses the fast mouse profile (`Script.useFastMouse()`): a 90-300 ms reaction delay, then a quick,
+  nearly straight movement (about 160 ms for 50 px, 330 ms for 500 px).
+- Prefers a giant already attacking you, then the nearest one nobody else is fighting.
+- Spots a kill on the tick the death animation starts, moves the mouse onto the next giant while
+  the corpse fades, and loots as soon as the drops appear, nearest first.
+- Never clicks again while fighting, walking to loot, or climbing.
+- Getting back from the bank is a fixed sequence (walk to door, open, enter, climb). Inside vs
+  outside the shed is worked out from tiles and the door's wall edge, so it can't bounce between
+  the door and the ladder.
+
 ## Gem Crab Killer
 
 `GemCrabKillerScript` is registered automatically and appears in the panel as **Gem Crab Killer**.

@@ -40,6 +40,7 @@ import net.runelite.api.Skill;
 import net.runelite.api.Tile;
 import net.runelite.api.TileItem;
 import net.runelite.api.TileObject;
+import net.runelite.api.WallObject;
 import net.runelite.api.WorldView;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.InterfaceID;
@@ -62,13 +63,44 @@ public final class HillGiantScript extends Script
 	private static final String ATTACK_ACTION = "Attack";
 
 	private static final int MAX_DISTANCE = 25;
-	private static final int COOLDOWN_TICKS = 3;
+	// Ticks to wait after opening the bank (the walk to the booth) and after a
+	// withdraw (the inventory update). Was a flat 3 everywhere.
+	private static final int BANK_OPEN_COOLDOWN_TICKS = 2;
+	private static final int BANK_ACTION_COOLDOWN_TICKS = 1;
+	private static final int EAT_COOLDOWN_TICKS = 1;
 
-	// Picking a drop up is retried on the next tick: waiting out the full
-	// interaction cooldown made a missed pickup take several seconds.
-	private static final int LOOT_COOLDOWN_TICKS = 1;
-	private static final int LOOT_ATTEMPT_LIMIT = 12;
-	private static final int LOOT_TARGET_TIMEOUT_TICKS = 100;
+	// After an attack click, wait this long for the fight to register before
+	// treating the click as missed. Replaces the old fixed 3-tick cooldown.
+	private static final int ATTACK_CONFIRM_TICKS = 2;
+
+	// A giant's drops spawn when its corpse despawns. Watch the death for at
+	// most this long, then for this many ticks after the despawn.
+	private static final int DEATH_TIMEOUT_TICKS = 8;
+	private static final int DROP_WAIT_TICKS = 1;
+
+	// A Take click is only repeated when the player stood still for this many
+	// ticks without the item disappearing.
+	private static final int LOOT_RECLICK_TICKS = 2;
+	private static final int LOOT_ATTEMPT_LIMIT = 6;
+	private static final int LOOT_TARGET_TIMEOUT_TICKS = 40;
+
+	// Walking: click this far ahead along the path, and chain the next click
+	// when within this distance of the last clicked tile.
+	private static final int WALK_CLICK_AHEAD = 10;
+	private static final int WALK_CHAIN_DISTANCE = 3;
+
+	// Shed door and ladder: wait this long for a click to play out, retry this
+	// often before falling back one step. SHED_RADIUS bounds the inside area.
+	private static final int DOOR_WAIT_TICKS = 4;
+	private static final int DOOR_ATTEMPTS = 4;
+	private static final int LADDER_WAIT_TICKS = 5;
+	private static final int LADDER_ATTEMPTS = 3;
+	private static final int ENTER_TIMEOUT_TICKS = 8;
+	private static final int SHED_RADIUS = 4;
+
+	private static final String[] DOOR_OPEN_ACTIONS = {"Open", "Unlock"};
+	private static final String[] CLIMB_DOWN_ACTIONS = {"Climb-down", "Climb down", "Enter"};
+	private static final String[] CLIMB_UP_ACTIONS = {"Climb-up", "Climb up", "Exit"};
 
 	private static final WorldPoint HILL_GIANTS = new WorldPoint(3116, 9853, 0);
 	private static final WorldPoint DUNGEON_LADDER = new WorldPoint(3116, 9853, 0);
@@ -101,15 +133,6 @@ public final class HillGiantScript extends Script
 	private static final int MENU_STUCK_TICKS = 6;
 	private static final int BUSY_STUCK_TICKS = 100;
 
-	// A door click that did not actually open the door is retried after this
-	// many ticks. Without it a failed click would leave the door marked open
-	// and the script would keep walking into it.
-	private static final int SHED_DOOR_TIMEOUT_TICKS = 20;
-
-	// The drops of a kill appear a tick or two after the giant dies, so the
-	// script waits this long for them before moving on to the next giant.
-
-	private static final int POST_KILL_LOOT_TICKS = 3;
 
 	/**
 	 * Only the requested hill giant drops are picked up.
@@ -120,10 +143,10 @@ public final class HillGiantScript extends Script
 			ItemID.BODY_TALISMAN,
 			ItemID.UNCUT_DIAMOND,
 			ItemID.UNIDENTIFIED_RANARR,
-			ItemID.NATURE_RUNE,
-			ItemID.GRIMY_KWUARM,
-			ItemID.GRIMY_DWARF_WEED,
-			ItemID.LAW_RUNE)));
+			ItemID.NATURERUNE,
+			ItemID.UNIDENTIFIED_KWUARM,
+			ItemID.UNIDENTIFIED_DWARF_WEED,
+			ItemID.LAWRUNE)));
 
 	private static boolean isLootItem(int itemId)
 	{
@@ -138,6 +161,24 @@ public final class HillGiantScript extends Script
 	public java.util.Set<Integer> getGroundItemPickupFilter()
 	{
 		return LOOT_ITEMS;
+	}
+
+	/**
+	 * Hill giants use the fast, attentive mouse profile.
+	 */
+	@Override
+	public boolean useFastMouse()
+	{
+		return true;
+	}
+
+	@Override
+	public List<String> getOverlayLines()
+	{
+		return Arrays.asList(
+			"State: " + (state == null ? "-" : state.name())
+				+ (shedStep == null || state != State.WALK_TO_GIANTS ? "" : " / " + shedStep.name()),
+			"Kills: " + kills);
 	}
 
 	private enum State
@@ -157,6 +198,17 @@ public final class HillGiantScript extends Script
 		LEAVE
 	}
 
+	/**
+	 * Committed steps of the trip from the shed door down the ladder.
+	 */
+	private enum ShedStep
+	{
+		APPROACH_DOOR,
+		OPEN_DOOR,
+		ENTER,
+		CLIMB
+	}
+
 	private static final int[][] WALK_DIRECTIONS = {
 		{0, 1}, {1, 0}, {1, 1}, {1, -1},
 		{0, -1}, {-1, 0}, {-1, -1}, {-1, 1}
@@ -165,23 +217,39 @@ public final class HillGiantScript extends Script
 	private State state;
 	private int cooldown;
 	private WorldPoint lastWalkLocation;
-	private int stationaryTicks;
+	private WorldPoint lastWalkClick;
+	private int walkClickTicks;
 	private WorldPoint lootTarget;
 	private int lootTargetItemId;
 	private int lootAttempts;
 	private int lootTargetTicks;
 	private BankStage bankStage;
 	private int bankAttempts;
-	private boolean returningFromBank;
-	private boolean shedDoorOpen;
 	private final java.util.Map<WorldPoint, Long> ignoredLoot = new java.util.HashMap<>();
 	private int menuOpenTicks;
 	private int busyTicks;
-	private int shedDoorTicks;
 	private int bankCloseTicks;
 	private NPC attackTarget;
-	private boolean killLootPending;
-	private int killLootTicks;
+	private int attackPendingTicks;
+	private NPC dyingNpc;
+	private NPC lastKilledNpc;
+	private WorldPoint lastWalkTarget;
+	private WorldPoint deathTile;
+	private WorldPoint lastDeathTile;
+	private int deathTicks;
+	private int despawnTicks;
+	private int lootClickTicks;
+	private int kills;
+	private ShedStep shedStep;
+	private int shedStepTicks;
+	private int doorWaitTicks;
+	private int doorAttempts;
+	private int ladderWaitTicks;
+	private int ladderAttempts;
+	private boolean shedBoundaryKnown;
+	private boolean shedBoundaryVertical;
+	private boolean shedLadderAbove;
+	private int shedBoundary;
 
 	public HillGiantScript()
 	{
@@ -196,22 +264,35 @@ public final class HillGiantScript extends Script
 		cooldown = 0;
 		state = null;
 		lastWalkLocation = null;
-		stationaryTicks = 0;
+		lastWalkClick = null;
+		walkClickTicks = 0;
 		lootTarget = null;
 		lootTargetItemId = -1;
 		lootAttempts = 0;
 		lootTargetTicks = 0;
 		bankStage = null;
 		bankAttempts = 0;
-		returningFromBank = false;
-		shedDoorOpen = false;
-		shedDoorTicks = 0;
 		ignoredLoot.clear();
 		menuOpenTicks = 0;
 		busyTicks = 0;
 		attackTarget = null;
-		killLootPending = false;
-		killLootTicks = 0;
+		attackPendingTicks = 0;
+		dyingNpc = null;
+		lastKilledNpc = null;
+		lastWalkTarget = null;
+		deathTile = null;
+		lastDeathTile = null;
+		deathTicks = 0;
+		despawnTicks = 0;
+		lootClickTicks = -1;
+		kills = 0;
+		shedStep = null;
+		shedStepTicks = 0;
+		doorWaitTicks = 0;
+		doorAttempts = 0;
+		ladderWaitTicks = 0;
+		ladderAttempts = 0;
+		shedBoundaryKnown = false;
 		setStatus("Ready");
 	}
 
@@ -227,16 +308,14 @@ public final class HillGiantScript extends Script
 		}
 
 		recoverStuckInput(context);
-		updateShedDoorState(context);
 
 		if (state == null)
 		{
 			WorldPoint location = context.getPlayerLocation();
 			if (location != null && location.getY() < 9000)
 			{
-				// Starting on the surface means the shed door is between
-				// us and the ladder, so approach the door first.
-				returningFromBank = true;
+				// Starting on the surface: head for the shed. The committed
+				// shed steps work out whether we are inside or outside.
 				state = State.WALK_TO_GIANTS;
 			}
 			else
@@ -339,13 +418,15 @@ public final class HillGiantScript extends Script
 
 	private void hunt(ScriptContext context)
 	{
+		Client client = context.getClient();
+		GameInput input = context.getInput();
 		Inventory inventory = context.getInventory();
 
 		// A menu left over from a previous loot/interaction would block
 		// clicking giants and walking. Close it before hunting.
-		if (context.getClient().isMenuOpen())
+		if (client.isMenuOpen())
 		{
-			context.getInput().closeMenu();
+			input.closeMenu();
 			return;
 		}
 
@@ -356,119 +437,196 @@ public final class HillGiantScript extends Script
 			return;
 		}
 
-		// A kill was just finished. Its drops are taken before any other giant
-		// is attacked, even when one has already attacked us: auto-retaliate
-		// keeps that fight going while the drops are picked up, so the loot of
-		// every single kill is taken.
-		if (killLootPending)
-		{
-			GroundLoot drop = findGroundLoot(context);
-			if (drop != null)
-			{
-				killLootPending = false;
-				killLootTicks = 0;
-				state = State.LOOT;
-				setStatus("Looting");
-				return;
-			}
-
-			// Drops spawn a tick or two after the giant dies. Wait for them
-			// instead of walking off, or the kill yields nothing.
-			if (++killLootTicks <= POST_KILL_LOOT_TICKS)
-			{
-				setStatus("Waiting for drops");
-				return;
-			}
-
-			killLootPending = false;
-			killLootTicks = 0;
-		}
-
 		Player player = context.getPlayer();
 		NPC interacting = player != null && player.getInteracting() instanceof NPC
 			? (NPC) player.getInteracting()
 			: null;
-		if (interacting != null)
+
+		// React to a kill on the very tick the death animation starts instead
+		// of waiting out a fixed delay.
+		if (deathTile == null)
 		{
-			if (interacting.isDead() || isKillFinished(context, attackTarget))
+			if (interacting != null && interacting.isDead() && interacting != lastKilledNpc)
 			{
-				// The giant is dead. Loot its drops now rather than starting
-				// another fight first.
-				killLootPending = true;
-				killLootTicks = 0;
-				attackTarget = null;
-				setStatus("Kill finished");
+				beginDeathWatch(interacting);
+			}
+			else if (attackTarget != null && attackTarget != lastKilledNpc
+				&& isKillFinished(context, attackTarget))
+			{
+				beginDeathWatch(attackTarget);
+			}
+		}
+
+		if (deathTile != null)
+		{
+			if (watchDeath(context))
+			{
 				return;
 			}
+		}
 
-			// Any active NPC interaction blocks a new attack. Auto-retaliate
-			// may have started a fight with something other than a hill
-			// giant, so wait for that fight to finish instead of spamming
-			// attack clicks that the game will reject.
-			String interactingName = getNpcName(interacting);
-			setStatus("Fighting " + interactingName);
+		if (interacting != null && !interacting.isDead())
+		{
+			// Already fighting (or auto-retaliating). Never click again while
+			// the fight is on; just remember who we are fighting so its death
+			// is noticed immediately.
+			attackTarget = interacting;
+			attackPendingTicks = 0;
+			setStatus("Fighting " + getNpcName(interacting));
 			return;
 		}
 
-		// Nothing is being fought any more, but the giant we attacked may have
-		// died on this very tick: its drops still have to spawn before the
-		// next giant is attacked.
-		if (isKillFinished(context, attackTarget))
+		// An attack click was sent but the game has not registered the
+		// interaction yet. Wait a moment rather than clicking again, unless the
+		// giant was taken by someone else or died in the meantime.
+		if (attackTarget != null && attackPendingTicks > 0)
 		{
-			killLootPending = true;
-			killLootTicks = 0;
+			--attackPendingTicks;
+			if (!attackTarget.isDead() && !isTakenByOther(context, attackTarget)
+				&& isInScene(context, attackTarget))
+			{
+				setStatus("Attacking " + NPC_NAME);
+				return;
+			}
 			attackTarget = null;
-			setStatus("Kill finished");
-			return;
+			attackPendingTicks = 0;
 		}
 
 		// Nothing is being fought, so any wanted drop on the ground is taken
-		// before the next giant is attacked.
-		GroundLoot loot = findGroundLoot(context);
-		if (loot != null)
+		// before the next giant is attacked. Switch and loot on this same tick.
+		if (findGroundLoot(context) != null)
 		{
 			state = State.LOOT;
-			setStatus("Looting");
+			loot(context);
 			return;
 		}
 
-		GameInput input = context.getInput();
-		if (input.isBusy())
+		if (input.isBusy() || input.isCameraBusy())
 		{
 			setStatus("Moving mouse");
 			return;
 		}
 
 		Optional<NPC> target = findHillGiant(context);
-		if (target.isPresent())
+		if (target.isEmpty())
 		{
-			if (input.interact(target.get(), ATTACK_ACTION))
+			attackTarget = null;
+			WorldPoint location = context.getPlayerLocation();
+			if (location != null && location.distanceTo(HILL_GIANTS) > 12)
 			{
-				attackTarget = target.get();
-				killLootPending = false;
-				killLootTicks = 0;
-				cooldown = COOLDOWN_TICKS;
-				setStatus("Attacking " + NPC_NAME);
+				walkTowards(context, HILL_GIANTS);
+				setStatus("Walking to hill giants");
+				return;
+			}
+			setStatus("Waiting for a free " + NPC_NAME);
+			return;
+		}
+
+		NPC npc = target.get();
+		if (!input.isVisible(npc))
+		{
+			WorldPoint location = context.getPlayerLocation();
+			WorldPoint npcLocation = npc.getWorldLocation();
+			if (location != null && npcLocation != null && location.distanceTo(npcLocation) > 7)
+			{
+				walkTowards(context, npcLocation);
+				setStatus("Walking to " + NPC_NAME);
 			}
 			else
 			{
-				cooldown = 2;
-				setStatus("Cannot attack " + NPC_NAME);
+				input.turnCameraToward(npcLocation);
+				setStatus("Turning camera to " + NPC_NAME);
 			}
 			return;
 		}
 
-		openDoor(context);
-		cooldown = 2;
-		setStatus("No " + NPC_NAME + " nearby");
+		if (input.interact(npc, ATTACK_ACTION))
+		{
+			attackTarget = npc;
+			attackPendingTicks = ATTACK_CONFIRM_TICKS;
+			setStatus("Attacking " + NPC_NAME);
+		}
+		else
+		{
+			setStatus("Cannot attack " + NPC_NAME);
+		}
+	}
+
+	private void beginDeathWatch(NPC npc)
+	{
+		dyingNpc = npc;
+		lastKilledNpc = npc;
+		deathTile = npc.getWorldLocation();
+		lastDeathTile = deathTile;
+		deathTicks = 0;
+		despawnTicks = 0;
+		attackTarget = null;
+		attackPendingTicks = 0;
+		++kills;
+	}
+
+	/**
+	 * Follows a giant from its death animation to its drops appearing. The
+	 * drops spawn when the corpse despawns, so this waits for exactly that,
+	 * then loots right away. While waiting the mouse is already moved onto
+	 * the next giant, like a player getting ready for the next kill.
+	 *
+	 * @return true while still waiting this tick
+	 */
+	private boolean watchDeath(ScriptContext context)
+	{
+		GameInput input = context.getInput();
+
+		GroundLoot drop = findGroundLoot(context);
+		if (drop != null && drop.worldLocation != null && deathTile != null
+			&& drop.worldLocation.distanceTo(deathTile) <= 2)
+		{
+			clearDeathWatch();
+			state = State.LOOT;
+			loot(context);
+			return true;
+		}
+
+		boolean dying = dyingNpc != null && isInScene(context, dyingNpc);
+		boolean waiting = dying
+			? ++deathTicks < DEATH_TIMEOUT_TICKS
+			: ++despawnTicks <= DROP_WAIT_TICKS;
+
+		if (!waiting)
+		{
+			// No wanted drop from this kill. Move straight on.
+			clearDeathWatch();
+			return false;
+		}
+
+		if (!input.isBusy() && !input.isCameraBusy())
+		{
+			findHillGiant(context)
+				.filter(input::isVisible)
+				.filter(next -> !input.isMouseOver(next))
+				.ifPresent(input::hover);
+		}
+
+		setStatus(dying ? "Kill finished" : "Waiting for drops");
+		return true;
+	}
+
+	private void clearDeathWatch()
+	{
+		dyingNpc = null;
+		deathTile = null;
+		deathTicks = 0;
+		despawnTicks = 0;
 	}
 
 	private void loot(ScriptContext context)
 	{
 		Inventory inventory = context.getInventory();
+		GameInput input = context.getInput();
 
 		if (inventory.isFull())
 		{
+			resetLootTracking();
 			state = State.WALK_TO_BANK;
 			setStatus("Inventory full");
 			return;
@@ -477,14 +635,16 @@ public final class HillGiantScript extends Script
 		GroundLoot loot = findGroundLoot(context);
 		if (loot == null)
 		{
-			context.getInput().closeMenu();
+			// Everything is picked up. Go straight back to hunting on this
+			// tick so the next attack is not delayed.
+			resetLootTracking();
+			lastDeathTile = null;
 			state = State.HUNT;
-			setStatus("Hunting");
+			hunt(context);
 			return;
 		}
 
-		GameInput input = context.getInput();
-		if (input.isBusy())
+		if (input.isBusy() || input.isCameraBusy())
 		{
 			setStatus("Moving mouse");
 			return;
@@ -497,51 +657,70 @@ public final class HillGiantScript extends Script
 			lootTargetItemId = loot.itemId;
 			lootAttempts = 0;
 			lootTargetTicks = 0;
+			lootClickTicks = -1;
 		}
 
 		if (++lootTargetTicks > LOOT_TARGET_TIMEOUT_TICKS && loot.worldLocation != null)
 		{
 			// The drop is probably behind an obstacle or otherwise
-			// unreachable. Ignore it so the script does not get stuck.
-			ignoreLoot(loot.worldLocation);
-			lootTarget = null;
-			lootTargetItemId = -1;
-			lootAttempts = 0;
-			lootTargetTicks = 0;
-			state = State.HUNT;
-			setStatus("Skipping unreachable loot");
+			// unreachable. Ignore it for a while so the script does not get
+			// stuck.
+			skipLoot(loot);
 			return;
 		}
 
+		// A Take click was sent. The player walks to the item and picks it up
+		// by itself, so do not click again while that is happening. Only a
+		// click that clearly did nothing is repeated.
 		Player player = context.getPlayer();
-		WorldPoint location = player == null ? null : player.getWorldLocation();
-		if (location != null && loot.worldLocation != null
-			&& location.distanceTo(loot.worldLocation) > 2)
+		if (lootClickTicks >= 0)
+		{
+			++lootClickTicks;
+			if (isMoving(player) || lootClickTicks < LOOT_RECLICK_TICKS)
+			{
+				setStatus("Looting " + getItemName(context.getClient(), loot.itemId));
+				return;
+			}
+		}
+
+		if (lootAttempts >= LOOT_ATTEMPT_LIMIT && loot.worldLocation != null)
+		{
+			skipLoot(loot);
+			return;
+		}
+
+		String itemName = getItemName(context.getClient(), loot.itemId);
+		if (input.takeGroundItem(loot.sceneX, loot.sceneY, loot.itemId, itemName))
+		{
+			++lootAttempts;
+			lootClickTicks = 0;
+			setStatus(itemName.isEmpty() ? "Looting" : "Looting " + itemName);
+			return;
+		}
+
+		// The tile is not on screen (or a menu was just closed). Get closer.
+		if (loot.worldLocation != null && !context.getClient().isMenuOpen())
 		{
 			walkTowards(context, loot.worldLocation);
-			lootAttempts = 0;
 			setStatus("Walking to loot");
-			return;
 		}
+	}
 
-		Client client = context.getClient();
-		String itemName = getItemName(client, loot.itemId);
-		input.takeGroundItem(loot.sceneX, loot.sceneY, loot.itemId, itemName);
-		cooldown = LOOT_COOLDOWN_TICKS;
+	private void skipLoot(GroundLoot loot)
+	{
+		ignoreLoot(loot.worldLocation);
+		resetLootTracking();
+		state = State.HUNT;
+		setStatus("Skipping unreachable loot");
+	}
 
-		if (++lootAttempts > LOOT_ATTEMPT_LIMIT && loot.worldLocation != null)
-		{
-			ignoreLoot(loot.worldLocation);
-			lootTarget = null;
-			lootTargetItemId = -1;
-			lootAttempts = 0;
-			lootTargetTicks = 0;
-			state = State.HUNT;
-			setStatus("Skipping unreachable loot");
-			return;
-		}
-
-		setStatus(itemName.isEmpty() ? "Looting" : "Looting " + itemName);
+	private void resetLootTracking()
+	{
+		lootTarget = null;
+		lootTargetItemId = -1;
+		lootAttempts = 0;
+		lootTargetTicks = 0;
+		lootClickTicks = -1;
 	}
 
 	private void walkToBank(ScriptContext context)
@@ -553,42 +732,541 @@ public final class HillGiantScript extends Script
 			return;
 		}
 
-		if (!isInDungeon(location))
+		if (isInDungeon(location))
 		{
-			if (location.distanceTo(WEST_VARROCK_BANK) <= 8)
+			shedStep = null;
+			if (location.distanceTo(DUNGEON_LADDER) <= 6)
 			{
-				state = State.BANK;
-				setStatus("Banking");
-				return;
-			}
-
-			// After climbing up we are inside the shed with the brass-key
-			// door shut behind us. Only open it from inside: clicking the
-			// door from the outside pulls the player back to it, which used to
-			// turn the walk to the bank into a walk back to the shed.
-			if (!shedDoorOpen
-				&& location.distanceTo(SURFACE_LADDER) <= 6
-				&& openDoor(context))
-			{
-				setStatus("Opening door");
-				return;
-			}
-
-			walkTowards(context, WEST_VARROCK_BANK, true);
-			setStatus("Walking to bank");
-		}
-		else
-		{
-			if (location.distanceTo(DUNGEON_LADDER) <= 8)
-			{
-				climb(context, true, LADDER_ID);
+				climbLadder(context, true);
 			}
 			else
 			{
 				walkTowards(context, DUNGEON_LADDER);
+				setStatus("Walking to ladder");
 			}
-			setStatus("Walking to bank");
+			return;
 		}
+
+		ladderWaitTicks = 0;
+		ladderAttempts = 0;
+
+		if (location.distanceTo(WEST_VARROCK_BANK) <= 8)
+		{
+			shedStep = null;
+			state = State.BANK;
+			setStatus("Banking");
+			return;
+		}
+
+		// After climbing up we are inside the shed with the door shut. Leave
+		// through it exactly once; as soon as we are outside the door is never
+		// touched again on this trip, so it cannot pull us back in.
+		if (isInsideShed(context, location))
+		{
+			exitShed(context);
+			return;
+		}
+
+		doorWaitTicks = 0;
+		doorAttempts = 0;
+		walkTowards(context, WEST_VARROCK_BANK, true);
+		setStatus("Walking to bank");
+	}
+
+	private void exitShed(ScriptContext context)
+	{
+		GameInput input = context.getInput();
+		Player player = context.getPlayer();
+
+		if (doorWaitTicks > 0)
+		{
+			--doorWaitTicks;
+			if (isMoving(player) || isAnimating(player) || doorWaitTicks > DOOR_WAIT_TICKS - 2)
+			{
+				setStatus("Leaving shed");
+				return;
+			}
+		}
+
+		if (input.isBusy() || input.isCameraBusy())
+		{
+			return;
+		}
+
+		Optional<TileObject> door = findShedDoor(context);
+		if (door.isEmpty() || !hasAction(context, door.get(), DOOR_OPEN_ACTIONS))
+		{
+			// The door is open already (or not loaded). Just walk out.
+			walkTowards(context, WEST_VARROCK_BANK, true);
+			setStatus("Walking to bank");
+			return;
+		}
+
+		if (clickDoor(context, door.get()))
+		{
+			setStatus("Leaving shed");
+		}
+	}
+
+	/**
+	 * The return trip as a fixed sequence: walk to the door, open it once,
+	 * step inside, then commit to the ladder. Each step only moves forward
+	 * (or back one step after a clear failure), so the script can no longer
+	 * bounce between the door and the ladder.
+	 */
+	private void walkToGiants(ScriptContext context)
+	{
+		Player player = context.getPlayer();
+		WorldPoint location = player == null ? null : player.getWorldLocation();
+		if (location == null)
+		{
+			return;
+		}
+
+		if (isInDungeon(location))
+		{
+			shedStep = null;
+			ladderWaitTicks = 0;
+			ladderAttempts = 0;
+			if (location.distanceTo(HILL_GIANTS) <= 8)
+			{
+				state = State.HUNT;
+				setStatus("Hunting");
+				return;
+			}
+			walkTowards(context, HILL_GIANTS);
+			setStatus("Walking to hill giants");
+			return;
+		}
+
+		if (shedStep == null)
+		{
+			shedStep = isInsideShed(context, location) ? ShedStep.CLIMB : ShedStep.APPROACH_DOOR;
+			shedStepTicks = 0;
+			doorAttempts = 0;
+			doorWaitTicks = 0;
+			ladderAttempts = 0;
+			ladderWaitTicks = 0;
+		}
+
+		++shedStepTicks;
+		switch (shedStep)
+		{
+			case APPROACH_DOOR:
+			{
+				if (isInsideShed(context, location))
+				{
+					setShedStep(ShedStep.CLIMB);
+					climbLadder(context, false);
+					return;
+				}
+
+				if (location.distanceTo(SURFACE_DOOR) <= 3)
+				{
+					setShedStep(ShedStep.OPEN_DOOR);
+					enterShed(context, location);
+					return;
+				}
+
+				walkTowards(context, SURFACE_DOOR, true);
+				setStatus("Walking to shed");
+				return;
+			}
+			case OPEN_DOOR:
+			{
+				enterShed(context, location);
+				return;
+			}
+			case ENTER:
+			{
+				if (isInsideShed(context, location))
+				{
+					setShedStep(ShedStep.CLIMB);
+					climbLadder(context, false);
+					return;
+				}
+
+				if (shedStepTicks > ENTER_TIMEOUT_TICKS)
+				{
+					// Still outside: the door must have shut again.
+					setShedStep(ShedStep.OPEN_DOOR);
+					return;
+				}
+
+				walkTowards(context, SURFACE_LADDER);
+				setStatus("Entering shed");
+				return;
+			}
+			case CLIMB:
+			{
+				// Committed to the ladder: the door is never clicked from here.
+				// Only if repeated climbs clearly fail while we are outside is
+				// the sequence restarted from the door.
+				if (ladderAttempts >= LADDER_ATTEMPTS && ladderWaitTicks <= 0
+					&& !isInsideShed(context, location))
+				{
+					setShedStep(ShedStep.APPROACH_DOOR);
+					return;
+				}
+
+				climbLadder(context, false);
+				return;
+			}
+		}
+	}
+
+	private void setShedStep(ShedStep step)
+	{
+		shedStep = step;
+		shedStepTicks = 0;
+		doorAttempts = 0;
+		doorWaitTicks = 0;
+		ladderAttempts = 0;
+		ladderWaitTicks = 0;
+	}
+
+	private void enterShed(ScriptContext context, WorldPoint location)
+	{
+		GameInput input = context.getInput();
+		Player player = context.getPlayer();
+
+		if (isInsideShed(context, location))
+		{
+			setShedStep(ShedStep.CLIMB);
+			climbLadder(context, false);
+			return;
+		}
+
+		if (doorWaitTicks > 0)
+		{
+			// The door click was sent. Give the walk and the door animation
+			// time to finish instead of clicking the door again.
+			--doorWaitTicks;
+			if (isMoving(player) || isAnimating(player) || doorWaitTicks > DOOR_WAIT_TICKS - 2)
+			{
+				setStatus("Opening door");
+				return;
+			}
+		}
+
+		if (input.isBusy() || input.isCameraBusy())
+		{
+			return;
+		}
+
+		Optional<TileObject> door = findShedDoor(context);
+		if (door.isEmpty())
+		{
+			walkTowards(context, SURFACE_DOOR, true);
+			setStatus("Looking for shed door");
+			return;
+		}
+
+		if (!hasAction(context, door.get(), DOOR_OPEN_ACTIONS))
+		{
+			// Already open. Walk in.
+			setShedStep(ShedStep.ENTER);
+			walkTowards(context, SURFACE_LADDER);
+			setStatus("Entering shed");
+			return;
+		}
+
+		if (doorAttempts >= DOOR_ATTEMPTS)
+		{
+			// Several clean attempts did nothing: start over from the
+			// approach so the player is re-positioned in front of the door.
+			setShedStep(ShedStep.APPROACH_DOOR);
+			return;
+		}
+
+		if (clickDoor(context, door.get()))
+		{
+			setStatus("Opening door");
+		}
+	}
+
+	/**
+	 * Opens the shed door with one click. Turns the camera first if the door
+	 * is off screen, so the click always lands on the door itself.
+	 */
+	private boolean clickDoor(ScriptContext context, TileObject door)
+	{
+		switch (interactObject(context, door, DOOR_OPEN_ACTIONS, doorAttempts >= 2))
+		{
+			case SENT:
+				++doorAttempts;
+				doorWaitTicks = DOOR_WAIT_TICKS;
+				return true;
+			case MENU_OPENED:
+				return true;
+			case CAMERA:
+				setStatus("Turning camera to door");
+				return false;
+			default:
+				return false;
+		}
+	}
+
+	private enum ObjectClick
+	{
+		NONE,
+		CAMERA,
+		MENU_OPENED,
+		SENT
+	}
+
+	/**
+	 * One interaction with a door or ladder. Normally the option is used
+	 * directly; after a couple of attempts that did nothing it falls back to
+	 * the real right-click menu, which also works for wall objects whose menu
+	 * identifier is packed differently.
+	 */
+	private ObjectClick interactObject(ScriptContext context, TileObject object, String[] actions, boolean viaMenu)
+	{
+		GameInput input = context.getInput();
+		boolean menuOpen = context.getClient().isMenuOpen();
+
+		if (menuOpen && !viaMenu)
+		{
+			input.closeMenu();
+			return ObjectClick.NONE;
+		}
+
+		if (!menuOpen && !input.isVisible(object))
+		{
+			input.turnCameraToward(object.getWorldLocation());
+			return ObjectClick.CAMERA;
+		}
+
+		if (viaMenu)
+		{
+			if (!input.interactViaMenu(object, actions))
+			{
+				return ObjectClick.NONE;
+			}
+			return menuOpen ? ObjectClick.SENT : ObjectClick.MENU_OPENED;
+		}
+
+		return input.interact(object, actions) ? ObjectClick.SENT : ObjectClick.NONE;
+	}
+
+	/**
+	 * Climbs the shed ladder (down) or the dungeon ladder (up). Finds the
+	 * ladder by its climb action next to its known tile, walks closer or turns
+	 * the camera when it is not on screen, and waits for each click to finish
+	 * before trying again.
+	 */
+	private void climbLadder(ScriptContext context, boolean up)
+	{
+		GameInput input = context.getInput();
+		Player player = context.getPlayer();
+		WorldPoint location = player == null ? null : player.getWorldLocation();
+		WorldPoint ladderTile = up ? DUNGEON_LADDER : SURFACE_LADDER;
+		String[] actions = up ? CLIMB_UP_ACTIONS : CLIMB_DOWN_ACTIONS;
+
+		if (ladderWaitTicks > 0)
+		{
+			--ladderWaitTicks;
+			if (isMoving(player) || isAnimating(player) || ladderWaitTicks > LADDER_WAIT_TICKS - 2)
+			{
+				setStatus(up ? "Climbing up" : "Climbing down");
+				return;
+			}
+		}
+
+		if (input.isBusy() || input.isCameraBusy())
+		{
+			return;
+		}
+
+		boolean viaMenu = ladderAttempts >= 2;
+		if (context.getClient().isMenuOpen() && !viaMenu)
+		{
+			input.closeMenu();
+			return;
+		}
+
+		Optional<TileObject> ladder = findLadder(context, ladderTile, actions);
+		if (ladder.isEmpty())
+		{
+			walkTowards(context, ladderTile, !up);
+			setStatus("Walking to ladder");
+			return;
+		}
+
+		TileObject object = ladder.get();
+		if (!context.getClient().isMenuOpen() && !input.isVisible(object)
+			&& location != null && location.distanceTo(ladderTile) > 6)
+		{
+			walkTowards(context, ladderTile, !up);
+			setStatus("Walking to ladder");
+			return;
+		}
+
+		switch (interactObject(context, object, actions, viaMenu))
+		{
+			case SENT:
+				++ladderAttempts;
+				ladderWaitTicks = LADDER_WAIT_TICKS;
+				setStatus(up ? "Climbing up" : "Climbing down");
+				break;
+			case CAMERA:
+				setStatus("Turning camera to ladder");
+				break;
+			default:
+				break;
+		}
+	}
+
+	private Optional<TileObject> findLadder(ScriptContext context, WorldPoint ladderTile, String[] actions)
+	{
+		Optional<TileObject> near = context.getTargets().getTileObjects(ladderTile, 3).stream()
+			.filter(object -> hasAction(context, object, actions))
+			.min(java.util.Comparator.comparingInt(object -> object.getWorldLocation() == null
+				? Integer.MAX_VALUE
+				: object.getWorldLocation().distanceTo(ladderTile)));
+		if (near.isPresent())
+		{
+			return near;
+		}
+
+		return context.getTargets().findTileObject(LADDER_ID, 12)
+			.filter(object -> hasAction(context, object, actions));
+	}
+
+	private Optional<TileObject> findShedDoor(ScriptContext context)
+	{
+		Optional<TileObject> byId = context.getTargets().getTileObjects(SURFACE_DOOR, 3).stream()
+			.filter(object -> object.getId() == DOOR_ID)
+			.findFirst();
+		if (byId.isPresent())
+		{
+			return byId;
+		}
+
+		return context.getTargets().getTileObjects(SURFACE_DOOR, 2).stream()
+			.filter(object -> object instanceof WallObject)
+			.filter(object -> hasAction(context, object, DOOR_OPEN_ACTIONS)
+				|| hasAction(context, object, new String[] {"Close"}))
+			.findFirst();
+	}
+
+	/**
+	 * Decides whether the player stands inside the brass-key shed from tiles
+	 * alone, never from what happens to be visible. The door's wall edge
+	 * splits the shed side from the outside; the ladder side of that edge,
+	 * close to the ladder and reachable without passing a wall, is inside.
+	 */
+	private boolean isInsideShed(ScriptContext context, WorldPoint location)
+	{
+		if (location == null || isInDungeon(location) || location.getPlane() != SURFACE_LADDER.getPlane())
+		{
+			return false;
+		}
+
+		if (Math.abs(location.getX() - SURFACE_LADDER.getX()) > SHED_RADIUS
+			|| Math.abs(location.getY() - SURFACE_LADDER.getY()) > SHED_RADIUS)
+		{
+			return false;
+		}
+
+		learnShedBoundary(context);
+		if (shedBoundaryKnown && !isOnLadderSide(location))
+		{
+			return false;
+		}
+
+		return canReach(context, SURFACE_LADDER);
+	}
+
+	/**
+	 * Reads which edge of its tile the shed door sits on, once, while the
+	 * door is loaded. That edge is the exact line between inside and outside.
+	 */
+	private void learnShedBoundary(ScriptContext context)
+	{
+		if (shedBoundaryKnown)
+		{
+			return;
+		}
+
+		Optional<TileObject> door = findShedDoor(context);
+		if (door.isEmpty() || !(door.get() instanceof WallObject) || door.get().getWorldLocation() == null)
+		{
+			return;
+		}
+
+		WallObject wall = (WallObject) door.get();
+		int orientation = wall.getOrientationA();
+		WorldPoint doorTile = wall.getWorldLocation();
+		switch (orientation)
+		{
+			case 1: // west edge
+				shedBoundaryVertical = true;
+				shedBoundary = doorTile.getX();
+				break;
+			case 4: // east edge
+				shedBoundaryVertical = true;
+				shedBoundary = doorTile.getX() + 1;
+				break;
+			case 2: // north edge
+				shedBoundaryVertical = false;
+				shedBoundary = doorTile.getY() + 1;
+				break;
+			case 8: // south edge
+				shedBoundaryVertical = false;
+				shedBoundary = doorTile.getY();
+				break;
+			default:
+				return;
+		}
+
+		// The boundary lies between coordinate (boundary - 1) and boundary.
+		int ladder = shedBoundaryVertical ? SURFACE_LADDER.getX() : SURFACE_LADDER.getY();
+		shedLadderAbove = ladder >= shedBoundary;
+		shedBoundaryKnown = true;
+	}
+
+	private boolean isOnLadderSide(WorldPoint location)
+	{
+		int coordinate = shedBoundaryVertical ? location.getX() : location.getY();
+		return shedLadderAbove ? coordinate >= shedBoundary : coordinate < shedBoundary;
+	}
+
+	private static boolean hasAction(ScriptContext context, TileObject object, String[] actions)
+	{
+		net.runelite.api.ObjectComposition composition = context.getClient().getObjectDefinition(object.getId());
+		if (composition != null && composition.getImpostorIds() != null)
+		{
+			net.runelite.api.ObjectComposition impostor = composition.getImpostor();
+			if (impostor != null)
+			{
+				composition = impostor;
+			}
+		}
+
+		if (composition == null || composition.getActions() == null)
+		{
+			return false;
+		}
+
+		for (String candidate : composition.getActions())
+		{
+			if (candidate == null)
+			{
+				continue;
+			}
+
+			for (String action : actions)
+			{
+				if (candidate.equalsIgnoreCase(action))
+				{
+					return true;
+				}
+			}
+		}
+
+		return false;
 	}
 
 	private void bank(ScriptContext context)
@@ -626,7 +1304,7 @@ public final class HillGiantScript extends Script
 			{
 				if (input.interact(booth.get(), "Bank"))
 				{
-					cooldown = COOLDOWN_TICKS;
+					cooldown = BANK_OPEN_COOLDOWN_TICKS;
 					setStatus("Opening bank");
 				}
 				return;
@@ -637,7 +1315,7 @@ public final class HillGiantScript extends Script
 			{
 				if (input.interact(banker.get(), "Bank"))
 				{
-					cooldown = COOLDOWN_TICKS;
+					cooldown = BANK_OPEN_COOLDOWN_TICKS;
 					setStatus("Opening bank");
 				}
 				return;
@@ -647,7 +1325,6 @@ public final class HillGiantScript extends Script
 			// right-clicking an off-screen object, which would hit whatever
 			// interface is drawn at that spot.
 			walkTowards(context, WEST_VARROCK_BANK, true);
-			cooldown = 2;
 			setStatus("Walking to bank");
 			return;
 		}
@@ -684,7 +1361,7 @@ public final class HillGiantScript extends Script
 				{
 					bankStage = BankStage.WAIT_DEPOSIT;
 					bankAttempts = 0;
-					cooldown = COOLDOWN_TICKS;
+					cooldown = BANK_ACTION_COOLDOWN_TICKS;
 				}
 				else
 				{
@@ -736,7 +1413,7 @@ public final class HillGiantScript extends Script
 
 				if (input.withdrawBankItem(BRASS_KEY_ID, "Withdraw-1"))
 				{
-					cooldown = COOLDOWN_TICKS;
+					cooldown = BANK_OPEN_COOLDOWN_TICKS;
 				}
 				else
 				{
@@ -792,83 +1469,15 @@ public final class HillGiantScript extends Script
 	 */
 	private void leaveBank()
 	{
-		cooldown = COOLDOWN_TICKS;
+		cooldown = BANK_ACTION_COOLDOWN_TICKS;
 		ignoredLoot.clear();
 		bankStage = null;
 		bankAttempts = 0;
-		returningFromBank = true;
-		shedDoorOpen = false;
-		shedDoorTicks = 0;
+		shedStep = null;
 		state = State.WALK_TO_GIANTS;
 		setStatus("Returning to hill giants");
 	}
 
-
-	private void walkToGiants(ScriptContext context)
-	{
-		Player player = context.getPlayer();
-		WorldPoint location = player == null ? null : player.getWorldLocation();
-		if (location == null)
-		{
-			return;
-		}
-
-		if (isInDungeon(location))
-		{
-			returningFromBank = false;
-
-			if (location.distanceTo(HILL_GIANTS) <= 8)
-			{
-				state = State.HUNT;
-				setStatus("Hunting");
-				return;
-			}
-			walkTowards(context, HILL_GIANTS);
-			setStatus("Walking to hill giants");
-		}
-		else
-		{
-			boolean nearShed = location.distanceTo(SURFACE_DOOR) <= 3
-				|| location.distanceTo(SURFACE_LADDER) <= 3;
-
-			// Coming back from the bank the shed door is normally shut and
-			// blocks the ladder inside. Always open it before targeting the
-			// ladder, even when the collision map still looks walkable.
-			if (!shedDoorOpen && returningFromBank && nearShed && openDoor(context))
-			{
-				setStatus("Opening door");
-				return;
-			}
-
-			boolean ladderReachable = canReach(context, SURFACE_LADDER);
-			boolean canClimb = ladderReachable || shedDoorOpen
-				|| location.distanceTo(SURFACE_LADDER) <= 2;
-
-			if (location.distanceTo(SURFACE_LADDER) <= 8 && canClimb)
-			{
-				climb(context, false, LADDER_ID);
-				setStatus("Climbing down");
-				return;
-			}
-
-			if (!shedDoorOpen
-				&& !ladderReachable
-				&& location.distanceTo(SURFACE_DOOR) <= 10
-				&& openDoor(context))
-			{
-				setStatus("Opening door");
-				return;
-			}
-
-			// Walk to the open door with the minimap so the walk click
-			// cannot toggle it, then approach the ladder inside.
-			WorldPoint target = !shedDoorOpen && (returningFromBank || !ladderReachable)
-				? SURFACE_DOOR
-				: SURFACE_LADDER;
-			walkTowards(context, target, true);
-			setStatus("Walking to hill giants");
-		}
-	}
 
 	private void eatIfNeeded(ScriptContext context)
 	{
@@ -918,114 +1527,8 @@ public final class HillGiantScript extends Script
 		Widget widget = inventory.getSlotWidget(slot);
 		if (widget != null && input.click(widget))
 		{
-			cooldown = COOLDOWN_TICKS;
+			cooldown = EAT_COOLDOWN_TICKS;
 			setStatus("Eating sardine");
-		}
-	}
-
-	private boolean openDoor(ScriptContext context)
-	{
-		GameInput input = context.getInput();
-		if (input.isBusy())
-		{
-			return false;
-		}
-
-		// A leftover menu would swallow the click, which then lands on the
-		// menu instead of the door.
-		if (context.getClient().isMenuOpen())
-		{
-			input.closeMenu();
-			return false;
-		}
-
-		Optional<TileObject> door = context.getTargets().findTileObject(DOOR_ID, 10);
-		if (door.isEmpty())
-		{
-			return false;
-		}
-
-		if (input.interact(door.get(), "Open", "Unlock"))
-		{
-			// The Open action was sent, so the door is open from this tick on.
-			// Clicking it again toggles it shut, which used to bounce the
-			// player in and out of the shed, and to drag them back to the
-			// door while they were running to the bank.
-			shedDoorOpen = true;
-			shedDoorTicks = 0;
-			cooldown = COOLDOWN_TICKS;
-			setStatus("Opening door");
-			return true;
-		}
-
-		return false;
-	}
-
-	/**
-	 * Forgets a door that was clicked but never opened, for example because the
-	 * player was not standing close enough. Only counts while the player is
-	 * still at the shed, so a successful open is never forgotten mid-walk.
-	 */
-	private void updateShedDoorState(ScriptContext context)
-	{
-		if (!shedDoorOpen)
-		{
-			shedDoorTicks = 0;
-			return;
-		}
-
-		WorldPoint location = context.getPlayerLocation();
-		if (location == null)
-		{
-			return;
-		}
-
-		boolean atShed = location.distanceTo(SURFACE_LADDER) <= 4
-			|| location.distanceTo(SURFACE_DOOR) <= 2;
-		if (!atShed)
-		{
-			shedDoorTicks = 0;
-			return;
-		}
-
-		if (++shedDoorTicks > SHED_DOOR_TIMEOUT_TICKS)
-		{
-			shedDoorOpen = false;
-			shedDoorTicks = 0;
-			setStatus("Retrying shed door");
-		}
-	}
-
-	private void climb(ScriptContext context, boolean up, int objectId)
-	{
-		GameInput input = context.getInput();
-		if (input.isBusy())
-		{
-			return;
-		}
-
-		Optional<TileObject> object = context.getTargets().findTileObject(objectId, 10);
-		if (object.isEmpty())
-		{
-			// Fall back to a named ladder if the id is not present.
-			object = context.getTargets().findObject("Ladder", null, 10).map(ladder -> (TileObject) ladder);
-		}
-		if (object.isEmpty())
-		{
-			return;
-		}
-
-		String[] actions = up
-			? new String[] {"Climb-up", "Climb up", "Exit", "Climb"}
-			: new String[] {"Climb-down", "Climb down", "Enter", "Climb"};
-
-		if (input.interact(object.get(), actions))
-		{
-			// Climbing moves us to the other side of the shed door, so the
-			// next surface visit has to evaluate the door again.
-			shedDoorOpen = false;
-			cooldown = COOLDOWN_TICKS;
-			setStatus(up ? "Climbing up" : "Climbing down");
 		}
 	}
 
@@ -1034,6 +1537,13 @@ public final class HillGiantScript extends Script
 		walkTowards(context, target, false);
 	}
 
+	/**
+	 * Walks along a collision-checked path. The first click goes out right
+	 * away, and the next one is chained when the player gets close to the
+	 * last clicked tile (or stops), like a player clicking ahead, instead of
+	 * standing still for a couple of ticks between legs. It never re-clicks
+	 * while the player is still well on the way.
+	 */
 	private void walkTowards(ScriptContext context, WorldPoint target, boolean useMinimap)
 	{
 		GameInput input = context.getInput();
@@ -1044,43 +1554,64 @@ public final class HillGiantScript extends Script
 
 		Player player = context.getPlayer();
 		WorldPoint location = player == null ? null : player.getWorldLocation();
-		if (location == null || location.distanceTo(target) <= 2)
+		if (location == null || location.distanceTo(target) <= 1)
 		{
 			lastWalkLocation = location;
-			stationaryTicks = 0;
+			lastWalkClick = null;
+			walkClickTicks = 0;
 			return;
 		}
 
-		// Do not click again while the player is still moving. Re-clicking
-		// every tick interrupts the client's own path and makes it run into
-		// walls.
-		if (lastWalkLocation == null || !lastWalkLocation.equals(location))
+		if (!target.equals(lastWalkTarget))
 		{
-			lastWalkLocation = location;
-			stationaryTicks = 0;
-			return;
+			// A new destination: click right away instead of waiting on the
+			// previous walk's chaining state.
+			lastWalkTarget = target;
+			lastWalkClick = null;
+			walkClickTicks = 0;
 		}
 
-		if (++stationaryTicks < 2)
+		boolean moved = lastWalkLocation != null && !lastWalkLocation.equals(location);
+		lastWalkLocation = location;
+		++walkClickTicks;
+
+		if (lastWalkClick != null)
 		{
-			return;
+			boolean nearClick = location.distanceTo(lastWalkClick) <= WALK_CHAIN_DISTANCE;
+			if (moved && !nearClick)
+			{
+				return;
+			}
+
+			// The game needs a tick to start moving after a click.
+			if (!moved && walkClickTicks < 2)
+			{
+				return;
+			}
 		}
 
 		List<WorldPoint> path = findPath(context, target);
 		if (path.size() <= 1)
 		{
-			stationaryTicks = 0;
+			lastWalkClick = null;
 			return;
 		}
 
 		// Click a point a few tiles along the collision-checked path.
-		int index = Math.min(path.size() - 1, 10);
+		int index = Math.min(path.size() - 1, WALK_CLICK_AHEAD);
+		WorldPoint next = path.get(index);
+		if (moved && next.equals(lastWalkClick))
+		{
+			// Already heading to the final tile. Nothing to add.
+			return;
+		}
 
 		// Minimap clicks never hit objects, so routes that pass a door
 		// (the shed door in particular) cannot accidentally toggle it.
-		if (useMinimap && clickMinimap(context, path.get(index)))
+		if (useMinimap && clickMinimap(context, next))
 		{
-			stationaryTicks = 0;
+			lastWalkClick = next;
+			walkClickTicks = 0;
 			return;
 		}
 
@@ -1088,13 +1619,17 @@ public final class HillGiantScript extends Script
 		{
 			if (input.walkTo(path.get(i)))
 			{
-				stationaryTicks = 0;
+				lastWalkClick = path.get(i);
+				walkClickTicks = 0;
 				return;
 			}
 		}
 
-		clickMinimap(context, path.get(index));
-		stationaryTicks = 0;
+		if (clickMinimap(context, next))
+		{
+			lastWalkClick = next;
+			walkClickTicks = 0;
+		}
 	}
 
 	private boolean clickMinimap(ScriptContext context, WorldPoint point)
@@ -1346,7 +1881,7 @@ public final class HillGiantScript extends Script
 		Player player = context.getPlayer();
 		WorldPoint playerLocation = player == null ? null : player.getWorldLocation();
 		WorldView worldView = client.getTopLevelWorldView();
-		if (worldView == null)
+		if (worldView == null || playerLocation == null)
 		{
 			return null;
 		}
@@ -1371,7 +1906,7 @@ public final class HillGiantScript extends Script
 		}
 
 		GroundLoot best = null;
-		int bestDistance = Integer.MAX_VALUE;
+		int bestScore = Integer.MAX_VALUE;
 
 		for (Tile[] row : planeTiles)
 		{
@@ -1393,46 +1928,50 @@ public final class HillGiantScript extends Script
 					continue;
 				}
 
+				WorldPoint itemLocation = tile.getWorldLocation();
+				net.runelite.api.Point sceneLocation = tile.getSceneLocation();
+				if (itemLocation == null || sceneLocation == null)
+				{
+					continue;
+				}
+
+				int distance = itemLocation.distanceTo(playerLocation);
+				if (distance > MAX_DISTANCE || isIgnoredLoot(itemLocation))
+				{
+					continue;
+				}
+
 				for (TileItem groundItem : groundItems)
 				{
-					if (groundItem == null)
+					if (groundItem == null || !isLootItem(groundItem.getId()))
 					{
 						continue;
 					}
 
-					int id = groundItem.getId();
-					if (!isLootItem(id))
+					// Nearest first, so a pile is cleared tile by tile with
+					// no back-and-forth. Our own kill's tile and our own drops
+					// come before anything else at a similar distance, and
+					// valuables before bones on the same tile.
+					int score = distance * 10;
+					if (lastDeathTile != null && itemLocation.distanceTo(lastDeathTile) <= 1)
 					{
-						continue;
+						score -= 30;
+					}
+					if (groundItem.getOwnership() == TileItem.OWNERSHIP_SELF)
+					{
+						score -= 5;
+					}
+					if (groundItem.getId() != ItemID.BIG_BONES)
+					{
+						score -= 1;
 					}
 
-					// Take wanted drops even when another player killed the
-					// monster. The menu can still offer them to accounts that
-					// are allowed to pick them up.
-					net.runelite.api.Point sceneLocation = tile.getSceneLocation();
-					if (sceneLocation == null)
+					if (score < bestScore)
 					{
-						continue;
+						bestScore = score;
+						best = new GroundLoot(groundItem.getId(), sceneLocation.getX(),
+							sceneLocation.getY(), itemLocation);
 					}
-
-					WorldPoint itemLocation = tile.getWorldLocation();
-					int distance = playerLocation == null || itemLocation == null
-						? Integer.MAX_VALUE
-						: itemLocation.distanceTo(playerLocation);
-
-					if (distance > MAX_DISTANCE || distance >= bestDistance)
-					{
-						continue;
-					}
-
-					if (itemLocation != null && isIgnoredLoot(itemLocation))
-					{
-						continue;
-					}
-
-					bestDistance = distance;
-					best = new GroundLoot(id, sceneLocation.getX(),
-						sceneLocation.getY(), itemLocation);
 				}
 			}
 		}
@@ -1440,33 +1979,137 @@ public final class HillGiantScript extends Script
 		return best;
 	}
 
+	/**
+	 * Picks the next giant to fight: one already attacking us first, then the
+	 * nearest giant nobody else is fighting, preferring one that is on screen.
+	 */
 	private Optional<NPC> findHillGiant(ScriptContext context)
 	{
-		Optional<NPC> byName = context.getTargets().findNpc(NPC_NAME, null, MAX_DISTANCE);
-		if (byName.isPresent())
-		{
-			return byName;
-		}
-
 		Client client = context.getClient();
 		Player player = context.getPlayer();
 		WorldPoint playerLocation = player == null ? null : player.getWorldLocation();
 		WorldView worldView = client.getTopLevelWorldView();
-		if (worldView == null)
+		if (worldView == null || playerLocation == null)
 		{
 			return Optional.empty();
 		}
 
-		return worldView.npcs().stream()
-			.map(npc -> (NPC) npc)
-			.filter(npc -> !npc.isDead())
-			.filter(npc -> isHillGiantId(npc.getId()))
-			.filter(npc -> playerLocation == null || npc.getWorldLocation() == null
-				|| npc.getWorldLocation().distanceTo(playerLocation) <= MAX_DISTANCE)
-			.min(java.util.Comparator.comparingInt(npc ->
-				playerLocation == null || npc.getWorldLocation() == null
-					? Integer.MAX_VALUE
-					: npc.getWorldLocation().distanceTo(playerLocation)));
+		GameInput input = context.getInput();
+		NPC best = null;
+		int bestScore = Integer.MAX_VALUE;
+
+		for (NPC npc : worldView.npcs())
+		{
+			if (npc == null || npc.isDead() || npc == dyingNpc || !isHillGiant(npc))
+			{
+				continue;
+			}
+
+			WorldPoint npcLocation = npc.getWorldLocation();
+			if (npcLocation == null || npcLocation.getPlane() != playerLocation.getPlane())
+			{
+				continue;
+			}
+
+			int distance = npcLocation.distanceTo(playerLocation);
+			if (distance > MAX_DISTANCE)
+			{
+				continue;
+			}
+
+			boolean targetingUs = npc.getInteracting() == player;
+			if (!targetingUs && isTakenByOther(context, npc))
+			{
+				continue;
+			}
+
+			int score = distance * 10;
+			if (targetingUs)
+			{
+				score -= 1000;
+			}
+			if (input.isVisible(npc))
+			{
+				score -= 25;
+			}
+
+			if (score < bestScore)
+			{
+				bestScore = score;
+				best = npc;
+			}
+		}
+
+		return Optional.ofNullable(best);
+	}
+
+	/**
+	 * @return true if another player is fighting this NPC or has just clicked
+	 * it, so attacking it would only steal or waste the kill
+	 */
+	private static boolean isTakenByOther(ScriptContext context, NPC npc)
+	{
+		Player player = context.getPlayer();
+		net.runelite.api.Actor target = npc.getInteracting();
+		if (target != null && target != player)
+		{
+			return true;
+		}
+
+		WorldView worldView = context.getClient().getTopLevelWorldView();
+		if (worldView == null)
+		{
+			return false;
+		}
+
+		for (Player other : worldView.players())
+		{
+			if (other != null && other != player && other.getInteracting() == npc)
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	private static boolean isInScene(ScriptContext context, NPC target)
+	{
+		WorldView worldView = context.getClient().getTopLevelWorldView();
+		if (worldView == null || target == null)
+		{
+			return false;
+		}
+
+		for (NPC npc : worldView.npcs())
+		{
+			if (npc == target)
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	private static boolean isMoving(Player player)
+	{
+		return player != null && player.getPoseAnimation() != player.getIdlePoseAnimation();
+	}
+
+	private static boolean isAnimating(Player player)
+	{
+		return player != null && player.getAnimation() != -1;
+	}
+
+	private boolean isHillGiant(NPC npc)
+	{
+		if (isHillGiantId(npc.getId()))
+		{
+			return true;
+		}
+
+		return NPC_NAME.equalsIgnoreCase(getNpcName(npc));
 	}
 
 	/**

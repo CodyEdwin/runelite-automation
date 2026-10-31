@@ -112,9 +112,29 @@ public final class GameInput
 	private int cameraRightSign = -1;
 	private volatile boolean zooming;
 
+	// When set, mouse movements follow a quicker, straighter profile modelled on
+	// an attentive player: a short human reaction delay, then a Fitts-style
+	// movement whose duration grows with the log of the distance.
+	private volatile boolean fastMouse;
+
 	public GameInput(Client client)
 	{
 		this.client = client;
+	}
+
+	/**
+	 * Switches between the default relaxed mouse profile and the fast,
+	 * attentive one. Set by {@link net.runelite.rsbuddy.script.ScriptManager}
+	 * from the running script.
+	 */
+	public void setFastMouse(boolean fastMouse)
+	{
+		this.fastMouse = fastMouse;
+	}
+
+	public boolean isFastMouse()
+	{
+		return fastMouse;
 	}
 
 	/**
@@ -2297,6 +2317,11 @@ public final class GameInput
 
 	private List<MouseStep> buildMoveSteps(Point start, Point target)
 	{
+		if (fastMouse)
+		{
+			return buildFastMoveSteps(start, target);
+		}
+
 		List<MouseStep> steps = new ArrayList<>();
 
 		double dx = target.x - start.x;
@@ -2362,8 +2387,100 @@ public final class GameInput
 		return steps;
 	}
 
+	/**
+	 * Human reaction time before the hand starts moving: mostly 100-250 ms,
+	 * occasionally a little slower, never a long pause.
+	 */
+	private long reactionDelayMs()
+	{
+		if (random.nextInt(25) == 0)
+		{
+			return 250 + random.nextInt(150);
+		}
+
+		double gaussian = random.nextGaussian();
+		return Math.max(90L, Math.min(300L, Math.round(165.0 + gaussian * 45.0)));
+	}
+
+	/**
+	 * Fast, mostly straight movement. Duration follows Fitts' law
+	 * (about 160 ms for 50 px, 330 ms for 500 px) with a slight arc, a small
+	 * overshoot-free ease-out and light jitter.
+	 */
+	private List<MouseStep> buildFastMoveSteps(Point start, Point target)
+	{
+		List<MouseStep> steps = new ArrayList<>();
+		long delay = reactionDelayMs();
+
+		double dx = target.x - start.x;
+		double dy = target.y - start.y;
+		double distance = Math.hypot(dx, dy);
+
+		if (distance < 2.0)
+		{
+			steps.add(new MouseStep(MouseEvent.MOUSE_MOVED, target, MouseEvent.NOBUTTON, 0, 0, delay));
+			return steps;
+		}
+
+		double log = Math.log(1.0 + distance / 25.0) / Math.log(2.0);
+		long duration = Math.round((55.0 + 62.0 * log) * (0.9 + random.nextDouble() * 0.2));
+		int moveSteps = (int) Math.max(6, Math.min(30, duration / 11));
+
+		double length = Math.max(1.0, distance);
+		double perpX = -dy / length;
+		double perpY = dx / length;
+		double bend = (random.nextDouble() * 2.0 - 1.0) * Math.min(22.0, distance * 0.05);
+		double control1X = start.x + dx * 0.3 + perpX * bend;
+		double control1Y = start.y + dy * 0.3 + perpY * bend;
+		double control2X = start.x + dx * 0.75 + perpX * bend * 0.4;
+		double control2Y = start.y + dy * 0.75 + perpY * bend * 0.4;
+
+		for (int i = 1; i <= moveSteps; i++)
+		{
+			double progress = (double) i / moveSteps;
+			double eased = 1.0 - Math.pow(1.0 - progress, 2.6);
+
+			double x = cubic(start.x, control1X, control2X, target.x, eased);
+			double y = cubic(start.y, control1Y, control2Y, target.y, eased);
+
+			if (i < moveSteps)
+			{
+				double jitter = (1.0 - progress) * Math.min(2.5, Math.max(0.5, distance * 0.006));
+				x += (random.nextDouble() * 2.0 - 1.0) * jitter;
+				y += (random.nextDouble() * 2.0 - 1.0) * jitter;
+			}
+			else
+			{
+				x = target.x;
+				y = target.y;
+			}
+
+			delay += Math.max(4, duration / moveSteps + random.nextInt(5) - 2);
+			steps.add(new MouseStep(MouseEvent.MOUSE_MOVED,
+				new Point((int) Math.round(x), (int) Math.round(y)),
+				MouseEvent.NOBUTTON, 0, 0, delay));
+		}
+
+		return steps;
+	}
+
 	private void appendClickSteps(List<MouseStep> steps, Point target, int button)
 	{
+		if (fastMouse)
+		{
+			long pressDelay = steps.get(steps.size() - 1).delayMs + 12 + random.nextInt(30);
+			int downMask = button == MouseEvent.BUTTON3
+				? InputEvent.BUTTON3_DOWN_MASK
+				: InputEvent.BUTTON1_DOWN_MASK;
+
+			steps.add(new MouseStep(MouseEvent.MOUSE_PRESSED, target, button, 1, downMask, pressDelay));
+			long releaseDelay = pressDelay + 40 + random.nextInt(40);
+			steps.add(new MouseStep(MouseEvent.MOUSE_RELEASED, target, button, 1, 0, releaseDelay));
+			steps.add(new MouseStep(MouseEvent.MOUSE_CLICKED, target, button, 1, 0,
+				releaseDelay + 2 + random.nextInt(8)));
+			return;
+		}
+
 		long pressDelay = steps.get(steps.size() - 1).delayMs + 30 + random.nextInt(70);
 		int downMask = button == MouseEvent.BUTTON3
 			? InputEvent.BUTTON3_DOWN_MASK
