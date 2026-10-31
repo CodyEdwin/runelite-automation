@@ -93,6 +93,24 @@ public final class TargetLocator
 	}
 
 	/**
+	 * Finds the nearest matching object by name that is currently visible on
+	 * screen. Clicking an object that is entirely off screen would otherwise
+	 * hit whatever interface happens to be drawn at that point.
+	 */
+	public Optional<GameObject> findVisibleObject(String name, String action, int maxDistance)
+	{
+		Player player = client.getLocalPlayer();
+		WorldPoint playerLocation = player == null ? null : player.getWorldLocation();
+
+		return objects()
+			.filter(object -> matchesName(object, name))
+			.filter(object -> action == null || action.isEmpty() || hasAction(object, action))
+			.filter(object -> withinDistance(object.getWorldLocation(), playerLocation, maxDistance))
+			.filter(this::isVisible)
+			.min(Comparator.comparingInt(object -> distance(object.getWorldLocation(), playerLocation)));
+	}
+
+	/**
 	 * Finds the nearest matching object that is currently visible on screen.
 	 */
 	public Optional<GameObject> findVisibleObject(int objectId, int maxDistance)
@@ -190,6 +208,23 @@ public final class TargetLocator
 		return npcs()
 			.filter(npc -> npc.getId() == npcId)
 			.filter(npc -> withinDistance(npc.getWorldLocation(), playerLocation, maxDistance))
+			.min(Comparator.comparingInt(npc -> distance(npc.getWorldLocation(), playerLocation)));
+	}
+
+	/**
+	 * Finds the nearest matching named NPC that is currently visible on
+	 * screen.
+	 */
+	public Optional<NPC> findVisibleNpc(String name, String action, int maxDistance)
+	{
+		Player player = client.getLocalPlayer();
+		WorldPoint playerLocation = player == null ? null : player.getWorldLocation();
+
+		return npcs()
+			.filter(npc -> matchesName(npc, name))
+			.filter(npc -> action == null || action.isEmpty() || hasAction(npc, action))
+			.filter(npc -> withinDistance(npc.getWorldLocation(), playerLocation, maxDistance))
+			.filter(this::isVisible)
 			.min(Comparator.comparingInt(npc -> distance(npc.getWorldLocation(), playerLocation)));
 	}
 

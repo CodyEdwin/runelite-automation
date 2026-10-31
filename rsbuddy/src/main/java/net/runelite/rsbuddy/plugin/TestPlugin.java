@@ -41,6 +41,7 @@ import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.events.CommandExecuted;
 import net.runelite.api.events.GameTick;
+import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
@@ -238,6 +239,21 @@ public class TestPlugin extends Plugin
 		if (scriptManager != null)
 		{
 			scriptManager.onGameTick();
+		}
+	}
+
+	/**
+	 * Keeps the ground item left-click filter applied while a script with a
+	 * pickup list is running. RuneLite fires this for every row of the menu it
+	 * builds, so the filter is in place before anything can be clicked.
+	 */
+	@Subscribe
+	public void onMenuEntryAdded(MenuEntryAdded event)
+	{
+		GameInput current = input;
+		if (current != null)
+		{
+			current.filterGroundItemMenuEntry(event.getMenuEntry());
 		}
 	}
 

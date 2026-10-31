@@ -27,6 +27,7 @@ package net.runelite.rsbuddy.script;
 import java.awt.Color;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Base class for RSBuddy scripts.
@@ -120,6 +121,16 @@ public abstract class Script
 	public final String getStatus()
 	{
 		return status;
+	}
+
+	/**
+	 * Ground item ids this script wants to be able to take with a plain left
+	 * click. While the script runs, every other ground item is pushed below
+	 * the tile's walk option, so walking clicks can never loot anything else.
+	 */
+	public Set<Integer> getGroundItemPickupFilter()
+	{
+		return Collections.emptySet();
 	}
 
 	/**

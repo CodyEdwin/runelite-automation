@@ -35,12 +35,16 @@ import java.awt.event.KeyEvent;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseWheelEvent;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import net.runelite.api.Client;
+import net.runelite.api.InventoryID;
+import net.runelite.api.ItemContainer;
 import net.runelite.api.MenuAction;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.NPC;
@@ -73,6 +77,14 @@ public final class GameInput
 	private static final int CAMERA_DEADBAND = 128;
 	private static final int CAMERA_HOLD_MS = 800;
 
+	private static final MenuAction[] NPC_ACTIONS = {
+		MenuAction.NPC_FIRST_OPTION,
+		MenuAction.NPC_SECOND_OPTION,
+		MenuAction.NPC_THIRD_OPTION,
+		MenuAction.NPC_FOURTH_OPTION,
+		MenuAction.NPC_FIFTH_OPTION
+	};
+
 	private final Client client;
 	private final Random random = new Random();
 
@@ -80,6 +92,12 @@ public final class GameInput
 	private Timer movementTimer;
 	private boolean busy;
 	private volatile boolean fastClicking;
+
+	// Item ids whose "Take" option stays the default left click on the ground.
+	// While a script is running every other ground item is pushed below
+	// "Walk here", so a left click on a pile of drops walks instead of
+	// picking up whatever happens to be under the cursor.
+	private volatile Set<Integer> groundItemPickupIds = Collections.emptySet();
 
 	private volatile Point mouseLocation;
 	private volatile Point clickLocation;
@@ -208,19 +226,32 @@ public final class GameInput
 
 	public boolean click(NPC npc)
 	{
+		return click(npc, MouseEvent.BUTTON1);
+	}
+
+	public boolean click(NPC npc, int button)
+	{
 		if (npc == null)
 		{
 			return false;
 		}
 
+		// The hull follows the model, so every point in it belongs to this
+		// NPC. randomPoint only returns points that are on screen and not
+		// behind an interface, so a null result means the NPC is not
+		// clickable and the tile marker below is tried instead.
 		Shape hull = npc.getConvexHull();
 		if (hull != null)
 		{
-			return click(hull);
+			Point point = randomPoint(hull);
+			if (point != null)
+			{
+				return click(point, button);
+			}
 		}
 
-		Polygon tilePoly = npc.getCanvasTilePoly();
-		return tilePoly != null && click(tilePoly);
+		Point point = randomPoint(npc.getCanvasTilePoly());
+		return point != null && click(point, button);
 	}
 
 	public boolean click(Widget widget)
@@ -1114,13 +1145,71 @@ public final class GameInput
 		return value.replaceAll("<[^>]*>", "").trim();
 	}
 
+	/*
+	 * Interaction primitives
+	 *
+	 * Every target type has two paths:
+	 *  - interact(...) dispatches the exact menu action directly. No context
+	 *    menu is opened, so it takes one tick and cannot get stuck on one.
+	 *  - interactViaMenu(...) right-clicks the target, then runs the matching
+	 *    entry by its identifier on the next tick. Entries are never picked by
+	 *    row position and never fall back to an unrelated target.
+	 *
+	 * closeMenu/closeInterface/closeInterface keep leftover UI from blocking
+	 * later actions.
+	 */
+
 	/**
-	 * Interacts with a tile object by opening its right-click menu and then
-	 * clicking the matching option in that menu. Using the real context menu
-	 * avoids relying on synthesised menu actions, which the client does not
-	 * always resolve for tile objects.
+	 * Interacts with a tile object. The default left-click option is clicked
+	 * normally; any other option is dispatched directly from the object's
+	 * composition, without opening a context menu.
 	 */
 	public boolean interact(TileObject object, String... actions)
+	{
+		if (object == null || actions == null || actions.length == 0)
+		{
+			return false;
+		}
+
+		ObjectComposition composition = client.getObjectDefinition(object.getId());
+		if (composition == null)
+		{
+			return false;
+		}
+
+		int actionIndex = findAction(composition.getActions(), actions);
+		if (actionIndex < 0)
+		{
+			return false;
+		}
+
+		if (actionIndex == 0)
+		{
+			return click(object);
+		}
+
+		MenuAction type = objectMenuAction(actionIndex);
+		if (type == null)
+		{
+			return false;
+		}
+
+		long hash = object.getHash();
+		int sceneX = (int) (hash & 0x7F);
+		int sceneY = (int) ((hash >>> 7) & 0x7F);
+
+		client.menuAction(sceneX, sceneY, type, object.getId(), -1,
+			composition.getActions()[actionIndex],
+			composition.getName() == null ? "" : composition.getName());
+		return true;
+	}
+
+	/**
+	 * Two-step fallback for a tile object: right-click it, then run the exact
+	 * matching entry. Use this when the direct path does not affect the object
+	 * (for example wall objects whose menu identifier is packed differently).
+	 */
+	public boolean interactViaMenu(TileObject object, String... actions)
 	{
 		if (object == null || actions == null || actions.length == 0)
 		{
@@ -1132,36 +1221,25 @@ public final class GameInput
 			MenuEntry entry = findObjectMenuEntry(object, actions);
 			if (entry != null)
 			{
-				return clickMenuEntry(entry);
+				return invokeMenuEntry(entry);
 			}
 
-			// The menu is open for something else or does not contain the
-			// requested option. Close it so the next attempt can start over.
 			closeMenu();
 			return false;
 		}
 
-		// Right-click the object to open its menu. The next tick picks the
-		// matching option from the menu.
 		return click(object, MouseEvent.BUTTON3);
 	}
 
 	private MenuEntry findObjectMenuEntry(TileObject object, String... actions)
 	{
-		net.runelite.api.Menu menu = client.getMenu();
-		MenuEntry[] entries = menu == null ? null : menu.getMenuEntries();
-		if (entries == null)
-		{
-			return null;
-		}
-
 		ObjectComposition composition = client.getObjectDefinition(object.getId());
 		String name = composition == null ? null : composition.getName();
 		int objectId = object.getId() & 0xFFFF;
 		MenuEntry optionOnly = null;
 		boolean multipleOptions = false;
 
-		for (MenuEntry entry : entries)
+		for (MenuEntry entry : currentMenuEntries())
 		{
 			if (entry == null || !matchesOption(entry.getOption(), actions))
 			{
@@ -1174,7 +1252,7 @@ public final class GameInput
 			}
 
 			String target = entry.getTarget();
-			if (target != null && name != null && target.equalsIgnoreCase(name))
+			if (target != null && name != null && stripTags(target).equalsIgnoreCase(stripTags(name)))
 			{
 				return entry;
 			}
@@ -1194,6 +1272,11 @@ public final class GameInput
 		return multipleOptions ? null : optionOnly;
 	}
 
+	/**
+	 * Interacts with an NPC. The default left-click option is clicked normally;
+	 * any other option is sent straight to the NPC index without opening a
+	 * context menu.
+	 */
 	public boolean interact(NPC npc, String action)
 	{
 		if (npc == null)
@@ -1213,21 +1296,48 @@ public final class GameInput
 			return false;
 		}
 
-		// The first option is what a normal left click selects. Using a real
-		// click makes the cursor visibly travel to the NPC instead of the
-		// action appearing out of nowhere.
 		if (actionIndex == 0)
 		{
 			return click(npc);
 		}
 
-		// Other options need a right-click menu in game. Move onto the NPC
-		// like a player would, then invoke the exact option. Hovering keeps
-		// the pointer movement visible while avoiding a menu left open
-		// across ticks.
-		hover(npc);
-		client.menuAction(npc.getIndex(), 0, npcMenuAction(actionIndex), npc.getIndex(), -1, action, npc.getName());
+		MenuAction type = npcMenuAction(actionIndex);
+		if (type == null)
+		{
+			return false;
+		}
+
+		client.menuAction(0, 0, type, npc.getIndex(), -1,
+			composition.getActions()[actionIndex],
+			npc.getName() == null ? "" : npc.getName());
 		return true;
+	}
+
+	/**
+	 * Two-step fallback for an NPC: right-click it, then run the entry that
+	 * belongs to that exact NPC index. This never uses the entry above or
+	 * below the intended one.
+	 */
+	public boolean interactViaMenu(NPC npc, String action)
+	{
+		if (npc == null)
+		{
+			return false;
+		}
+
+		if (client.isMenuOpen())
+		{
+			MenuEntry entry = findExactMenuEntry(NPC_ACTIONS, npc.getIndex(), -1, action);
+			if (entry != null)
+			{
+				return invokeMenuEntry(entry);
+			}
+
+			closeMenu();
+			return false;
+		}
+
+		return click(npc, MouseEvent.BUTTON3);
 	}
 
 	public boolean interact(Widget widget, String action)
@@ -1278,8 +1388,9 @@ public final class GameInput
 	}
 
 	/**
-	 * Withdraws an item from the bank by right-clicking its bank slot and
-	 * clicking the requested withdraw option in the real context menu.
+	 * Withdraws an item from the bank by sending the bank slot's withdraw
+	 * action directly. No context menu is opened, so the cursor cannot land on
+	 * the wrong slot or option.
 	 */
 	public boolean withdrawBankItem(int itemId, String withdrawOption)
 	{
@@ -1288,15 +1399,74 @@ public final class GameInput
 			MenuEntry entry = findBankMenuEntry(itemId, withdrawOption);
 			if (entry != null)
 			{
-				return clickMenuEntry(entry);
+				return invokeMenuEntry(entry);
 			}
 
 			closeMenu();
 			return false;
 		}
 
+		// The bank container holds every tab, so its slot is what the withdraw
+		// action needs. The item does not have to be in the tab that happens
+		// to be open, which is why this no longer requires a visible widget.
+		ItemContainer bank = client.getItemContainer(InventoryID.BANK);
+		int slot = bank == null ? -1 : bank.find(itemId);
+		if (slot < 0)
+		{
+			return false;
+		}
+
 		Widget widget = findBankItemWidget(itemId);
-		return widget != null && click(widget, MouseEvent.BUTTON3);
+		String[] actions = widget == null ? null : widget.getActions();
+		int actionIndex = findAction(actions, withdrawOption);
+		if (actionIndex < 0)
+		{
+			actionIndex = bankWithdrawOptionIndex(withdrawOption);
+		}
+
+		if (actionIndex < 0)
+		{
+			return false;
+		}
+
+		String option = actions != null && actionIndex < actions.length
+			? actions[actionIndex]
+			: withdrawOption;
+
+		client.menuAction(slot, InterfaceID.Bankmain.ITEMS, MenuAction.CC_OP,
+			actionIndex + 1, itemId, option, "");
+		return true;
+	}
+
+	/**
+	 * Bank items always list the same withdraw options in the same order, and
+	 * the action index is that order. Used when the item has no visible slot
+	 * widget, for example because it sits in a bank tab that is not open.
+	 *
+	 * @return the zero-based action index, or -1 for an unknown option
+	 */
+	private static int bankWithdrawOptionIndex(String option)
+	{
+		if (option == null)
+		{
+			return -1;
+		}
+
+		switch (stripTags(option).toLowerCase(java.util.Locale.ROOT))
+		{
+			case "withdraw-1":
+				return 0;
+			case "withdraw-5":
+				return 1;
+			case "withdraw-10":
+				return 2;
+			case "withdraw-all":
+				return 3;
+			case "withdraw-x":
+				return 4;
+			default:
+				return -1;
+		}
 	}
 
 	private MenuEntry findBankMenuEntry(int itemId, String withdrawOption)
@@ -1337,43 +1507,32 @@ public final class GameInput
 	}
 
 	/**
-	 * Finds the Take entry for a ground item in the currently open menu.
+	 * Finds the Take entry for the exact ground item stack at the given
+	 * scene coordinates. Entries for other nearby tiles are ignored: when
+	 * drops overlap, the menu can contain several items with the same id,
+	 * and taking one of those would pick up the wrong item.
 	 */
 	private MenuEntry findGroundItemMenuEntry(int itemId, int sceneX, int sceneY)
 	{
-		net.runelite.api.Menu menu = client.getMenu();
-		MenuEntry[] entries = menu == null ? null : menu.getMenuEntries();
-		if (entries == null)
-		{
-			return null;
-		}
-
 		int id = itemId & 0xFFFF;
-		MenuEntry fallback = null;
 
-		for (MenuEntry entry : entries)
+		for (MenuEntry entry : currentMenuEntries())
 		{
 			if (entry == null || !isGroundItemAction(entry.getType())
-				|| !matchesOption(entry.getOption(), "Take", "Pick up", "Pickup")
-				|| (entry.getIdentifier() & 0xFFFF) != id)
+				|| !matchesOption(entry.getOption(), "Take", "Pick up", "Pickup"))
 			{
 				continue;
 			}
 
-			// The menu only contains items from the tile that was
-			// right-clicked, but prefer an entry with matching coordinates.
-			if (entry.getParam0() == sceneX && entry.getParam1() == sceneY)
+			if (entry.getParam0() == sceneX
+				&& entry.getParam1() == sceneY
+				&& (entry.getIdentifier() & 0xFFFF) == id)
 			{
 				return entry;
 			}
-
-			if (fallback == null)
-			{
-				fallback = entry;
-			}
 		}
 
-		return fallback;
+		return null;
 	}
 
 	private static boolean isGroundItemAction(MenuAction type)
@@ -1390,14 +1549,15 @@ public final class GameInput
 
 	private static boolean matchesOption(String option, String... actions)
 	{
-		if (option == null)
+		if (option == null || actions == null)
 		{
 			return false;
 		}
 
+		String plainOption = stripTags(option);
 		for (String action : actions)
 		{
-			if (action != null && option.trim().equalsIgnoreCase(action.trim()))
+			if (action != null && plainOption.equalsIgnoreCase(stripTags(action)))
 			{
 				return true;
 			}
@@ -1450,6 +1610,15 @@ public final class GameInput
 	{
 		client.menuAction(entry.getParam0(), entry.getParam1(), entry.getType(),
 			entry.getIdentifier(), entry.getItemId(), entry.getOption(), entry.getTarget());
+
+		// Running an entry directly skips the menu's own click handler, which
+		// normally dismisses the menu. Leave a Cancel entry alone so closing
+		// the menu cannot recurse.
+		if (entry.getType() != MenuAction.CANCEL && client.isMenuOpen())
+		{
+			closeMenu();
+		}
+
 		return true;
 	}
 
@@ -1507,6 +1676,59 @@ public final class GameInput
 	}
 
 	/**
+	 * Finds the single entry that matches every identifying field. Unlike
+	 * {@link #findMenuEntry(String, int)}, this never falls back to an entry
+	 * for another target, which is what makes menu interactions deterministic.
+	 */
+	private MenuEntry findExactMenuEntry(MenuAction[] types, int identifier, int itemId, String option)
+	{
+		for (MenuEntry entry : currentMenuEntries())
+		{
+			if (entry == null || entry.getType() == null)
+			{
+				continue;
+			}
+
+			if (types != null && !containsType(types, entry.getType()))
+			{
+				continue;
+			}
+
+			if (identifier >= 0 && (entry.getIdentifier() & 0xFFFF) != (identifier & 0xFFFF))
+			{
+				continue;
+			}
+
+			if (itemId >= 0 && entry.getItemId() != itemId)
+			{
+				continue;
+			}
+
+			if (option != null && !matchesOption(entry.getOption(), option))
+			{
+				continue;
+			}
+
+			return entry;
+		}
+
+		return null;
+	}
+
+	private static boolean containsType(MenuAction[] types, MenuAction type)
+	{
+		for (MenuAction candidate : types)
+		{
+			if (candidate == type)
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
 	 * Lists the options in the current context menu, for logging when an
 	 * expected option is missing.
 	 */
@@ -1546,6 +1768,11 @@ public final class GameInput
 
 	/**
 	 * Closes the currently open right-click menu, if any.
+	 * <p>
+	 * The Cancel row is clicked like a real player would, because clicking the
+	 * menu itself is the client's normal dismissal path. Synthetic Escape keys
+	 * are unreliable while the canvas does not have keyboard focus, which used
+	 * to leave the script looping on an open menu forever.
 	 */
 	public boolean closeMenu()
 	{
@@ -1554,23 +1781,188 @@ public final class GameInput
 			return false;
 		}
 
-		return pressKey(KeyEvent.VK_ESCAPE);
-	}
-
-	/**
-	 * Picks up a ground item by right-clicking its tile and then clicking the
-	 * Take entry in the context menu.
-	 */
-	public boolean takeGroundItem(int sceneX, int sceneY, int itemId, String itemName)
-	{
-		if (client.isMenuOpen())
+		// An earlier menu click may still be in flight. Let it land instead of
+		// stacking another click on top of it.
+		if (busy || fastClicking)
 		{
-			MenuEntry entry = findGroundItemMenuEntry(itemId, sceneX, sceneY);
-			if (entry != null)
+			return true;
+		}
+
+		for (MenuEntry entry : currentMenuEntries())
+		{
+			if (entry != null && entry.getType() == MenuAction.CANCEL)
 			{
 				return clickMenuEntry(entry);
 			}
+		}
 
+		// Some menus do not include a Cancel row. Run the action directly.
+		client.menuAction(-1, -1, MenuAction.CANCEL, -1, -1, "", "");
+		return true;
+	}
+
+	/**
+	 * Aborts any simulated movement or click and clears the busy state. This
+	 * is a last-resort recovery when an input callback never ran.
+	 */
+	public void reset()
+	{
+		stopCamera();
+		stopMovement();
+		busy = false;
+		fastClicking = false;
+	}
+
+	/**
+	 * Closes an open interface by clicking its own Close button, the way a
+	 * player would. Some interfaces ignore Escape, and while they are open
+	 * every world click is swallowed by the interface.
+	 *
+	 * @return true if the button was found and clicked
+	 */
+	public boolean closeInterface(int interfaceId)
+	{
+		Widget close = findCloseWidget(interfaceId);
+		return close != null && click(close);
+	}
+
+	/**
+	 * Finds the Close button of an interface. The button belongs to the
+	 * interface frame, not to the content container, so the search starts at
+	 * the root of the whole interface group; searching only the container the
+	 * caller knows about finds nothing and leaves the interface open.
+	 */
+	private Widget findCloseWidget(int interfaceId)
+	{
+		int group = interfaceId >>> 16;
+		Widget root = client.getWidget(group << 16);
+		Widget close = root == null ? null : findWidgetWithAction(root, "Close");
+		if (close != null)
+		{
+			return close;
+		}
+
+		Widget component = client.getWidget(interfaceId);
+		return component == null || component == root
+			? null
+			: findWidgetWithAction(component, "Close");
+	}
+
+	private Widget findWidgetWithAction(Widget root, String action)
+	{
+		java.util.ArrayDeque<Widget> queue = new java.util.ArrayDeque<>();
+		java.util.Set<Widget> seen =
+			java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+		queue.add(root);
+
+		int visited = 0;
+		while (!queue.isEmpty() && visited++ < 5000)
+		{
+			Widget widget = queue.poll();
+			if (widget == null || !seen.add(widget))
+			{
+				continue;
+			}
+
+			if (findAction(widget.getActions(), action) >= 0)
+			{
+				return widget;
+			}
+
+			addChildren(queue, widget.getChildren());
+			addChildren(queue, widget.getDynamicChildren());
+			addChildren(queue, widget.getStaticChildren());
+			addChildren(queue, widget.getNestedChildren());
+		}
+
+		return null;
+	}
+
+	private static void addChildren(java.util.Queue<Widget> queue, Widget[] children)
+	{
+		if (children == null)
+		{
+			return;
+		}
+
+		for (Widget child : children)
+		{
+			if (child != null)
+			{
+				queue.add(child);
+			}
+		}
+	}
+
+	/**
+	 * Sets which ground items keep "Take" as their default left click. An
+	 * empty set disables the filter, which leaves the menu exactly as the
+	 * client built it.
+	 */
+	public void setGroundItemPickupFilter(Set<Integer> itemIds)
+	{
+		groundItemPickupIds = itemIds == null || itemIds.isEmpty()
+			? Collections.emptySet()
+			: Collections.unmodifiableSet(new java.util.HashSet<>(itemIds));
+	}
+
+	/**
+	 * @return true if a ground item of this id is allowed to be taken by a
+	 * plain left click
+	 */
+	public boolean isGroundItemPickupAllowed(int itemId)
+	{
+		Set<Integer> allowed = groundItemPickupIds;
+		return !allowed.isEmpty()
+			&& (allowed.contains(itemId) || allowed.contains(itemId & 0xFFFF));
+	}
+
+	/**
+	 * Keeps only the configured ground items left-clickable, the same way the
+	 * menu entry swapper keeps a swappable option from being the default.
+	 * <p>
+	 * Deprioritized entries are sorted below the rest of the menu, so for an
+	 * unwanted drop the "Take" row sinks underneath "Walk here" and a click on
+	 * that tile walks instead of looting. Must be called on the client thread,
+	 * from the menu entry event.
+	 */
+	public void filterGroundItemMenuEntry(MenuEntry entry)
+	{
+		Set<Integer> allowed = groundItemPickupIds;
+		if (entry == null || allowed.isEmpty() || !isGroundItemAction(entry.getType()))
+		{
+			return;
+		}
+
+		int itemId = entry.getIdentifier();
+		boolean wanted = isGroundItemPickupAllowed(itemId);
+		boolean take = matchesOption(entry.getOption(), "Take", "Pick up", "Pickup");
+
+		// A wanted item keeps its Take row at the top so one left click takes
+		// it. Everything else, including the wanted item's Examine row, is
+		// pushed down so it can never become the default action.
+		entry.setDeprioritized(!wanted || !take);
+	}
+
+	/**
+	 * Picks up the exact ground item stack at the given scene coordinates.
+	 * <p>
+	 * When this item is in the pickup filter its Take row is the default left
+	 * click, so a single click on the tile takes exactly that item and cannot
+	 * touch anything else. If the filter is not active for it, the matching
+	 * menu entry is invoked directly instead, which also works while the
+	 * context menu is already open.
+	 */
+	public boolean takeGroundItem(int sceneX, int sceneY, int itemId, String itemName)
+	{
+		MenuEntry entry = findGroundItemMenuEntry(itemId, sceneX, sceneY);
+		if (entry != null)
+		{
+			return invokeMenuEntry(entry);
+		}
+
+		if (client.isMenuOpen())
+		{
 			closeMenu();
 			return false;
 		}
@@ -1582,8 +1974,83 @@ public final class GameInput
 		}
 
 		Polygon tilePoly = Perspective.getCanvasTilePoly(client, localPoint);
-		Point point = randomPoint(tilePoly);
+		if (isGroundItemPickupAllowed(itemId))
+		{
+			Point point = itemPoint(tilePoly);
+			return point != null && click(point);
+		}
+
+		Point point = randomTilePoint(tilePoly);
 		return point != null && click(point, MouseEvent.BUTTON3);
+	}
+
+	/**
+	 * Picks a point on the middle of a tile, where a ground item's model sits.
+	 * With only the wanted drops left clickable, a click that misses the model
+	 * walks instead of taking the item, so the point stays close to the centre
+	 * rather than spread across the whole tile.
+	 */
+	private Point itemPoint(Polygon tilePoly)
+	{
+		if (tilePoly == null)
+		{
+			return null;
+		}
+
+		Rectangle bounds = tilePoly.getBounds();
+		if (bounds == null || bounds.isEmpty())
+		{
+			return null;
+		}
+
+		int centerX = bounds.x + bounds.width / 2;
+		int centerY = bounds.y + bounds.height / 2;
+
+		for (int attempt = 0; attempt < RANDOM_POINT_ATTEMPTS; attempt++)
+		{
+			int x = centerX + random.nextInt(7) - 3;
+			int y = centerY + random.nextInt(7) - 3;
+			if (tilePoly.contains(x, y) && isInViewport(x, y) && !isCoveredByInterface(x, y))
+			{
+				return new Point(x, y);
+			}
+		}
+
+		return randomPoint(tilePoly);
+	}
+
+	/**
+	 * Picks a point in the lower part of a tile. Ground item models extend
+	 * upwards, so the top of a tile can belong to an item on the tile above;
+	 * clicking low on the tile keeps the menu on the intended drop.
+	 */
+	private Point randomTilePoint(Polygon tilePoly)
+	{
+		if (tilePoly == null)
+		{
+			return null;
+		}
+
+		Rectangle bounds = tilePoly.getBounds();
+		if (bounds == null || bounds.isEmpty())
+		{
+			return null;
+		}
+
+		int minY = bounds.y + (int) Math.round(bounds.height * 0.55);
+		int height = Math.max(1, bounds.y + bounds.height - minY);
+
+		for (int attempt = 0; attempt < RANDOM_POINT_ATTEMPTS; attempt++)
+		{
+			int x = bounds.x + random.nextInt(Math.max(1, bounds.width));
+			int y = minY + random.nextInt(height);
+			if (tilePoly.contains(x, y) && isInViewport(x, y) && !isCoveredByInterface(x, y))
+			{
+				return new Point(x, y);
+			}
+		}
+
+		return randomPoint(tilePoly);
 	}
 
 	public boolean walkTo(WorldPoint worldPoint)
@@ -2063,18 +2530,33 @@ public final class GameInput
 			bounds.y + marginY + random.nextInt(height));
 	}
 
-	private static int findAction(String[] actions, String action)
+	/**
+	 * Finds the index of the first action matching any candidate. Colour tags
+	 * are ignored, because object and NPC actions are stored with embedded
+	 * {@code <col=...>} tags while callers use the plain option name.
+	 */
+	private static int findAction(String[] actions, String... candidates)
 	{
-		if (actions == null || action == null)
+		if (actions == null || candidates == null)
 		{
 			return -1;
 		}
 
 		for (int i = 0; i < actions.length; i++)
 		{
-			if (action.equalsIgnoreCase(actions[i]))
+			String action = actions[i];
+			if (action == null)
 			{
-				return i;
+				continue;
+			}
+
+			String plainAction = stripTags(action);
+			for (String candidate : candidates)
+			{
+				if (candidate != null && plainAction.equalsIgnoreCase(stripTags(candidate)))
+				{
+					return i;
+				}
 			}
 		}
 

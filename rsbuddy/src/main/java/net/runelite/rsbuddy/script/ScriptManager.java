@@ -119,6 +119,7 @@ public final class ScriptManager
 		}
 
 		activeScript = script;
+		context.getInput().setGroundItemPickupFilter(script.getGroundItemPickupFilter());
 
 		try
 		{
@@ -128,6 +129,7 @@ public final class ScriptManager
 		{
 			log.error("Unable to start script {}", script.getName(), ex);
 			activeScript = null;
+			context.getInput().setGroundItemPickupFilter(null);
 			script.setStatus("Error: " + ex.getMessage());
 
 			try
@@ -147,6 +149,7 @@ public final class ScriptManager
 		activeScript = null;
 
 		context.getInput().stopCamera();
+		context.getInput().setGroundItemPickupFilter(null);
 
 		if (script == null)
 		{
@@ -180,6 +183,7 @@ public final class ScriptManager
 		{
 			log.error("Script {} failed", script.getName(), ex);
 			activeScript = null;
+			context.getInput().setGroundItemPickupFilter(null);
 
 			try
 			{

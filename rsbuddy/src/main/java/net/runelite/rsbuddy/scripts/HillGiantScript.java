@@ -53,8 +53,8 @@ import net.runelite.rsbuddy.script.ScriptContext;
 
 /**
  * Kills hill giants in the Edgeville Dungeon, picks up big bones, body
- * talismans, giant keys, and valuable rune/root drops, and banks the loot at
- * the west Varrock bank before returning.
+ * talismans, and uncut diamonds, and banks the loot at the west Varrock bank
+ * before returning.
  */
 public final class HillGiantScript extends Script
 {
@@ -63,6 +63,10 @@ public final class HillGiantScript extends Script
 
 	private static final int MAX_DISTANCE = 25;
 	private static final int COOLDOWN_TICKS = 3;
+
+	// Picking a drop up is retried on the next tick: waiting out the full
+	// interaction cooldown made a missed pickup take several seconds.
+	private static final int LOOT_COOLDOWN_TICKS = 1;
 	private static final int LOOT_ATTEMPT_LIMIT = 12;
 	private static final int LOOT_TARGET_TIMEOUT_TICKS = 100;
 
@@ -77,33 +81,63 @@ public final class HillGiantScript extends Script
 	private static final int BANK_BOOTH_ID = 10583;
 
 	private static final int BRASS_KEY_ID = ItemID.EDGEVILLEDUNGEONKEY;
-	private static final int SARDINE_ID = ItemID.SARDINE;
 	private static final int BRASS_KEY_AMOUNT = 1;
-	private static final int SARDINE_AMOUNT = 5;
 	private static final int BANK_STAGE_ATTEMPTS = 20;
+
+	// Closing the bank is retried for this many ticks before the script gives
+	// up on the interface and leaves anyway, so it cannot stall at the bank.
+	private static final int BANK_CLOSE_ATTEMPTS = 12;
 
 	private static final int EAT_THRESHOLD_PERCENT = 50;
 
+	// Loot that could not be reached is retried after this delay instead of
+	// being ignored for the whole trip. This also gives drops that are still
+	// private to another player time to become takeable.
+	private static final long IGNORED_LOOT_TIMEOUT_MS = 60_000L;
+
+	// A menu that stays open for more than a few ticks was not opened by the
+	// current interaction. The script closes it so no state can block behind
+	// it. An input click that never finishes is reset after a longer wait.
+	private static final int MENU_STUCK_TICKS = 6;
+	private static final int BUSY_STUCK_TICKS = 100;
+
+	// A door click that did not actually open the door is retried after this
+	// many ticks. Without it a failed click would leave the door marked open
+	// and the script would keep walking into it.
+	private static final int SHED_DOOR_TIMEOUT_TICKS = 20;
+
+	// The drops of a kill appear a tick or two after the giant dies, so the
+	// script waits this long for them before moving on to the next giant.
+
+	private static final int POST_KILL_LOOT_TICKS = 3;
+
 	/**
-	 * Hill giants drop big bones, body talismans, giant keys, and a handful
-	 * of stackable or herb drops worth picking up.
+	 * Only the requested hill giant drops are picked up.
 	 */
+	private static final java.util.Set<Integer> LOOT_ITEMS = java.util.Collections.unmodifiableSet(
+		new java.util.HashSet<>(java.util.Arrays.asList(
+			ItemID.BIG_BONES,
+			ItemID.BODY_TALISMAN,
+			ItemID.UNCUT_DIAMOND,
+			ItemID.UNIDENTIFIED_RANARR,
+			ItemID.NATURE_RUNE,
+			ItemID.GRIMY_KWUARM,
+			ItemID.GRIMY_DWARF_WEED,
+			ItemID.LAW_RUNE)));
+
 	private static boolean isLootItem(int itemId)
 	{
-		switch (itemId)
-		{
-			case ItemID.BIG_BONES:
-			case ItemID.BODY_TALISMAN:
-			case ItemID.TIARA_BODY:
-			case ItemID.HILLGIANT_BOSS_KEY:
-			case ItemID.DEATHRUNE:
-			case ItemID.COSMICRUNE:
-			case ItemID.LAWRUNE:
-			case ItemID.LIMPWURT_ROOT:
-				return true;
-			default:
-				return false;
-		}
+		return LOOT_ITEMS.contains(itemId);
+	}
+
+	/**
+	 * While this script runs only these drops stay clickable on the ground, so
+	 * walking or attacking can never pick up anything else.
+	 */
+	@Override
+	public java.util.Set<Integer> getGroundItemPickupFilter()
+	{
+		return LOOT_ITEMS;
 	}
 
 	private enum State
@@ -120,7 +154,6 @@ public final class HillGiantScript extends Script
 		DEPOSIT,
 		WAIT_DEPOSIT,
 		WITHDRAW_KEY,
-		WITHDRAW_SARDINES,
 		LEAVE
 	}
 
@@ -141,7 +174,14 @@ public final class HillGiantScript extends Script
 	private int bankAttempts;
 	private boolean returningFromBank;
 	private boolean shedDoorOpen;
-	private final java.util.Set<WorldPoint> ignoredLoot = new java.util.HashSet<>();
+	private final java.util.Map<WorldPoint, Long> ignoredLoot = new java.util.HashMap<>();
+	private int menuOpenTicks;
+	private int busyTicks;
+	private int shedDoorTicks;
+	private int bankCloseTicks;
+	private NPC attackTarget;
+	private boolean killLootPending;
+	private int killLootTicks;
 
 	public HillGiantScript()
 	{
@@ -165,7 +205,13 @@ public final class HillGiantScript extends Script
 		bankAttempts = 0;
 		returningFromBank = false;
 		shedDoorOpen = false;
+		shedDoorTicks = 0;
 		ignoredLoot.clear();
+		menuOpenTicks = 0;
+		busyTicks = 0;
+		attackTarget = null;
+		killLootPending = false;
+		killLootTicks = 0;
 		setStatus("Ready");
 	}
 
@@ -179,6 +225,9 @@ public final class HillGiantScript extends Script
 			setStatus("Waiting for login");
 			return;
 		}
+
+		recoverStuckInput(context);
+		updateShedDoorState(context);
 
 		if (state == null)
 		{
@@ -224,6 +273,70 @@ public final class HillGiantScript extends Script
 		}
 	}
 
+	/**
+	 * Clears input state that would otherwise block every state forever: a
+	 * menu that nobody consumed, and a simulated click that never finished.
+	 */
+	private void recoverStuckInput(ScriptContext context)
+	{
+		Client client = context.getClient();
+		GameInput input = context.getInput();
+
+		if (!client.isMenuOpen())
+		{
+			menuOpenTicks = 0;
+		}
+		else if (++menuOpenTicks > MENU_STUCK_TICKS)
+		{
+			menuOpenTicks = MENU_STUCK_TICKS;
+			if (!input.isBusy())
+			{
+				setStatus("Closing stuck menu");
+				input.closeMenu();
+			}
+		}
+
+		if (input.isBusy())
+		{
+			if (++busyTicks > BUSY_STUCK_TICKS)
+			{
+				input.reset();
+				busyTicks = 0;
+				setStatus("Resetting input");
+			}
+		}
+		else
+		{
+			busyTicks = 0;
+		}
+
+		// An open bank swallows every walk click. The bank state closes it
+		// itself; anywhere else a leftover interface is closed here, so a
+		// missed close cannot stall the script after banking.
+		if (state != State.BANK
+			&& context.getTargets().findWidget(InterfaceID.Bankmain.UNIVERSE).isPresent())
+		{
+			if (!input.isBusy())
+			{
+				// Alternate both ways of closing it: Escape is what the client
+				// itself uses, the button click covers a widget that has taken
+				// keyboard focus.
+				if (++bankCloseTicks % 2 == 1)
+				{
+					input.pressKey(java.awt.event.KeyEvent.VK_ESCAPE);
+				}
+				else
+				{
+					input.closeInterface(InterfaceID.Bankmain.UNIVERSE);
+				}
+			}
+		}
+		else
+		{
+			bankCloseTicks = 0;
+		}
+	}
+
 	private void hunt(ScriptContext context)
 	{
 		Inventory inventory = context.getInventory();
@@ -243,12 +356,32 @@ public final class HillGiantScript extends Script
 			return;
 		}
 
-		GroundLoot loot = findGroundLoot(context);
-		if (loot != null)
+		// A kill was just finished. Its drops are taken before any other giant
+		// is attacked, even when one has already attacked us: auto-retaliate
+		// keeps that fight going while the drops are picked up, so the loot of
+		// every single kill is taken.
+		if (killLootPending)
 		{
-			state = State.LOOT;
-			setStatus("Looting");
-			return;
+			GroundLoot drop = findGroundLoot(context);
+			if (drop != null)
+			{
+				killLootPending = false;
+				killLootTicks = 0;
+				state = State.LOOT;
+				setStatus("Looting");
+				return;
+			}
+
+			// Drops spawn a tick or two after the giant dies. Wait for them
+			// instead of walking off, or the kill yields nothing.
+			if (++killLootTicks <= POST_KILL_LOOT_TICKS)
+			{
+				setStatus("Waiting for drops");
+				return;
+			}
+
+			killLootPending = false;
+			killLootTicks = 0;
 		}
 
 		Player player = context.getPlayer();
@@ -257,12 +390,45 @@ public final class HillGiantScript extends Script
 			: null;
 		if (interacting != null)
 		{
+			if (interacting.isDead() || isKillFinished(context, attackTarget))
+			{
+				// The giant is dead. Loot its drops now rather than starting
+				// another fight first.
+				killLootPending = true;
+				killLootTicks = 0;
+				attackTarget = null;
+				setStatus("Kill finished");
+				return;
+			}
+
 			// Any active NPC interaction blocks a new attack. Auto-retaliate
 			// may have started a fight with something other than a hill
 			// giant, so wait for that fight to finish instead of spamming
 			// attack clicks that the game will reject.
 			String interactingName = getNpcName(interacting);
-			setStatus((interacting.isDead() ? "Finishing " : "Fighting ") + interactingName);
+			setStatus("Fighting " + interactingName);
+			return;
+		}
+
+		// Nothing is being fought any more, but the giant we attacked may have
+		// died on this very tick: its drops still have to spawn before the
+		// next giant is attacked.
+		if (isKillFinished(context, attackTarget))
+		{
+			killLootPending = true;
+			killLootTicks = 0;
+			attackTarget = null;
+			setStatus("Kill finished");
+			return;
+		}
+
+		// Nothing is being fought, so any wanted drop on the ground is taken
+		// before the next giant is attacked.
+		GroundLoot loot = findGroundLoot(context);
+		if (loot != null)
+		{
+			state = State.LOOT;
+			setStatus("Looting");
 			return;
 		}
 
@@ -278,6 +444,9 @@ public final class HillGiantScript extends Script
 		{
 			if (input.interact(target.get(), ATTACK_ACTION))
 			{
+				attackTarget = target.get();
+				killLootPending = false;
+				killLootTicks = 0;
 				cooldown = COOLDOWN_TICKS;
 				setStatus("Attacking " + NPC_NAME);
 			}
@@ -334,7 +503,7 @@ public final class HillGiantScript extends Script
 		{
 			// The drop is probably behind an obstacle or otherwise
 			// unreachable. Ignore it so the script does not get stuck.
-			ignoredLoot.add(loot.worldLocation);
+			ignoreLoot(loot.worldLocation);
 			lootTarget = null;
 			lootTargetItemId = -1;
 			lootAttempts = 0;
@@ -358,11 +527,11 @@ public final class HillGiantScript extends Script
 		Client client = context.getClient();
 		String itemName = getItemName(client, loot.itemId);
 		input.takeGroundItem(loot.sceneX, loot.sceneY, loot.itemId, itemName);
-		cooldown = COOLDOWN_TICKS;
+		cooldown = LOOT_COOLDOWN_TICKS;
 
 		if (++lootAttempts > LOOT_ATTEMPT_LIMIT && loot.worldLocation != null)
 		{
-			ignoredLoot.add(loot.worldLocation);
+			ignoreLoot(loot.worldLocation);
 			lootTarget = null;
 			lootTargetItemId = -1;
 			lootAttempts = 0;
@@ -394,10 +563,11 @@ public final class HillGiantScript extends Script
 			}
 
 			// After climbing up we are inside the shed with the brass-key
-			// door shut behind us. Open it once, then walk away using the
-			// minimap so the walk click cannot hit and toggle the door.
+			// door shut behind us. Only open it from inside: clicking the
+			// door from the outside pulls the player back to it, which used to
+			// turn the walk to the bank into a walk back to the shed.
 			if (!shedDoorOpen
-				&& location.distanceTo(SURFACE_DOOR) <= 10
+				&& location.distanceTo(SURFACE_LADDER) <= 6
 				&& openDoor(context))
 			{
 				setStatus("Opening door");
@@ -429,6 +599,15 @@ public final class HillGiantScript extends Script
 		Widget bankUniverse = context.getTargets().findWidget(InterfaceID.Bankmain.UNIVERSE).orElse(null);
 		if (bankUniverse == null)
 		{
+			// The leave stage just closed the bank. Banking is finished, so
+			// walk back instead of reopening the booth, which used to start
+			// the whole deposit/withdraw cycle over again.
+			if (bankStage == BankStage.LEAVE)
+			{
+				leaveBank();
+				return;
+			}
+
 			bankStage = null;
 			bankAttempts = 0;
 
@@ -438,10 +617,10 @@ public final class HillGiantScript extends Script
 				return;
 			}
 
-			Optional<GameObject> booth = context.getTargets().findObject(BANK_BOOTH_ID, 10);
+			Optional<GameObject> booth = context.getTargets().findVisibleObject(BANK_BOOTH_ID, 10);
 			if (booth.isEmpty())
 			{
-				booth = context.getTargets().findObject("Bank booth", "Bank", 10);
+				booth = context.getTargets().findVisibleObject("Bank booth", "Bank", 10);
 			}
 			if (booth.isPresent())
 			{
@@ -453,7 +632,7 @@ public final class HillGiantScript extends Script
 				return;
 			}
 
-			Optional<NPC> banker = context.getTargets().findNpc("Banker", "Bank", 10);
+			Optional<NPC> banker = context.getTargets().findVisibleNpc("Banker", "Bank", 10);
 			if (banker.isPresent())
 			{
 				if (input.interact(banker.get(), "Bank"))
@@ -464,8 +643,12 @@ public final class HillGiantScript extends Script
 				return;
 			}
 
+			// No booth or banker is on screen yet. Move closer instead of
+			// right-clicking an off-screen object, which would hit whatever
+			// interface is drawn at that spot.
+			walkTowards(context, WEST_VARROCK_BANK, true);
 			cooldown = 2;
-			setStatus("No bank nearby");
+			setStatus("Walking to bank");
 			return;
 		}
 
@@ -481,11 +664,10 @@ public final class HillGiantScript extends Script
 			return;
 		}
 
-		// The withdraw stages handle their own context menus. Any other menu
+		// The key withdraw stage handles its own context menu. Any other menu
 		// would swallow the click on the deposit button.
 		if (context.getClient().isMenuOpen()
-			&& bankStage != BankStage.WITHDRAW_KEY
-			&& bankStage != BankStage.WITHDRAW_SARDINES)
+			&& bankStage != BankStage.WITHDRAW_KEY)
 		{
 			input.closeMenu();
 			return;
@@ -536,17 +718,17 @@ public final class HillGiantScript extends Script
 			{
 				if (inventory.countItem(BRASS_KEY_ID) >= BRASS_KEY_AMOUNT)
 				{
-					bankStage = BankStage.WITHDRAW_SARDINES;
+					bankStage = BankStage.LEAVE;
 					bankAttempts = 0;
-					setStatus("Withdrawing sardines");
+					setStatus("Leaving bank");
 					return;
 				}
 
 				if (++bankAttempts > BANK_STAGE_ATTEMPTS)
 				{
-					// No key available in the bank. Continue with the food
-					// instead of retrying forever.
-					bankStage = BankStage.WITHDRAW_SARDINES;
+					// No key available in the bank. Leave instead of
+					// retrying forever.
+					bankStage = BankStage.LEAVE;
 					bankAttempts = 0;
 					setStatus("No brass key in bank");
 					return;
@@ -563,35 +745,6 @@ public final class HillGiantScript extends Script
 				setStatus("Withdrawing brass key");
 				return;
 			}
-			case WITHDRAW_SARDINES:
-			{
-				if (inventory.countItem(SARDINE_ID) >= SARDINE_AMOUNT)
-				{
-					bankStage = BankStage.LEAVE;
-					bankAttempts = 0;
-					setStatus("Leaving bank");
-					return;
-				}
-
-				if (++bankAttempts > BANK_STAGE_ATTEMPTS)
-				{
-					bankStage = BankStage.LEAVE;
-					bankAttempts = 0;
-					setStatus("No sardines in bank");
-					return;
-				}
-
-				if (input.withdrawBankItem(SARDINE_ID, "Withdraw-5"))
-				{
-					cooldown = COOLDOWN_TICKS;
-				}
-				else
-				{
-					cooldown = 1;
-				}
-				setStatus("Withdrawing sardines");
-				return;
-			}
 			case LEAVE:
 			{
 				if (context.getClient().isMenuOpen())
@@ -600,18 +753,54 @@ public final class HillGiantScript extends Script
 					return;
 				}
 
-				input.pressKey(java.awt.event.KeyEvent.VK_ESCAPE);
-				cooldown = COOLDOWN_TICKS;
-				ignoredLoot.clear();
-				bankStage = null;
-				bankAttempts = 0;
-				returningFromBank = true;
-				shedDoorOpen = false;
-				state = State.WALK_TO_GIANTS;
-				setStatus("Returning to hill giants");
+				// Walking clicks are swallowed while the bank interface is
+				// open, so do not leave this state until it is really gone.
+				// Clicking the bank's own Close button is what a player does;
+				// Escape is only a fallback, because the bank ignores it while
+				// its search box has focus. The attempt count is bounded so a
+				// bank that refuses to close cannot stall the script forever.
+				if (bankAttempts <= BANK_CLOSE_ATTEMPTS
+					&& context.getTargets().findWidget(InterfaceID.Bankmain.UNIVERSE).isPresent())
+				{
+					// Alternate both ways of closing it so a single broken route
+					// cannot keep the bank open: Escape is the client's own close
+					// key, the button click works when the key is swallowed.
+					if (++bankAttempts % 2 == 1)
+					{
+						input.pressKey(java.awt.event.KeyEvent.VK_ESCAPE);
+					}
+					else
+					{
+						input.closeInterface(InterfaceID.Bankmain.UNIVERSE);
+					}
+
+					cooldown = 1;
+					setStatus("Closing bank");
+					return;
+				}
+
+				leaveBank();
 				return;
 			}
 		}
+	}
+
+	/**
+	 * Ends the bank visit and heads back to the dungeon. Called once the bank
+	 * interface is really closed, whether by the leave stage itself or because
+	 * it disappeared on its own.
+	 */
+	private void leaveBank()
+	{
+		cooldown = COOLDOWN_TICKS;
+		ignoredLoot.clear();
+		bankStage = null;
+		bankAttempts = 0;
+		returningFromBank = true;
+		shedDoorOpen = false;
+		shedDoorTicks = 0;
+		state = State.WALK_TO_GIANTS;
+		setStatus("Returning to hill giants");
 	}
 
 
@@ -742,33 +931,69 @@ public final class HillGiantScript extends Script
 			return false;
 		}
 
+		// A leftover menu would swallow the click, which then lands on the
+		// menu instead of the door.
+		if (context.getClient().isMenuOpen())
+		{
+			input.closeMenu();
+			return false;
+		}
+
 		Optional<TileObject> door = context.getTargets().findTileObject(DOOR_ID, 10);
 		if (door.isEmpty())
 		{
 			return false;
 		}
 
-		boolean menuOpen = context.getClient().isMenuOpen();
 		if (input.interact(door.get(), "Open", "Unlock"))
 		{
-			if (menuOpen)
-			{
-				// The Open/Unlock row was clicked, so the door is now open.
-				shedDoorOpen = true;
-			}
+			// The Open action was sent, so the door is open from this tick on.
+			// Clicking it again toggles it shut, which used to bounce the
+			// player in and out of the shed, and to drag them back to the
+			// door while they were running to the bank.
+			shedDoorOpen = true;
+			shedDoorTicks = 0;
 			cooldown = COOLDOWN_TICKS;
 			setStatus("Opening door");
 			return true;
 		}
 
-		if (menuOpen)
+		return false;
+	}
+
+	/**
+	 * Forgets a door that was clicked but never opened, for example because the
+	 * player was not standing close enough. Only counts while the player is
+	 * still at the shed, so a successful open is never forgotten mid-walk.
+	 */
+	private void updateShedDoorState(ScriptContext context)
+	{
+		if (!shedDoorOpen)
 		{
-			// The door's own menu has no Open/Unlock entry, which means it
-			// is already open. Stop right-clicking it.
-			shedDoorOpen = true;
+			shedDoorTicks = 0;
+			return;
 		}
 
-		return false;
+		WorldPoint location = context.getPlayerLocation();
+		if (location == null)
+		{
+			return;
+		}
+
+		boolean atShed = location.distanceTo(SURFACE_LADDER) <= 4
+			|| location.distanceTo(SURFACE_DOOR) <= 2;
+		if (!atShed)
+		{
+			shedDoorTicks = 0;
+			return;
+		}
+
+		if (++shedDoorTicks > SHED_DOOR_TIMEOUT_TICKS)
+		{
+			shedDoorOpen = false;
+			shedDoorTicks = 0;
+			setStatus("Retrying shed door");
+		}
 	}
 
 	private void climb(ScriptContext context, boolean up, int objectId)
@@ -1090,6 +1315,31 @@ public final class HillGiantScript extends Script
 		return dx * dx + dy * dy;
 	}
 
+	private boolean isIgnoredLoot(WorldPoint location)
+	{
+		Long expiresAt = ignoredLoot.get(location);
+		if (expiresAt == null)
+		{
+			return false;
+		}
+
+		if (System.currentTimeMillis() >= expiresAt)
+		{
+			ignoredLoot.remove(location);
+			return false;
+		}
+
+		return true;
+	}
+
+	private void ignoreLoot(WorldPoint location)
+	{
+		if (location != null)
+		{
+			ignoredLoot.put(location, System.currentTimeMillis() + IGNORED_LOOT_TIMEOUT_MS);
+		}
+	}
+
 	private GroundLoot findGroundLoot(ScriptContext context)
 	{
 		Client client = context.getClient();
@@ -1156,12 +1406,9 @@ public final class HillGiantScript extends Script
 						continue;
 					}
 
-					// Do not chase drops that belong to another player.
-					if (groundItem.getOwnership() == TileItem.OWNERSHIP_OTHER)
-					{
-						continue;
-					}
-
+					// Take wanted drops even when another player killed the
+					// monster. The menu can still offer them to accounts that
+					// are allowed to pick them up.
 					net.runelite.api.Point sceneLocation = tile.getSceneLocation();
 					if (sceneLocation == null)
 					{
@@ -1178,7 +1425,7 @@ public final class HillGiantScript extends Script
 						continue;
 					}
 
-					if (itemLocation != null && ignoredLoot.contains(itemLocation))
+					if (itemLocation != null && isIgnoredLoot(itemLocation))
 					{
 						continue;
 					}
@@ -1220,6 +1467,39 @@ public final class HillGiantScript extends Script
 				playerLocation == null || npc.getWorldLocation() == null
 					? Integer.MAX_VALUE
 					: npc.getWorldLocation().distanceTo(playerLocation)));
+	}
+
+	/**
+	 * @return true if the giant this script attacked is dead, or has already
+	 * been removed from the scene, which the client does as soon as it dies
+	 */
+	private boolean isKillFinished(ScriptContext context, NPC target)
+	{
+		if (target == null)
+		{
+			return false;
+		}
+
+		if (target.isDead())
+		{
+			return true;
+		}
+
+		WorldView worldView = context.getClient().getTopLevelWorldView();
+		if (worldView == null)
+		{
+			return false;
+		}
+
+		for (NPC npc : worldView.npcs())
+		{
+			if (npc == target)
+			{
+				return false;
+			}
+		}
+
+		return true;
 	}
 
 	private static boolean isHillGiantId(int id)
