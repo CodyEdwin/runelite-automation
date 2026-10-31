@@ -83,7 +83,10 @@ public final class HillGiantScript extends Script
 	// A Take click is only repeated when the player stood still for this many
 	// ticks without the item disappearing.
 	private static final int LOOT_RECLICK_TICKS = 2;
-	private static final int LOOT_ATTEMPT_LIMIT = 6;
+	private static final int LOOT_ATTEMPT_LIMIT = 3;
+	// Hard cap on the whole LOOT state without a pickup landing; then back to
+	// fighting.
+	private static final int LOOT_STATE_MAX_TICKS = 25;
 	private static final int LOOT_TARGET_TIMEOUT_TICKS = 40;
 
 	// Walking: click this far ahead along the path, and chain the next click
@@ -278,6 +281,23 @@ public final class HillGiantScript extends Script
 	// pickup, and a flag the click result sets when a pickup clearly failed.
 	private int lootSettleTicks;
 	private volatile boolean lootClickFailed;
+	// Pickup phases, all driven from the tick (client thread): hover the
+	// item, then on the next tick read the hover menu and press (left click,
+	// or right click + exact Take row, or the exact Take action).
+	private enum LootPhase
+	{
+		IDLE,
+		HOVERED,
+		MENU
+	}
+
+	private LootPhase lootPhase = LootPhase.IDLE;
+	private int lootPhaseTicks;
+	private int lootStateTicks;
+	private int lootInventoryCount = -1;
+	// [HillGiant state] logging when the state has not changed for a while.
+	private State loggedState;
+	private int stateTicks;
 	private int bankCloseTicks;
 	private NPC attackTarget;
 	private int attackPendingTicks;
@@ -385,7 +405,7 @@ public final class HillGiantScript extends Script
 		{
 			tickSafely();
 		}
-		catch (RuntimeException ex)
+		catch (RuntimeException | AssertionError ex)
 		{
 			// Log with the stack trace and keep the script alive; the
 			// watchdog recovers whatever state the exception left behind.
@@ -471,6 +491,7 @@ public final class HillGiantScript extends Script
 				break;
 		}
 		exceptionCount = 0;
+		logStateIfStale(context);
 	}
 
 	/**
@@ -780,8 +801,32 @@ public final class HillGiantScript extends Script
 			return;
 		}
 
+		// Whole-state cap: if nothing has been picked up for a while, stop
+		// looting and get back to fighting. Counted before any busy check so
+		// a stuck input can never hold the script here.
+		int itemCount = countInventoryItems(inventory);
+		if (itemCount != lootInventoryCount)
+		{
+			lootInventoryCount = itemCount;
+			lootStateTicks = 0;
+		}
+		if (++lootStateTicks > LOOT_STATE_MAX_TICKS)
+		{
+			log.info("[HillGiant loot] nothing picked up for {} ticks, giving up on this pile and attacking",
+				LOOT_STATE_MAX_TICKS);
+			skipLoot(loot);
+			return;
+		}
+
 		if (input.isBusy() || input.isCameraBusy())
 		{
+			if (++lootPhaseTicks > 6)
+			{
+				log.info("[HillGiant loot] input busy for {} ticks during a pickup, resetting input", lootPhaseTicks);
+				input.reset();
+				lootPhase = LootPhase.IDLE;
+				lootPhaseTicks = 0;
+			}
 			setStatus("Moving mouse");
 			return;
 		}
@@ -795,6 +840,8 @@ public final class HillGiantScript extends Script
 			lootTargetTicks = 0;
 			lootClickTicks = -1;
 			lootSettleTicks = 0;
+			lootPhase = LootPhase.IDLE;
+			lootPhaseTicks = 0;
 		}
 
 		if (++lootTargetTicks > LOOT_TARGET_TIMEOUT_TICKS && loot.worldLocation != null)
@@ -826,7 +873,7 @@ public final class HillGiantScript extends Script
 				return;
 			}
 		}
-		else if (!isSettled(context, player) && lootSettleTicks++ < 2)
+		else if (lootPhase == LootPhase.IDLE && !isSettled(context, player) && lootSettleTicks++ < 2)
 		{
 			// The previous pickup just landed and the player (and with it the
 			// camera) is still sliding onto that tile. Start the next pickup
@@ -843,26 +890,75 @@ public final class HillGiantScript extends Script
 		}
 
 		String itemName = getItemName(context.getClient(), loot.itemId);
-		int attempt = lootAttempts + 1;
-		String lootLabel = String.format("item=%s(%d) tile=%d,%d attempt=%d settled=%s",
+		String lootLabel = String.format("item=%s(%d) tile=%d,%d attempt=%d/%d",
 			itemName, loot.itemId, loot.worldLocation == null ? -1 : loot.worldLocation.getX(),
-			loot.worldLocation == null ? -1 : loot.worldLocation.getY(), attempt, isSettled(context, player));
-		lootClickFailed = false;
-		if (input.takeGroundItemTracked(loot.sceneX, loot.sceneY, loot.itemId, itemName, result ->
+			loot.worldLocation == null ? -1 : loot.worldLocation.getY(), lootAttempts + 1, LOOT_ATTEMPT_LIMIT);
+
+		if (lootPhase == LootPhase.MENU)
 		{
-			log.info("[HillGiant loot] {} {}", lootLabel, result);
-			if (result.contains("aborted") || result.contains("FAILED"))
+			// Right click was sent last tick: click this item's exact row.
+			lootPhase = LootPhase.IDLE;
+			boolean sent = input.clickGroundItemMenuRow(loot.itemId, loot.sceneX, loot.sceneY);
+			if (!sent)
 			{
-				lootClickFailed = true;
+				sent = input.invokeGroundItemTake(loot.sceneX, loot.sceneY, loot.itemId, itemName);
+				log.info("[HillGiant loot] {} result=menu had no Take row, ran exact Take directly", lootLabel);
 			}
-		}))
+			else
+			{
+				log.info("[HillGiant loot] {} result=right-click menu, clicked exact Take row", lootLabel);
+			}
+			lootSent();
+			return;
+		}
+
+		if (lootPhase == LootPhase.HOVERED)
 		{
-			++lootAttempts;
-			lootClickTicks = 0;
+			lootPhase = LootPhase.IDLE;
+			java.awt.Point mouse = input.getMouseLocation();
+			java.awt.Point fresh = input.groundItemPoint(loot.sceneX, loot.sceneY);
+			int hover = input.groundItemHoverState(loot.itemId, loot.sceneX, loot.sceneY);
+			boolean onTile = input.isOnGroundItemTile(mouse, loot.sceneX, loot.sceneY);
+			String where = "mouse=" + fmt(mouse) + " fresh=" + fmt(fresh) + " onTile=" + onTile + " hover=" + hover;
+
+			if (hover == 2 && onTile && mouse != null)
+			{
+				// The item's Take is what a left click does right here.
+				input.click(mouse);
+				log.info("[HillGiant loot] {} {} result=left-click Take (top option)", lootLabel, where);
+				lootSent();
+				return;
+			}
+
+			if (hover == 1 && mouse != null)
+			{
+				// Another item or an NPC is on top: use the real menu.
+				input.rightClick(mouse);
+				lootPhase = LootPhase.MENU;
+				lootPhaseTicks = 0;
+				log.info("[HillGiant loot] {} {} result=right-click, picking Take row next tick", lootLabel, where);
+				return;
+			}
+
+			// Not under the cursor (the tile moved): run the exact Take for
+			// this item and tile instead of clicking blind.
+			input.invokeGroundItemTake(loot.sceneX, loot.sceneY, loot.itemId, itemName);
+			log.info("[HillGiant loot] {} {} result=item not under cursor, ran exact Take directly", lootLabel, where);
+			lootSent();
+			return;
+		}
+
+		// IDLE: start an attempt. Logged before any mouse work.
+		java.awt.Point point = input.groundItemPoint(loot.sceneX, loot.sceneY);
+		log.info("[HillGiant loot] {} start: aim={} settled={}", lootLabel, fmt(point), isSettled(context, player));
+		if (point != null && input.moveTo(point))
+		{
+			lootPhase = LootPhase.HOVERED;
+			lootPhaseTicks = 0;
 			setStatus(itemName.isEmpty() ? "Looting" : "Looting " + itemName);
 			return;
 		}
-		log.info("[HillGiant loot] {} result=not started (tile off screen or menu closed), walking closer", lootLabel);
+		log.info("[HillGiant loot] {} result=tile not on screen, walking closer", lootLabel);
 
 		// The tile is not on screen (or a menu was just closed). Get closer.
 		if (loot.worldLocation != null && !context.getClient().isMenuOpen())
@@ -872,8 +968,35 @@ public final class HillGiantScript extends Script
 		}
 	}
 
+	/** A pickup was sent: wait for it to land (re-click timeout applies). */
+	private void lootSent()
+	{
+		++lootAttempts;
+		lootClickTicks = 0;
+		lootPhaseTicks = 0;
+	}
+
+	private static String fmt(java.awt.Point point)
+	{
+		return point == null ? "none" : point.x + "," + point.y;
+	}
+
+	private static int countInventoryItems(Inventory inventory)
+	{
+		int count = 0;
+		for (net.runelite.api.Item item : inventory.getItems())
+		{
+			if (item != null && item.getId() != -1)
+			{
+				count += Math.max(1, item.getQuantity());
+			}
+		}
+		return count;
+	}
+
 	private void skipLoot(GroundLoot loot)
 	{
+		log.info("[HillGiant loot] skipping loot at {} (attempts={}), back to attacking", loot.worldLocation, lootAttempts);
 		ignoreLoot(loot.worldLocation);
 		resetLootTracking();
 		state = State.HUNT;
@@ -889,6 +1012,10 @@ public final class HillGiantScript extends Script
 		lootClickTicks = -1;
 		lootSettleTicks = 0;
 		lootClickFailed = false;
+		lootPhase = LootPhase.IDLE;
+		lootPhaseTicks = 0;
+		lootStateTicks = 0;
+		lootInventoryCount = -1;
 	}
 
 	private void walkToBank(ScriptContext context)
@@ -1487,6 +1614,33 @@ public final class HillGiantScript extends Script
 			watchdogTicks);
 		log.info("tick={} {}", context.getClient().getTickCount(), line);
 		shedDebugLine = reason;
+	}
+
+	/**
+	 * One [HillGiant state] line per tick once the state has not changed for
+	 * more than 5 ticks, so a freeze always shows what the script is doing.
+	 */
+	private void logStateIfStale(ScriptContext context)
+	{
+		if (state != loggedState)
+		{
+			loggedState = state;
+			stateTicks = 0;
+			return;
+		}
+		if (++stateTicks <= 5)
+		{
+			return;
+		}
+		GameInput input = context.getInput();
+		Player player = context.getPlayer();
+		log.info("tick={} [HillGiant state] state={} for {} ticks | status={} loc={} inputBusy={} cameraBusy={}"
+				+ " menuOpen={} moving={} animating={} interacting={} lootPhase={} lootTarget={} lootAttempts={}"
+				+ " lootClickTicks={} cooldown={}",
+			context.getClient().getTickCount(), state, stateTicks, getStatus(), context.getPlayerLocation(),
+			input.isBusy(), input.isCameraBusy(), context.getClient().isMenuOpen(), isMoving(player),
+			isAnimating(player), player == null ? null : player.getInteracting() != null, lootPhase, lootTarget,
+			lootAttempts, lootClickTicks, cooldown);
 	}
 
 	/**

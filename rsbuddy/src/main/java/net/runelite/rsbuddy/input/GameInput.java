@@ -2039,62 +2039,12 @@ public final class GameInput
 		return point != null && click(point, MouseEvent.BUTTON3);
 	}
 
-	/** Drift (px) between the aimed point and the item's live position that triggers a re-aim. */
-	private static final int LOOT_REAIM_PX = 3;
-	private static final int LOOT_MAX_REAIMS = 4;
-
-	/**
-	 * Picks up one ground item with a single accurate click, even while the
-	 * camera or the player is still moving.
-	 * <p>
-	 * The item's screen point is recomputed from its scene tile on the client
-	 * (AWT) thread throughout the mouse move, and the move is re-aimed when
-	 * the live point drifts more than {@value #LOOT_REAIM_PX} px from where
-	 * the hand is heading. Just before pressing, the hover menu is read: if
-	 * the top option is this item's Take it is a left click; if the Take is
-	 * listed but not on top (another item or an NPC under the cursor) it is a
-	 * right click and the exact Take row; if the item is not under the cursor
-	 * at all, the exact Take action for this item and tile is run directly.
-	 *
-	 * @param report called once on the client thread with the target point,
-	 * the number of re-aims and how the item was taken
-	 * @return true if the pickup was started
+	/*
+	 * Ground-item pickup helpers. Every one of these reads or drives the
+	 * client, so each must be called from the script tick (the client
+	 * thread), never from a Swing timer. The Swing side only replays mouse
+	 * events.
 	 */
-	public boolean takeGroundItemTracked(int sceneX, int sceneY, int itemId, String itemName,
-		java.util.function.Consumer<String> report)
-	{
-		if (client.isMenuOpen())
-		{
-			MenuEntry open = findGroundItemMenuEntry(itemId, sceneX, sceneY);
-			if (open != null)
-			{
-				boolean sent = clickMenuEntry(open);
-				report.accept("menu already open: clicked Take row, sent=" + sent);
-				return sent;
-			}
-			closeMenu();
-			return false;
-		}
-
-		Canvas canvas = client.getCanvas();
-		Point centre = liveItemPoint(sceneX, sceneY, 0, 0);
-		if (canvas == null || centre == null)
-		{
-			return false;
-		}
-
-		// Keep one small offset from the tile centre on every re-aim, like a
-		// hand aiming at one spot on the item.
-		Point aim = itemPoint(liveTilePoly(sceneX, sceneY));
-		int offsetX = aim == null ? 0 : aim.x - centre.x;
-		int offsetY = aim == null ? 0 : aim.y - centre.y;
-
-		stopCamera();
-		busy = true;
-		SwingUtilities.invokeLater(() -> beginTrackedTake(canvas, sceneX, sceneY, itemId, itemName,
-			offsetX, offsetY, report));
-		return true;
-	}
 
 	private Polygon liveTilePoly(int sceneX, int sceneY)
 	{
@@ -2102,199 +2052,78 @@ public final class GameInput
 		return localPoint == null ? null : Perspective.getCanvasTilePoly(client, localPoint);
 	}
 
-	/** Live game-space point on the item's tile: its centre plus the aim offset. */
-	private Point liveItemPoint(int sceneX, int sceneY, int offsetX, int offsetY)
+	/**
+	 * @return a fresh point on the item's tile (game coordinates), computed
+	 * now, or null if the tile is not on screen
+	 */
+	public Point groundItemPoint(int sceneX, int sceneY)
+	{
+		return itemPoint(liveTilePoly(sceneX, sceneY));
+	}
+
+	/** @return true if the point is inside the item tile's current screen polygon */
+	public boolean isOnGroundItemTile(Point gamePoint, int sceneX, int sceneY)
 	{
 		Polygon tilePoly = liveTilePoly(sceneX, sceneY);
-		if (tilePoly == null)
-		{
-			return null;
-		}
-
-		Rectangle bounds = tilePoly.getBounds();
-		if (bounds == null || bounds.isEmpty())
-		{
-			return null;
-		}
-
-		int x = bounds.x + bounds.width / 2 + offsetX;
-		int y = bounds.y + bounds.height / 2 + offsetY;
-		if (!tilePoly.contains(x, y))
-		{
-			x = bounds.x + bounds.width / 2;
-			y = bounds.y + bounds.height / 2;
-		}
-		return isInViewport(x, y) && !isCoveredByInterface(x, y) ? new Point(x, y) : null;
-	}
-
-	@SuppressWarnings("unchecked")
-	private void beginTrackedTake(Canvas canvas, int sceneX, int sceneY, int itemId, String itemName,
-		int offsetX, int offsetY, java.util.function.Consumer<String> report)
-	{
-		Point start = beginMovement(canvas);
-		Point target = liveItemPoint(sceneX, sceneY, offsetX, offsetY);
-		if (start == null || target == null)
-		{
-			busy = false;
-			report.accept("result=aborted (tile not on screen when the move started)");
-			return;
-		}
-
-		final Point[] heading = {target};
-		final List<MouseStep>[] steps = new List[] {buildMoveSteps(start, toCanvasPoint(target))};
-		final long[] startedAt = {System.nanoTime()};
-		final int[] index = {0};
-		final int[] reaims = {0};
-
-		Timer timer = new Timer(5, null);
-		timer.addActionListener(event ->
-		{
-			long elapsedMs = (System.nanoTime() - startedAt[0]) / 1_000_000L;
-			while (index[0] < steps[0].size() && elapsedMs >= steps[0].get(index[0]).delayMs)
-			{
-				MouseStep step = steps[0].get(index[0]++);
-				dispatch(canvas, step.id, step.point, step.button, step.clickCount, step.modifiers);
-				lastMousePoint = step.point;
-				mouseLocation = toGamePoint(step.point);
-			}
-
-			// Once the hand is moving, home in on where the item is now
-			// rather than where it was when the click was planned.
-			boolean moving = index[0] > 0;
-			Point live = liveItemPoint(sceneX, sceneY, offsetX, offsetY);
-			if (moving && live != null && live.distance(heading[0]) > LOOT_REAIM_PX
-				&& reaims[0] < LOOT_MAX_REAIMS)
-			{
-				++reaims[0];
-				heading[0] = live;
-				Point from = lastMousePoint == null ? toCanvasPoint(live) : lastMousePoint;
-				steps[0] = buildCorrectionSteps(from, toCanvasPoint(live));
-				startedAt[0] = System.nanoTime();
-				index[0] = 0;
-				return;
-			}
-
-			if (index[0] < steps[0].size())
-			{
-				return;
-			}
-
-			timer.stop();
-			if (movementTimer == timer)
-			{
-				movementTimer = null;
-			}
-
-			// One frame so the client rebuilds the hover menu under the
-			// cursor before it is read.
-			Timer press = new Timer(16 + random.nextInt(14), pressEvent ->
-				pressTrackedTake(canvas, sceneX, sceneY, itemId, itemName, offsetX, offsetY, reaims[0], report));
-			press.setRepeats(false);
-			press.start();
-		});
-
-		movementTimer = timer;
-		timer.start();
-	}
-
-	private void pressTrackedTake(Canvas canvas, int sceneX, int sceneY, int itemId, String itemName,
-		int offsetX, int offsetY, int reaims, java.util.function.Consumer<String> report)
-	{
-		Point live = liveItemPoint(sceneX, sceneY, offsetX, offsetY);
-		String where = "target=" + (live == null ? "offscreen" : live.x + "," + live.y) + " reaimed=" + reaims;
-
-		MenuEntry[] hover = client.getMenuEntries();
-		MenuEntry top = hover == null || hover.length == 0 ? null : hover[hover.length - 1];
-		MenuEntry take = findGroundItemMenuEntry(itemId, sceneX, sceneY);
-		Point cursor = lastMousePoint;
-
-		if (take != null && take == top && cursor != null)
-		{
-			pressAt(canvas, cursor, MouseEvent.BUTTON1, () ->
-			{
-				busy = false;
-				report.accept(where + " result=left-click Take (top option)");
-			});
-			return;
-		}
-
-		if (take != null && cursor != null)
-		{
-			String topText = top == null ? "none"
-				: stripTags(top.getOption()) + " " + stripTags(top.getTarget() == null ? "" : top.getTarget());
-			// Something else is the default here (another item or an NPC):
-			// open the real menu and click this item's exact Take row.
-			pressAt(canvas, cursor, MouseEvent.BUTTON3, () ->
-			{
-				Timer pick = new Timer(45 + random.nextInt(45), pickEvent ->
-				{
-					MenuEntry row = client.isMenuOpen() ? findGroundItemMenuEntry(itemId, sceneX, sceneY) : null;
-					boolean sent = row != null ? clickMenuEntry(row) : invokeMenuEntry(take);
-					busy = false;
-					report.accept(where + " result=right-click menu Take " + (row != null ? "row" : "direct")
-						+ " (top was " + topText + ") sent=" + sent);
-				});
-				pick.setRepeats(false);
-				pick.start();
-			});
-			return;
-		}
-
-		// The item is not under the cursor even after re-aiming: run this
-		// item's exact Take on its tile instead of clicking blind. Take is
-		// the third ground-item option.
-		client.menuAction(sceneX, sceneY, MenuAction.GROUND_ITEM_THIRD_OPTION, itemId, -1, "Take",
-			itemName == null ? "" : itemName);
-		busy = false;
-		report.accept(where + " result=direct Take (item not under cursor)");
-	}
-
-	/** Press and release at a canvas point with a short human hold, then run {@code after}. */
-	private void pressAt(Canvas canvas, Point canvasPoint, int button, Runnable after)
-	{
-		int downMask = button == MouseEvent.BUTTON3 ? InputEvent.BUTTON3_DOWN_MASK : InputEvent.BUTTON1_DOWN_MASK;
-		dispatch(canvas, MouseEvent.MOUSE_PRESSED, canvasPoint, button, 1, downMask);
-		clickLocation = toGamePoint(canvasPoint);
-		clickStartedAt = System.currentTimeMillis();
-		clickButton = button;
-		addClickEffect(clickLocation, button, clickStartedAt);
-
-		Timer release = new Timer(40 + random.nextInt(40), event ->
-		{
-			dispatch(canvas, MouseEvent.MOUSE_RELEASED, canvasPoint, button, 1, 0);
-			dispatch(canvas, MouseEvent.MOUSE_CLICKED, canvasPoint, button, 1, 0);
-			after.run();
-		});
-		release.setRepeats(false);
-		release.start();
+		return gamePoint != null && tilePoly != null && tilePoly.contains(gamePoint);
 	}
 
 	/**
-	 * A short corrective flick (no reaction delay) from the cursor to a
-	 * target that moved, the way a hand tracks a moving object.
+	 * Reads the hover menu (what a left click would do right now).
+	 *
+	 * @return 2 if this item's Take is the top (left-click) option, 1 if it is
+	 * under the cursor but something else is on top, 0 if it is not under the
+	 * cursor at all
 	 */
-	private List<MouseStep> buildCorrectionSteps(Point from, Point to)
+	public int groundItemHoverState(int itemId, int sceneX, int sceneY)
 	{
-		List<MouseStep> steps = new ArrayList<>();
-		double distance = from.distance(to);
-		if (distance < 2.0)
+		if (client.isMenuOpen())
 		{
-			steps.add(new MouseStep(MouseEvent.MOUSE_MOVED, to, MouseEvent.NOBUTTON, 0, 0, 0));
-			return steps;
+			return 0;
 		}
 
-		long duration = Math.round(35 + Math.min(90, distance * 0.6) + random.nextInt(15));
-		int count = (int) Math.max(3, Math.min(10, duration / 10));
-		long delay = 0;
-		for (int i = 1; i <= count; i++)
+		MenuEntry take = findGroundItemMenuEntry(itemId, sceneX, sceneY);
+		if (take == null)
 		{
-			double eased = 1.0 - Math.pow(1.0 - (double) i / count, 2.4);
-			int x = i == count ? to.x : (int) Math.round(from.x + (to.x - from.x) * eased);
-			int y = i == count ? to.y : (int) Math.round(from.y + (to.y - from.y) * eased);
-			delay += Math.max(4, duration / count);
-			steps.add(new MouseStep(MouseEvent.MOUSE_MOVED, new Point(x, y), MouseEvent.NOBUTTON, 0, 0, delay));
+			return 0;
 		}
-		return steps;
+
+		MenuEntry[] entries = client.getMenuEntries();
+		MenuEntry top = entries == null || entries.length == 0 ? null : entries[entries.length - 1];
+		return take == top ? 2 : 1;
+	}
+
+	/**
+	 * Clicks this item's exact Take row in the open context menu.
+	 *
+	 * @return false (and closes the menu) if the menu is not open or has no
+	 * such row
+	 */
+	public boolean clickGroundItemMenuRow(int itemId, int sceneX, int sceneY)
+	{
+		if (!client.isMenuOpen())
+		{
+			return false;
+		}
+
+		MenuEntry entry = findGroundItemMenuEntry(itemId, sceneX, sceneY);
+		if (entry == null)
+		{
+			closeMenu();
+			return false;
+		}
+		return clickMenuEntry(entry);
+	}
+
+	/**
+	 * Runs this item's exact Take on its tile without a mouse click. Take is
+	 * the third ground-item option.
+	 */
+	public boolean invokeGroundItemTake(int sceneX, int sceneY, int itemId, String itemName)
+	{
+		client.menuAction(sceneX, sceneY, MenuAction.GROUND_ITEM_THIRD_OPTION, itemId, -1, "Take",
+			itemName == null ? "" : itemName);
+		return true;
 	}
 
 	/**
@@ -2509,6 +2338,20 @@ public final class GameInput
 
 	private void beginClick(Canvas canvas, Point target, int button)
 	{
+		try
+		{
+			beginClickUnsafe(canvas, target, button);
+		}
+		catch (RuntimeException | Error ex)
+		{
+			stopMovement();
+			busy = false;
+			throw ex;
+		}
+	}
+
+	private void beginClickUnsafe(Canvas canvas, Point target, int button)
+	{
 		Point start = beginMovement(canvas);
 		if (start == null)
 		{
@@ -2522,6 +2365,20 @@ public final class GameInput
 	}
 
 	private void beginMove(Canvas canvas, Point target)
+	{
+		try
+		{
+			beginMoveUnsafe(canvas, target);
+		}
+		catch (RuntimeException | Error ex)
+		{
+			stopMovement();
+			busy = false;
+			throw ex;
+		}
+	}
+
+	private void beginMoveUnsafe(Canvas canvas, Point target)
 	{
 		Point start = beginMovement(canvas);
 		if (start == null)
@@ -2572,6 +2429,30 @@ public final class GameInput
 		Timer timer = new Timer(5, null);
 		timer.addActionListener(event ->
 		{
+			try
+			{
+				playStep(canvas, steps, startedAt, index, timer);
+			}
+			catch (RuntimeException | Error ex)
+			{
+				// Never leave a dead movement holding the busy flag.
+				timer.stop();
+				if (movementTimer == timer)
+				{
+					movementTimer = null;
+				}
+				busy = false;
+				throw ex;
+			}
+		});
+
+		movementTimer = timer;
+		timer.start();
+	}
+
+	private void playStep(Canvas canvas, List<MouseStep> steps, long startedAt, int[] index, Timer timer)
+	{
+		{
 			long elapsedMs = (System.nanoTime() - startedAt) / 1_000_000L;
 
 			while (index[0] < steps.size() && elapsedMs >= steps.get(index[0]).delayMs)
@@ -2602,10 +2483,7 @@ public final class GameInput
 					busy = false;
 				}
 			}
-		});
-
-		movementTimer = timer;
-		timer.start();
+		}
 	}
 
 	private List<MouseStep> buildMoveSteps(Point start, Point target)
