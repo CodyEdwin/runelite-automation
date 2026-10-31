@@ -1225,6 +1225,41 @@ public final class GameInput
 	}
 
 	/**
+	 * Runs one of a tile object's options directly, without any mouse click,
+	 * so nothing drawn in front of the object (another object, a wall) can
+	 * take the click instead. Used as a last resort when the right-click menu
+	 * did not offer the option.
+	 */
+	public boolean invokeObjectAction(TileObject object, String... actions)
+	{
+		if (object == null || actions == null || actions.length == 0)
+		{
+			return false;
+		}
+
+		ObjectComposition composition = client.getObjectDefinition(object.getId());
+		if (composition == null)
+		{
+			return false;
+		}
+
+		int actionIndex = findAction(composition.getActions(), actions);
+		MenuAction type = actionIndex < 0 ? null : objectMenuAction(actionIndex);
+		if (type == null)
+		{
+			return false;
+		}
+
+		long hash = object.getHash();
+		int sceneX = (int) (hash & 0x7F);
+		int sceneY = (int) ((hash >>> 7) & 0x7F);
+		client.menuAction(sceneX, sceneY, type, object.getId(), -1,
+			composition.getActions()[actionIndex],
+			composition.getName() == null ? "" : composition.getName());
+		return true;
+	}
+
+	/**
 	 * Two-step fallback for a tile object: right-click it, then run the exact
 	 * matching entry. Use this when the direct path does not affect the object
 	 * (for example wall objects whose menu identifier is packed differently).

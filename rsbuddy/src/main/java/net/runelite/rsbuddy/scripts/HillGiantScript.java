@@ -263,6 +263,9 @@ public final class HillGiantScript extends Script
 	private WorldPoint lastShedLocation;
 	private int shedStillTicks;
 	private String shedDebugLine;
+	private int doorMenuMisses;
+	private int doorStepAttempts;
+	private int ladderMenuMisses;
 	private WorldPoint doorClickFrom;
 	private WorldPoint ladderClickFrom;
 	private boolean ladderBlocked;
@@ -312,6 +315,9 @@ public final class HillGiantScript extends Script
 		lastShedLocation = null;
 		shedStillTicks = 0;
 		shedDebugLine = null;
+		doorMenuMisses = 0;
+		ladderMenuMisses = 0;
+		doorStepAttempts = 0;
 		doorClickFrom = null;
 		ladderClickFrom = null;
 		ladderBlocked = false;
@@ -764,7 +770,7 @@ public final class HillGiantScript extends Script
 			exitedDoorThisTrip = false;
 			if (location.distanceTo(DUNGEON_LADDER) <= 6)
 			{
-				climbLadder(context, true);
+				climbLadder(context, true, "trip out: in dungeon next to the ladder");
 			}
 			else
 			{
@@ -936,6 +942,7 @@ public final class HillGiantScript extends Script
 			passedDoorThisTrip = false;
 			ladderNoMoveFails = 0;
 			doorClickFrom = null;
+			doorStepAttempts = 0;
 			shedStep = ShedStep.APPROACH_DOOR;
 			walkTowards(context, DOOR_OUTSIDE, true);
 			setStatus("Walking to shed door");
@@ -954,12 +961,20 @@ public final class HillGiantScript extends Script
 		// through. Latch immediately.
 		if (doorClickFrom != null)
 		{
-			if (!location.equals(doorClickFrom))
+			if (crossedDoorLine(location))
 			{
 				passedDoorThisTrip = true;
 				doorClickFrom = null;
 				doorWaitTicks = 0;
-				logShed(context, location, "moved after door click, latch set");
+				logShed(context, location, "moved through the door after door click, latch set");
+			}
+			else if (!location.equals(doorClickFrom) && --doorWaitTicks > 0)
+			{
+				// Moving, but still on the outside (for example stepping up
+				// to the door first). Not proof of anything yet.
+				logShed(context, location, "moving after door click, still outside, no latch");
+				setStatus("Opening door");
+				return;
 			}
 			else if (--doorWaitTicks > 0)
 			{
@@ -1018,12 +1033,33 @@ public final class HillGiantScript extends Script
 			return;
 		}
 
-		logShed(context, location, "latched, clicking ladder");
-		climbLadder(context, false);
+		climbLadder(context, false, "door latch set, climbing down");
 	}
 
 	private void openShedDoor(ScriptContext context, WorldPoint location)
 	{
+		// The door is only ever clicked from its exact outside tile, so the
+		// click itself makes the player walk through it, not up to it.
+		boolean onDoorTile = location.equals(DOOR_OUTSIDE);
+		if (!onDoorTile && location.distanceTo(DOOR_OUTSIDE) <= 1 && doorStepAttempts < 3)
+		{
+			shedStep = ShedStep.APPROACH_DOOR;
+			GameInput input = context.getInput();
+			if (input.isBusy() || isMoving(context.getPlayer()))
+			{
+				return;
+			}
+			// walkTowards stops one tile short, so take the last step with
+			// a minimap click on the exact tile.
+			if (clickMinimap(context, DOOR_OUTSIDE))
+			{
+				++doorStepAttempts;
+				logShed(context, location, "stepping onto the door's outside tile");
+				setStatus("Walking to shed door");
+			}
+			return;
+		}
+
 		shedStep = location.distanceTo(DOOR_OUTSIDE) <= 1 ? ShedStep.OPEN_DOOR : ShedStep.APPROACH_DOOR;
 
 		if (shedStep == ShedStep.APPROACH_DOOR)
@@ -1049,11 +1085,18 @@ public final class HillGiantScript extends Script
 			return;
 		}
 
-		if (!hasAction(context, door.get(), DOOR_OPEN_ACTIONS))
+		if (!hasAction(context, door.get(), DOOR_OPEN_ACTIONS)
+			&& hasAction(context, door.get(), new String[] {"Close"}))
 		{
-			// The door is open: walking in counts as passing it.
-			passedDoorThisTrip = true;
-			logShed(context, location, "door already open, latch set");
+			// The door really is open (it offers Close). Walk in on the
+			// minimap; the shed footprint check sets the latch once inside.
+			// Not latched here: the player is still outside.
+			logShed(context, location, "door already open, walking in (no latch until inside)");
+			if (!context.getInput().isBusy() && !isMoving(context.getPlayer()))
+			{
+				clickMinimap(context, new WorldPoint(SURFACE_DOOR.getX(), SURFACE_DOOR.getY() + 1, 0));
+			}
+			setStatus("Walking into shed");
 			return;
 		}
 
@@ -1070,11 +1113,15 @@ public final class HillGiantScript extends Script
 	 */
 	private boolean clickDoor(ScriptContext context, TileObject door, WorldPoint location)
 	{
-		switch (interactObject(context, door, DOOR_OPEN_ACTIONS, false))
+		switch (exactObjectClick(context, door, DOOR_OPEN_ACTIONS, true))
 		{
 			case SENT:
 				doorWaitTicks = DOOR_WAIT_TICKS;
 				doorClickFrom = location;
+				logShed(context, location, "door Open sent (exact menu entry)");
+				return true;
+			case MENU_OPENED:
+				logShed(context, location, "door right-clicked, picking Open next tick");
 				return true;
 			case CAMERA:
 				setStatus("Turning camera to door");
@@ -1091,6 +1138,19 @@ public final class HillGiantScript extends Script
 	 * ladder on the north row at (3116, 3453). The door row itself is left
 	 * out so standing in the doorway never counts as proof.
 	 */
+	/**
+	 * @return true once the player stands on the door row or further north,
+	 * within the shed's x range: only a door that let the player through can
+	 * put them there from the outside tile
+	 */
+	private static boolean crossedDoorLine(WorldPoint location)
+	{
+		return location != null
+			&& location.getPlane() == 0
+			&& location.getX() >= SHED_MIN_X && location.getX() <= SHED_MAX_X
+			&& location.getY() >= SURFACE_DOOR.getY() && location.getY() <= SHED_MAX_Y;
+	}
+
 	private static boolean isInsideShedArea(WorldPoint location)
 	{
 		return location != null
@@ -1131,38 +1191,42 @@ public final class HillGiantScript extends Script
 	}
 
 	/**
-	 * The return trip as a fixed sequence: walk to the door, open it, get
-	 * inside, then climb. The ladder is never clicked while the door is shut
-	 * and the player is not known to be inside, and a ladder click that does
-	 * not move the player is treated as "blocked by the door". Every fallback
-	 * counts towards a hard cap, so the trip can never loop forever.
+	 * Clicks exactly one option of one object. A plain left click lands on
+	 * whatever is drawn on top at that pixel; around the shed that can be the
+	 * ladder in front of the door (or the door in front of the ladder), so the
+	 * shed objects are never left-clicked. The option is picked from the real
+	 * right-click menu by object id and option, and after two menus that did
+	 * not offer it, it is run directly without a mouse click.
 	 */
-	/**
-	 * @return true if a climb-down click can reach the ladder from here:
-	 * either the door is open, or the player is confirmed to be inside
-	 */
-	/**
-	 * Waits for the last door click to play out: the door turning into its
-	 * open state, or the player being moved through it (the brass-key door
-	 * lets the player through and stays shut). Decides inside/outside from
-	 * which way the player moved, never from what is on screen.
-	 *
-	 * @return true while still waiting
-	 */
-	/**
-	 * Opens the shed door with one click. Turns the camera first if the door
-	 * is off screen, so the click always lands on the door itself.
-	 */
-	/**
-	 * The return trip as a fixed sequence: walk to the door, open it once,
-	 * step inside, then commit to the ladder. Each step only moves forward
-	 * (or back one step after a clear failure), so the script can no longer
-	 * bounce between the door and the ladder.
-	 */
-	/**
-	 * Opens the shed door with one click. Turns the camera first if the door
-	 * is off screen, so the click always lands on the door itself.
-	 */
+	private ObjectClick exactObjectClick(ScriptContext context, TileObject object, String[] actions, boolean door)
+	{
+		int misses = door ? doorMenuMisses : ladderMenuMisses;
+		if (misses >= 2)
+		{
+			if (context.getClient().isMenuOpen())
+			{
+				context.getInput().closeMenu();
+				return ObjectClick.NONE;
+			}
+
+			if (door) doorMenuMisses = 0; else ladderMenuMisses = 0;
+			return context.getInput().invokeObjectAction(object, actions) ? ObjectClick.SENT : ObjectClick.NONE;
+		}
+
+		boolean menuOpen = context.getClient().isMenuOpen();
+		ObjectClick result = interactObject(context, object, actions, true);
+		if (menuOpen && result == ObjectClick.NONE)
+		{
+			// The open menu did not contain the option for this object.
+			if (door) ++doorMenuMisses; else ++ladderMenuMisses;
+		}
+		else if (result == ObjectClick.SENT)
+		{
+			if (door) doorMenuMisses = 0; else ladderMenuMisses = 0;
+		}
+		return result;
+	}
+
 	private enum ObjectClick
 	{
 		NONE,
@@ -1213,11 +1277,19 @@ public final class HillGiantScript extends Script
 	 * not move at all is reported through {@link #ladderBlocked} so the caller
 	 * can deal with the door instead of clicking the ladder again.
 	 */
-	private void climbLadder(ScriptContext context, boolean up)
+	private void climbLadder(ScriptContext context, boolean up, String reason)
 	{
 		GameInput input = context.getInput();
 		Player player = context.getPlayer();
 		WorldPoint location = player == null ? null : player.getWorldLocation();
+
+		// Hard guard: the shed ladder can only ever be clicked once the door
+		// latch is set on the return trip.
+		if (!up && !passedDoorThisTrip)
+		{
+			logShed(context, location, "REFUSED ladder click (door latch not set): " + reason);
+			return;
+		}
 		WorldPoint ladderTile = up ? DUNGEON_LADDER : SURFACE_LADDER;
 		String[] actions = up ? CLIMB_UP_ACTIONS : CLIMB_DOWN_ACTIONS;
 
@@ -1249,12 +1321,6 @@ public final class HillGiantScript extends Script
 			return;
 		}
 
-		if (context.getClient().isMenuOpen())
-		{
-			input.closeMenu();
-			return;
-		}
-
 		if (up && ladderAttempts >= LADDER_ATTEMPTS)
 		{
 			// Hard cap for the dungeon side too: step back to the ladder tile
@@ -1281,13 +1347,18 @@ public final class HillGiantScript extends Script
 			return;
 		}
 
-		switch (interactObject(context, object, actions, false))
+		switch (exactObjectClick(context, object, actions, false))
 		{
 			case SENT:
 				++ladderAttempts;
 				ladderWaitTicks = LADDER_WAIT_TICKS;
 				ladderClickFrom = location;
+				logShed(context, location, (up ? "ladder Climb-up" : "ladder Climb-down") + " sent (exact menu entry, id "
+					+ object.getId() + "): " + reason);
 				setStatus(up ? "Climbing up" : "Climbing down");
+				break;
+			case MENU_OPENED:
+				logShed(context, location, "ladder right-clicked, picking climb next tick: " + reason);
 				break;
 			case CAMERA:
 				setStatus("Turning camera to ladder");
@@ -1707,12 +1778,24 @@ public final class HillGiantScript extends Script
 			return;
 		}
 
+		// Near the shed every walk click goes on the minimap. A click in the
+		// game view lands on whatever is drawn at that pixel, and there that
+		// can be the ladder (Climb-down) or the door (Open).
+		boolean nearShed = !isInDungeon(location)
+			&& location.distanceTo(SURFACE_LADDER) <= SHED_LATCH_DISTANCE + 4;
+
 		// Minimap clicks never hit objects, so routes that pass a door
 		// (the shed door in particular) cannot accidentally toggle it.
-		if (useMinimap && clickMinimap(context, next))
+		if ((useMinimap || nearShed) && clickMinimap(context, next))
 		{
 			lastWalkClick = next;
 			walkClickTicks = 0;
+			return;
+		}
+
+		if (nearShed)
+		{
+			// Never fall back to a game-view click here.
 			return;
 		}
 
