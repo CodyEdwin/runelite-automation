@@ -163,6 +163,9 @@ public final class HillGiantScript extends Script
 
 	// Giant key (Obor's key), item 20754; the gameval name is HILLGIANT_BOSS_KEY.
 	private static final int GIANT_KEY_ID = ItemID.HILLGIANT_BOSS_KEY;
+	// Ensouled giant head as dropped, item 13474; the gameval name is
+	// ARCEUUS_CORPSE_GIANT_INITIAL.
+	private static final int ENSOULED_GIANT_HEAD_ID = ItemID.ARCEUUS_CORPSE_GIANT_INITIAL;
 
 	/**
 	 * Only the requested hill giant drops are picked up.
@@ -177,7 +180,8 @@ public final class HillGiantScript extends Script
 			ItemID.UNIDENTIFIED_KWUARM,
 			ItemID.UNIDENTIFIED_DWARF_WEED,
 			ItemID.LAWRUNE,
-			GIANT_KEY_ID)));
+			GIANT_KEY_ID,
+			ENSOULED_GIANT_HEAD_ID)));
 
 	private static boolean isLootItem(int itemId)
 	{
@@ -2443,7 +2447,7 @@ public final class HillGiantScript extends Script
 					{
 						score -= 1;
 					}
-					if (groundItem.getId() == GIANT_KEY_ID)
+					if (groundItem.getId() == GIANT_KEY_ID || groundItem.getId() == ENSOULED_GIANT_HEAD_ID)
 					{
 						// The rarest drop: take it before anything else
 						// within a few tiles.
