@@ -103,7 +103,7 @@ public final class HillGiantScript extends Script
 	private static final int LADDER_NO_MOVE_LIMIT = 3;
 	// On the way out, standing still inside the shed this long while trying to
 	// walk to the bank releases the exit latch once.
-	private static final int EXIT_STUCK_TICKS = 8;
+	private static final int WATCHDOG_TICKS = 10;
 
 	// Brass-key shed footprint from the OSRS wiki: x 3113-3117, y 3450-3453,
 	// door on the south row, ladder on the north row. The player stands on
@@ -268,11 +268,20 @@ public final class HillGiantScript extends Script
 	private boolean passedDoorThisTrip;
 	private boolean exitedDoorThisTrip;
 	private int ladderNoMoveFails;
-	private WorldPoint lastShedLocation;
-	private int shedStillTicks;
 	private String shedDebugLine;
 	private int doorMenuMisses;
 	private int doorStepAttempts;
+	// Trip out: set while in the dungeon, consumed on the first surface tick.
+	// Arriving on the surface by the ladder is proof of being inside the
+	// shed, with no box check.
+	private boolean climbedUpPending;
+	private boolean insideShedByEvent;
+	private int exitDoorAttempts;
+	// Shed watchdog: no position change and no new action for this long.
+	private WorldPoint watchdogLocation;
+	private int watchdogTicks;
+	private boolean actionThisTick;
+	private int stuckRecoveries;
 	private int ladderMenuMisses;
 	private WorldPoint doorClickFrom;
 	private WorldPoint ladderClickFrom;
@@ -320,12 +329,17 @@ public final class HillGiantScript extends Script
 		passedDoorThisTrip = false;
 		exitedDoorThisTrip = false;
 		ladderNoMoveFails = 0;
-		lastShedLocation = null;
-		shedStillTicks = 0;
 		shedDebugLine = null;
 		doorMenuMisses = 0;
 		ladderMenuMisses = 0;
 		doorStepAttempts = 0;
+		climbedUpPending = false;
+		insideShedByEvent = false;
+		exitDoorAttempts = 0;
+		watchdogLocation = null;
+		watchdogTicks = 0;
+		actionThisTick = false;
+		stuckRecoveries = 0;
 		doorClickFrom = null;
 		ladderClickFrom = null;
 		ladderBlocked = false;
@@ -382,12 +396,14 @@ public final class HillGiantScript extends Script
 				break;
 			case WALK_TO_BANK:
 				walkToBank(context);
+				shedWatchdog(context);
 				break;
 			case BANK:
 				bank(context);
 				break;
 			case WALK_TO_GIANTS:
 				walkToGiants(context);
+				shedWatchdog(context);
 				break;
 		}
 	}
@@ -776,6 +792,8 @@ public final class HillGiantScript extends Script
 		{
 			shedStep = null;
 			exitedDoorThisTrip = false;
+			// Whatever happens next on the surface, it starts inside the shed.
+			climbedUpPending = true;
 			if (location.distanceTo(DUNGEON_LADDER) <= 6)
 			{
 				climbLadder(context, true, "trip out: in dungeon next to the ladder");
@@ -792,10 +810,25 @@ public final class HillGiantScript extends Script
 		ladderAttempts = 0;
 		ladderClickFrom = null;
 
+		if (climbedUpPending)
+		{
+			// First surface tick after climbing up: inside by that event alone.
+			climbedUpPending = false;
+			insideShedByEvent = true;
+			exitedDoorThisTrip = false;
+			doorClickFrom = null;
+			doorWaitTicks = 0;
+			exitDoorAttempts = 0;
+			lastWalkClick = null;
+			lastWalkTarget = null;
+			logShed(context, location, "trip out: arrived on surface by the ladder, inside by event");
+		}
+
 		if (location.distanceTo(WEST_VARROCK_BANK) <= 8)
 		{
 			shedStep = null;
 			exitedDoorThisTrip = false;
+			insideShedByEvent = false;
 			state = State.BANK;
 			setStatus("Banking");
 			return;
@@ -808,73 +841,55 @@ public final class HillGiantScript extends Script
 			return;
 		}
 
-		// Latched: the door was used (or we are already outside). Never click
-		// it again on this trip; only walk. If the walk makes no progress at
-		// all for a while we are still shut in, so release the latch once.
-		if (nearShed && isInsideShedArea(location))
-		{
-			if (location.equals(lastShedLocation))
-			{
-				++shedStillTicks;
-			}
-			else
-			{
-				shedStillTicks = 0;
-			}
-
-			if (shedStillTicks >= EXIT_STUCK_TICKS)
-			{
-				shedStillTicks = 0;
-				exitedDoorThisTrip = false;
-				logShed(context, location, "exit: still inside after walking, releasing latch");
-			}
-		}
-		lastShedLocation = location;
-
 		if (nearShed)
 		{
-			logShed(context, location, "exit: latched, walking to bank");
+			logShed(context, location, "exit: latched (outside), walking to bank");
 		}
-
 		walkTowards(context, WEST_VARROCK_BANK, true);
 		setStatus("Walking to bank");
 	}
 
 	/**
-	 * Leaves the shed after climbing up: one door click, then the latch is set
-	 * as soon as the player moves, and the door is never clicked again until
-	 * the bank.
+	 * Trip out only (inventory full). Leaves the shed: one door click, then
+	 * nothing but waiting until the player is south of the door's wall line
+	 * (y 3449 or less). Only that crossing sets the exit latch; stepping
+	 * towards the door inside the shed does not, and no walk click is sent
+	 * while the door action is still playing out (a walk click would cancel
+	 * it).
 	 */
 	private void exitShed(ScriptContext context, WorldPoint location)
 	{
+		Player player = context.getPlayer();
+		boolean inside = insideShedByEvent
+			? location.getY() >= SURFACE_DOOR.getY()
+			: isInShedFootprint(location);
+
+		if (!inside)
+		{
+			exitedDoorThisTrip = true;
+			insideShedByEvent = false;
+			doorClickFrom = null;
+			doorWaitTicks = 0;
+			exitDoorAttempts = 0;
+			logShed(context, location, "exit: south of the door line, latch set, walking to bank");
+			walkTowards(context, WEST_VARROCK_BANK, true);
+			setStatus("Walking to bank");
+			return;
+		}
+
 		if (doorClickFrom != null)
 		{
-			if (!location.equals(doorClickFrom))
+			--doorWaitTicks;
+			// Let the door action play out; give a moving player a little
+			// longer, but never wait forever.
+			if (doorWaitTicks > 0 || (isMoving(player) && doorWaitTicks > -DOOR_WAIT_TICKS))
 			{
-				exitedDoorThisTrip = true;
-				doorClickFrom = null;
-				logShed(context, location, "exit: moved after door click, latch set");
-				walkTowards(context, WEST_VARROCK_BANK, true);
-				setStatus("Walking to bank");
-				return;
-			}
-
-			if (--doorWaitTicks > 0)
-			{
-				logShed(context, location, "exit: waiting for door click");
+				logShed(context, location, "exit: waiting for the door to let us out");
 				setStatus("Leaving shed");
 				return;
 			}
-
 			doorClickFrom = null;
-		}
-
-		if (!isInsideShedArea(location) && location.getY() < SURFACE_DOOR.getY())
-		{
-			// Already outside, south of the door.
-			exitedDoorThisTrip = true;
-			logShed(context, location, "exit: already outside, latch set");
-			return;
+			logShed(context, location, "exit: door click did not take us out, clicking door again");
 		}
 
 		GameInput input = context.getInput();
@@ -884,17 +899,138 @@ public final class HillGiantScript extends Script
 		}
 
 		Optional<TileObject> door = findShedDoor(context);
-		if (door.isEmpty() || !hasAction(context, door.get(), DOOR_OPEN_ACTIONS))
+		if (door.isEmpty())
 		{
-			exitedDoorThisTrip = true;
-			logShed(context, location, "exit: door open or not found, latch set");
+			logShed(context, location, "exit: door not found, stepping towards it");
+			if (clickMinimap(context, SURFACE_DOOR))
+			{
+				doorClickFrom = location;
+				doorWaitTicks = DOOR_WAIT_TICKS;
+			}
 			return;
 		}
 
-		logShed(context, location, "exit: clicking door");
+		if (!hasAction(context, door.get(), DOOR_OPEN_ACTIONS))
+		{
+			// Door stands open: just walk out through it.
+			logShed(context, location, "exit: door is open, walking out");
+			if (clickMinimap(context, DOOR_OUTSIDE))
+			{
+				doorClickFrom = location;
+				doorWaitTicks = DOOR_WAIT_TICKS;
+			}
+			return;
+		}
+
+		++exitDoorAttempts;
+		logShed(context, location, "exit: inside, clicking door (attempt " + exitDoorAttempts + ")");
 		if (clickDoor(context, door.get(), location))
 		{
 			setStatus("Leaving shed");
+		}
+	}
+
+	/**
+	 * @return true if the tile is on or inside the shed's wiki footprint
+	 * (x 3113-3117, y 3450-3453). Only used on the trip out when the script
+	 * started on the surface without having climbed up.
+	 */
+	private static boolean isInShedFootprint(WorldPoint location)
+	{
+		return location != null
+			&& location.getPlane() == 0
+			&& location.getX() >= 3113 && location.getX() <= 3117
+			&& location.getY() >= SHED_MIN_Y && location.getY() <= SHED_MAX_Y;
+	}
+
+	/**
+	 * Generic watchdog for the shed sequence on both trips. If the player
+	 * has not moved, is not animating and the script sent no new action for
+	 * {@link #WATCHDOG_TICKS} ticks while at the shed (surface) or the
+	 * dungeon ladder, it logs a STUCK line with all state and recovers:
+	 * input reset, wait/attempt counters cleared, and the trip's door latch
+	 * released if the player is still on the wrong side.
+	 */
+	private void shedWatchdog(ScriptContext context)
+	{
+		boolean acted = actionThisTick;
+		actionThisTick = false;
+
+		Player player = context.getPlayer();
+		WorldPoint location = player == null ? null : player.getWorldLocation();
+		boolean atShed = location != null && (isInDungeon(location)
+			? location.distanceTo(DUNGEON_LADDER) <= 8
+			: location.distanceTo(SURFACE_LADDER) <= SHED_LATCH_DISTANCE + 4);
+		if (!atShed || state != State.WALK_TO_BANK && state != State.WALK_TO_GIANTS)
+		{
+			watchdogLocation = location;
+			watchdogTicks = 0;
+			return;
+		}
+
+		boolean progress = acted || !location.equals(watchdogLocation) || isAnimating(player);
+		watchdogLocation = location;
+		if (progress)
+		{
+			watchdogTicks = 0;
+			return;
+		}
+
+		if (++watchdogTicks < WATCHDOG_TICKS)
+		{
+			return;
+		}
+
+		watchdogTicks = 0;
+		++stuckRecoveries;
+		logShed(context, location, "STUCK for " + WATCHDOG_TICKS + " ticks (recovery " + stuckRecoveries
+			+ ") doorClickFrom=" + doorClickFrom + " doorWait=" + doorWaitTicks + " ladderWait=" + ladderWaitTicks
+			+ " ladderClickFrom=" + ladderClickFrom + " ladderBlocked=" + ladderBlocked
+			+ " insideByEvent=" + insideShedByEvent + " climbedUpPending=" + climbedUpPending
+			+ " doorStep=" + doorStepAttempts + " exitAttempts=" + exitDoorAttempts
+			+ " menuOpen=" + context.getClient().isMenuOpen() + " inputBusy=" + context.getInput().isBusy()
+			+ " lastWalkClick=" + lastWalkClick + " status=" + getStatus());
+
+		GameInput input = context.getInput();
+		input.reset();
+		if (context.getClient().isMenuOpen())
+		{
+			input.closeMenu();
+		}
+		doorClickFrom = null;
+		doorWaitTicks = 0;
+		ladderWaitTicks = 0;
+		ladderAttempts = 0;
+		ladderClickFrom = null;
+		ladderBlocked = false;
+		ladderNoMoveFails = 0;
+		doorMenuMisses = 0;
+		ladderMenuMisses = 0;
+		lastWalkClick = null;
+		lastWalkTarget = null;
+
+		if (state == State.WALK_TO_BANK && !isInDungeon(location))
+		{
+			if (location.getY() >= SURFACE_DOOR.getY() && isInShedFootprint(location))
+			{
+				// Still in the shed: the door has to be used again.
+				exitedDoorThisTrip = false;
+				insideShedByEvent = true;
+				logShed(context, location, "STUCK recovery: still inside, door will be clicked again");
+			}
+		}
+		else if (state == State.WALK_TO_GIANTS && !isInDungeon(location))
+		{
+			if (!isInShedInterior(location))
+			{
+				passedDoorThisTrip = false;
+				doorStepAttempts = 0;
+				logShed(context, location, "STUCK recovery: outside, back to the door's outside tile");
+			}
+			else
+			{
+				logShed(context, location, "STUCK recovery: inside, retrying the ladder");
+			}
 		}
 	}
 
@@ -1137,11 +1273,13 @@ public final class HillGiantScript extends Script
 		switch (exactObjectClick(context, door, DOOR_OPEN_ACTIONS, true))
 		{
 			case SENT:
+				actionThisTick = true;
 				doorWaitTicks = DOOR_WAIT_TICKS;
 				doorClickFrom = location;
 				logShed(context, location, "door Open sent (exact menu entry)");
 				return true;
 			case MENU_OPENED:
+				actionThisTick = true;
 				logShed(context, location, "door right-clicked, picking Open next tick");
 				return true;
 			case CAMERA:
@@ -1381,6 +1519,7 @@ public final class HillGiantScript extends Script
 		switch (exactObjectClick(context, object, actions, false))
 		{
 			case SENT:
+				actionThisTick = true;
 				++ladderAttempts;
 				ladderWaitTicks = LADDER_WAIT_TICKS;
 				ladderClickFrom = location;
@@ -1389,6 +1528,7 @@ public final class HillGiantScript extends Script
 				setStatus(up ? "Climbing up" : "Climbing down");
 				break;
 			case MENU_OPENED:
+				actionThisTick = true;
 				logShed(context, location, "ladder right-clicked, picking climb next tick: " + reason);
 				break;
 			case CAMERA:
@@ -1827,6 +1967,7 @@ public final class HillGiantScript extends Script
 		if (nearShed)
 		{
 			// Never fall back to a game-view click here.
+			log.info("[HillGiant shed] minimap walk click to {} failed near the shed", next);
 			return;
 		}
 
@@ -1834,6 +1975,7 @@ public final class HillGiantScript extends Script
 		{
 			if (input.walkTo(path.get(i)))
 			{
+				actionThisTick = true;
 				lastWalkClick = path.get(i);
 				walkClickTicks = 0;
 				return;
@@ -1862,7 +2004,9 @@ public final class HillGiantScript extends Script
 			return false;
 		}
 
-		return context.getInput().click(new java.awt.Point(minimapPoint.getX(), minimapPoint.getY()));
+		boolean clicked = context.getInput().click(new java.awt.Point(minimapPoint.getX(), minimapPoint.getY()));
+		actionThisTick |= clicked;
+		return clicked;
 	}
 
 	private List<WorldPoint> findPath(ScriptContext context, WorldPoint goal)
