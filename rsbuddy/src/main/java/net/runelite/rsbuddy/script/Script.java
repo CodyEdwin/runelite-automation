@@ -134,6 +134,16 @@ public abstract class Script
 	}
 
 	/**
+	 * Whether this script wants the fast, attentive-player mouse profile
+	 * instead of the default relaxed one. Off by default so existing scripts
+	 * keep their timing.
+	 */
+	public boolean useFastMouse()
+	{
+		return false;
+	}
+
+	/**
 	 * Extra lines rendered by the status overlay while this script is running.
 	 * Scripts can override this to expose their own counters and progress.
 	 */
