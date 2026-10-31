@@ -178,6 +178,7 @@ public final class HillGiantScript extends Script
 			ItemID.BIG_BONES,
 			ItemID.BODY_TALISMAN,
 			ItemID.UNCUT_DIAMOND,
+			ItemID.UNCUT_EMERALD,
 			ItemID.UNIDENTIFIED_RANARR,
 			ItemID.NATURERUNE,
 			ItemID.UNIDENTIFIED_KWUARM,
