@@ -224,3 +224,5 @@ In-game commands:
 
 Target object, action, and search distance are configured in the plugin settings. Config-backed
 scripts are recreated from the current settings when started from the panel.
+
+Shed return trip (strict order): walk on the minimap to the door's outside tile (3115, 3449), right-click the door and pick its exact Open entry, then latch only once the player has crossed into the shed (x 3113-3117, y >= 3450) or stands on the shed floor (y 3451-3453). The ladder is refused until the latch is set. Near the shed, walking uses only minimap clicks and the door/ladder are only clicked via their exact menu entry, so a click can never land on the ladder drawn over the wall. Every ladder click logs its reason under `[HillGiant shed]`.
