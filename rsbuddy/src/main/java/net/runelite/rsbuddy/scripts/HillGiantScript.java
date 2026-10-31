@@ -266,6 +266,9 @@ public final class HillGiantScript extends Script
 	private int busyTicks;
 	private int cameraBusyTicks;
 	private int exceptionCount;
+	// Set when the brass key is missing from both the inventory and the
+	// bank: the script stays at the bank instead of walking back keyless.
+	private boolean haltedNoKey;
 	private int bankCloseTicks;
 	private NPC attackTarget;
 	private int attackPendingTicks;
@@ -356,6 +359,7 @@ public final class HillGiantScript extends Script
 		recentActionTicks = 0;
 		actionThisTick = false;
 		stuckRecoveries = 0;
+		haltedNoKey = false;
 		doorClickFrom = null;
 		ladderClickFrom = null;
 		ladderBlocked = false;
@@ -393,6 +397,12 @@ public final class HillGiantScript extends Script
 	private void tickSafely()
 	{
 		ScriptContext context = getContext();
+
+		if (haltedNoKey)
+		{
+			setStatus("Stopped: no brass key in inventory or bank");
+			return;
+		}
 
 		if (!context.isLoggedIn())
 		{
@@ -1835,11 +1845,27 @@ public final class HillGiantScript extends Script
 			}
 			case WAIT_DEPOSIT:
 			{
-				if (inventory.getEmptySlots() >= Inventory.SIZE)
+				// The brass key sits in a locked inventory slot (slot 1), so
+				// Deposit inventory leaves it in place. The deposit is done
+				// once nothing but the key is left.
+				int keys = inventory.countItem(BRASS_KEY_ID);
+				if (inventory.getEmptySlots() + keys >= Inventory.SIZE)
 				{
-					bankStage = BankStage.WITHDRAW_KEY;
 					bankAttempts = 0;
-					setStatus("Withdrawing brass key");
+					if (keys >= BRASS_KEY_AMOUNT)
+					{
+						bankStage = BankStage.LEAVE;
+						setStatus("Leaving bank");
+					}
+					else
+					{
+						// Safety fallback only: the locked slot did not keep the
+						// key (slot unlocked, or the key was never there).
+						log.warn("[HillGiant] brass key NOT in inventory after depositing;"
+							+ " the locked slot did not keep it. Withdrawing one from the bank.");
+						bankStage = BankStage.WITHDRAW_KEY;
+						setStatus("Brass key missing, withdrawing one");
+					}
 					return;
 				}
 
@@ -1865,11 +1891,12 @@ public final class HillGiantScript extends Script
 
 				if (++bankAttempts > BANK_STAGE_ATTEMPTS)
 				{
-					// No key available in the bank. Leave instead of
-					// retrying forever.
-					bankStage = BankStage.LEAVE;
-					bankAttempts = 0;
-					setStatus("No brass key in bank");
+					// No key in the inventory and none in the bank. Walking
+					// back would only get stuck at the shed door, so stop here.
+					log.error("[HillGiant] no brass key in the inventory or the bank; stopping."
+						+ " Put a brass key in inventory slot 1 (locked) and restart the script.");
+					haltedNoKey = true;
+					setStatus("Stopped: no brass key in inventory or bank");
 					return;
 				}
 
