@@ -253,10 +253,7 @@ public final class HillGiantScript extends Script
 	private int doorAttempts;
 	private int ladderWaitTicks;
 	private int ladderAttempts;
-	private boolean shedBoundaryKnown;
-	private boolean shedBoundaryVertical;
-	private boolean shedLadderAbove;
-	private int shedBoundary;
+	private int doorStillTicks;
 
 	public HillGiantScript()
 	{
@@ -305,7 +302,7 @@ public final class HillGiantScript extends Script
 		doorAttempts = 0;
 		ladderWaitTicks = 0;
 		ladderAttempts = 0;
-		shedBoundaryKnown = false;
+		doorStillTicks = 0;
 		setStatus("Ready");
 	}
 
@@ -866,9 +863,16 @@ public final class HillGiantScript extends Script
 			// Too many failed door/ladder rounds. Back off to the front of the
 			// door and start the sequence over with fresh state.
 			shedCycles = 0;
-			insideShedConfirmed = false;
-			setShedStep(ShedStep.APPROACH_DOOR);
 			cooldown = 2;
+			if (isInsideShed(context, location))
+			{
+				// Committed inside: never go back out through the door.
+				setShedStep(ShedStep.CLIMB);
+				walkTowards(context, SURFACE_LADDER);
+				setStatus("Stuck at shed ladder, re-approaching it");
+				return;
+			}
+			setShedStep(ShedStep.APPROACH_DOOR);
 			setStatus("Stuck at shed, re-approaching the door");
 			return;
 		}
@@ -938,11 +942,21 @@ public final class HillGiantScript extends Script
 
 		if (ladderBlocked)
 		{
-			// The last ladder click did not move us at all: the door is in
-			// the way. Go and open it.
 			ladderBlocked = false;
-			insideShedConfirmed = false;
 			++shedCycles;
+			if (insideShedConfirmed && location.getY() > SURFACE_DOOR.getY())
+			{
+				// Inside the shed: the door is not what is in the way, so do
+				// not go back out through it. Step to the ladder and retry.
+				ladderAttempts = 0;
+				walkTowards(context, SURFACE_LADDER);
+				setStatus("Ladder click missed, retrying");
+				return;
+			}
+
+			// The last ladder click did not move us at all and we are not
+			// inside: the door is in the way. Go and open it.
+			insideShedConfirmed = false;
 			setShedStep(ShedStep.APPROACH_DOOR);
 			setStatus("Ladder blocked, opening door");
 			return;
@@ -951,6 +965,13 @@ public final class HillGiantScript extends Script
 		if (ladderAttempts >= LADDER_ATTEMPTS && ladderWaitTicks <= 0)
 		{
 			++shedCycles;
+			if (insideShedConfirmed)
+			{
+				ladderAttempts = 0;
+				walkTowards(context, SURFACE_LADDER);
+				setStatus("Ladder did not work, stepping to it");
+				return;
+			}
 			setShedStep(ShedStep.APPROACH_DOOR);
 			setStatus("Ladder did not work, re-approaching");
 			return;
@@ -1042,17 +1063,24 @@ public final class HillGiantScript extends Script
 			return false;
 		}
 
-		if (!location.equals(doorClickFrom) && !busy)
+		doorStillTicks = busy ? 0 : doorStillTicks + 1;
+		if (!location.equals(doorClickFrom) && doorStillTicks >= 2)
 		{
-			// We were moved through the door. Closer to the ladder means we
-			// came in; further away means we went out.
-			insideShedConfirmed = location.distanceTo(SURFACE_LADDER) < doorClickFrom.distanceTo(SURFACE_LADDER);
+			// The player was moved and has settled (two still ticks, so a
+			// pause while walking up to the door does not count). Judge the
+			// side by real coordinates: north of the door row is inside,
+			// south of it is outside. On the door row itself, coming from the
+			// south means we went in.
+			int doorY = SURFACE_DOOR.getY();
+			insideShedConfirmed = location.getY() > doorY
+				|| (location.getY() == doorY && doorClickFrom.getY() < doorY);
 			doorClickFrom = null;
 			doorWaitTicks = 0;
+			doorStillTicks = 0;
 			return false;
 		}
 
-		if (busy && doorWaitTicks > -DOOR_WAIT_TICKS)
+		if (doorWaitTicks > -DOOR_WAIT_TICKS)
 		{
 			return true;
 		}
@@ -1060,6 +1088,7 @@ public final class HillGiantScript extends Script
 		// Nothing happened. Let the caller click again.
 		doorClickFrom = null;
 		doorWaitTicks = 0;
+		doorStillTicks = 0;
 		return false;
 	}
 
@@ -1074,6 +1103,7 @@ public final class HillGiantScript extends Script
 			case SENT:
 				++doorAttempts;
 				doorWaitTicks = DOOR_WAIT_TICKS;
+				doorStillTicks = 0;
 				doorClickFrom = location;
 				return true;
 			case MENU_OPENED:
@@ -1270,11 +1300,14 @@ public final class HillGiantScript extends Script
 	}
 
 	/**
-	 * Decides whether the player stands inside the brass-key shed. Being near
-	 * the ladder is not enough (the outside of the shed wall is just as
-	 * close), so this needs positive proof: having just climbed up the
-	 * ladder, or having been moved through the door towards the ladder. The
-	 * door's wall edge, once known, can still rule a tile out.
+	 * Decides whether the player stands inside the brass-key shed. The door
+	 * is at (3115, 3450) and the ladder at (3116, 3453), so the shed's inside
+	 * is north of the door row and the outside in front of the door is south
+	 * of it. Being near the ladder is not enough (the outside of the shed
+	 * wall is just as close), so "inside" needs positive proof: having just
+	 * climbed up the ladder, or having been moved through the door to its
+	 * north side. Once proven it stays committed until the player is clearly
+	 * outside: south of the door row or more than a few tiles from the shed.
 	 */
 	private boolean isInsideShed(ScriptContext context, WorldPoint location)
 	{
@@ -1283,75 +1316,15 @@ public final class HillGiantScript extends Script
 			return false;
 		}
 
-		if (Math.abs(location.getX() - SURFACE_LADDER.getX()) > SHED_RADIUS
-			|| Math.abs(location.getY() - SURFACE_LADDER.getY()) > SHED_RADIUS)
-		{
-			insideShedConfirmed = false;
-			return false;
-		}
-
-		learnShedBoundary(context);
-		if (shedBoundaryKnown && !isOnLadderSide(location))
+		boolean nearShed = Math.abs(location.getX() - SURFACE_LADDER.getX()) <= SHED_RADIUS
+			&& Math.abs(location.getY() - SURFACE_LADDER.getY()) <= SHED_RADIUS;
+		if (!nearShed || location.getY() < SURFACE_DOOR.getY())
 		{
 			insideShedConfirmed = false;
 			return false;
 		}
 
 		return insideShedConfirmed;
-	}
-
-	/**
-	 * Reads which edge of its tile the shed door sits on, once, while the
-	 * door is loaded. That edge is the exact line between inside and outside.
-	 */
-	private void learnShedBoundary(ScriptContext context)
-	{
-		if (shedBoundaryKnown)
-		{
-			return;
-		}
-
-		Optional<TileObject> door = findShedDoor(context);
-		if (door.isEmpty() || !(door.get() instanceof WallObject) || door.get().getWorldLocation() == null)
-		{
-			return;
-		}
-
-		WallObject wall = (WallObject) door.get();
-		int orientation = wall.getOrientationA();
-		WorldPoint doorTile = wall.getWorldLocation();
-		switch (orientation)
-		{
-			case 1: // west edge
-				shedBoundaryVertical = true;
-				shedBoundary = doorTile.getX();
-				break;
-			case 4: // east edge
-				shedBoundaryVertical = true;
-				shedBoundary = doorTile.getX() + 1;
-				break;
-			case 2: // north edge
-				shedBoundaryVertical = false;
-				shedBoundary = doorTile.getY() + 1;
-				break;
-			case 8: // south edge
-				shedBoundaryVertical = false;
-				shedBoundary = doorTile.getY();
-				break;
-			default:
-				return;
-		}
-
-		// The boundary lies between coordinate (boundary - 1) and boundary.
-		int ladder = shedBoundaryVertical ? SURFACE_LADDER.getX() : SURFACE_LADDER.getY();
-		shedLadderAbove = ladder >= shedBoundary;
-		shedBoundaryKnown = true;
-	}
-
-	private boolean isOnLadderSide(WorldPoint location)
-	{
-		int coordinate = shedBoundaryVertical ? location.getX() : location.getY();
-		return shedLadderAbove ? coordinate >= shedBoundary : coordinate < shedBoundary;
 	}
 
 	private static boolean hasAction(ScriptContext context, TileObject object, String[] actions)
