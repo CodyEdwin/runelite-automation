@@ -177,12 +177,14 @@ sardines expected).
 - Spots a kill on the tick the death animation starts, moves the mouse onto the next giant while
   the corpse fades, and loots as soon as the drops appear, nearest first.
 - Never clicks again while fighting, walking to loot, or climbing.
-- Getting back from the bank is a fixed sequence: walk to the door, open it, get inside, climb down.
-  The ladder is never clicked while the door is shut, unless the player is known to be inside
-  (just climbed up, or was moved through the door to its north side: the door is at 3115,3450 and
-  the ladder at 3116,3453). Once inside it commits to the ladder and never clicks the door again
-  until it has climbed down or is clearly outside (south of the door row, or away from the shed). A ladder click that
-  doesn't move the player sends it back to the door, and failed rounds are capped.
+- The shed trip direction comes from the inventory: full means trip out (climb up, open the door
+  once, walk to the bank); free space means the return trip (open the door, go through, climb down).
+  After a door click moves the player, a latch blocks every further door click until the player has
+  climbed down (or reached the bank on the way out). Only three ladder clicks that don't move the
+  player at all, or walking more than 8 tiles from the shed, release it.
+- Every shed tick is logged to `~/.runelite/logs/client.log` as `[HillGiant shed] ...`. Each line
+  has the location, step, latch, door id and actions, and why a click was chosen. The overlay shows
+  the latch and the last reason.
 
 ## Gem Crab Killer
 
