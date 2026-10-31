@@ -183,6 +183,7 @@ public final class HillGiantScript extends Script
 			ItemID.UNIDENTIFIED_KWUARM,
 			ItemID.UNIDENTIFIED_DWARF_WEED,
 			ItemID.LAWRUNE,
+			ItemID.UNIDENTIFIED_IRIT,
 			GIANT_KEY_ID,
 			ENSOULED_GIANT_HEAD_ID)));
 
