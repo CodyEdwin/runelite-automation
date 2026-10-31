@@ -184,6 +184,7 @@ public final class HillGiantScript extends Script
 			ItemID.UNIDENTIFIED_DWARF_WEED,
 			ItemID.LAWRUNE,
 			ItemID.UNIDENTIFIED_IRIT,
+			ItemID.SNAPE_GRASS_SEED,
 			GIANT_KEY_ID,
 			ENSOULED_GIANT_HEAD_ID)));
 
@@ -590,6 +591,14 @@ public final class HillGiantScript extends Script
 
 		if (inventory.isFull())
 		{
+			// A full inventory can still take stackable drops we already hold
+			// (snape grass seeds, runes): grab those before banking.
+			if (findGroundLoot(context) != null)
+			{
+				state = State.LOOT;
+				setStatus("Looting stackables");
+				return;
+			}
 			state = State.WALK_TO_BANK;
 			setStatus("Inventory full");
 			return;
@@ -782,15 +791,15 @@ public final class HillGiantScript extends Script
 		Inventory inventory = context.getInventory();
 		GameInput input = context.getInput();
 
-		if (inventory.isFull())
+		GroundLoot loot = findGroundLoot(context);
+		if (loot == null && inventory.isFull())
 		{
+			// Full, and no stackable drop that fits onto a stack we hold.
 			resetLootTracking();
 			state = State.WALK_TO_BANK;
 			setStatus("Inventory full");
 			return;
 		}
-
-		GroundLoot loot = findGroundLoot(context);
 		if (loot == null)
 		{
 			// Everything is picked up. Go straight back to hunting on this
@@ -2665,9 +2674,24 @@ public final class HillGiantScript extends Script
 		}
 	}
 
+	/**
+	 * @return true if the item is stackable and a stack of it is already in
+	 * the inventory, so it can be picked up even with no free slot
+	 */
+	private static boolean stacksOntoInventory(ScriptContext context, int itemId)
+	{
+		if (context.getInventory().countItem(itemId) <= 0)
+		{
+			return false;
+		}
+		net.runelite.api.ItemComposition composition = context.getClient().getItemDefinition(itemId);
+		return composition != null && composition.isStackable();
+	}
+
 	private GroundLoot findGroundLoot(ScriptContext context)
 	{
 		Client client = context.getClient();
+		boolean inventoryFull = context.getInventory().isFull();
 		Player player = context.getPlayer();
 		WorldPoint playerLocation = player == null ? null : player.getWorldLocation();
 		WorldView worldView = client.getTopLevelWorldView();
@@ -2733,7 +2757,8 @@ public final class HillGiantScript extends Script
 
 				for (TileItem groundItem : groundItems)
 				{
-					if (groundItem == null || !isLootItem(groundItem.getId()))
+					if (groundItem == null || !isLootItem(groundItem.getId())
+						|| inventoryFull && !stacksOntoInventory(context, groundItem.getId()))
 					{
 						continue;
 					}
