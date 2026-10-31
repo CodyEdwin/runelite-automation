@@ -242,3 +242,5 @@ Trip-out robustness: an out latch found while the player is still inside the she
 Loot also includes the Giant key (item 20754, `ItemID.HILLGIANT_BOSS_KEY`) and the Ensouled giant head (item 13474, `ItemID.ARCEUUS_CORPSE_GIANT_INITIAL`). Both are picked up before anything else within a few tiles and banked with the rest of the loot.
 
 Every bank step logs a `[HillGiant bank]` line with the stage, attempts and inventory contents.
+
+Loot pickups take one accurate click each. The item's screen point is recomputed on the client thread during the whole mouse move, and the move re-aims (short corrective flicks, up to 4) when the item drifts more than 3 px. Just before pressing, the hover menu decides: a left click if this item's Take is the top option, otherwise a right click and its exact Take row. If the item is not under the cursor at all, its exact Take action is run directly. The next pickup waits (at most 2 ticks) until the player's model has settled on the previous item's tile, so the camera is no longer sliding. Every attempt logs a `[HillGiant loot]` line: item, tile, target point, re-aims and result.

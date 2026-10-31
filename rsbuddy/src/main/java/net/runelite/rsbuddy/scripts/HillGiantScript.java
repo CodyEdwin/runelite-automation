@@ -274,6 +274,10 @@ public final class HillGiantScript extends Script
 	private String depositSnapshot;
 	private int depositStillTicks;
 	private int depositRetries;
+	// Looting: ticks spent waiting for the player to settle before a new
+	// pickup, and a flag the click result sets when a pickup clearly failed.
+	private int lootSettleTicks;
+	private volatile boolean lootClickFailed;
 	private int bankCloseTicks;
 	private NPC attackTarget;
 	private int attackPendingTicks;
@@ -790,6 +794,7 @@ public final class HillGiantScript extends Script
 			lootAttempts = 0;
 			lootTargetTicks = 0;
 			lootClickTicks = -1;
+			lootSettleTicks = 0;
 		}
 
 		if (++lootTargetTicks > LOOT_TARGET_TIMEOUT_TICKS && loot.worldLocation != null)
@@ -808,11 +813,27 @@ public final class HillGiantScript extends Script
 		if (lootClickTicks >= 0)
 		{
 			++lootClickTicks;
+			if (lootClickFailed)
+			{
+				// The click result said it missed: retry now, not after the
+				// re-click timeout.
+				lootClickFailed = false;
+				lootClickTicks = LOOT_RECLICK_TICKS;
+			}
 			if (isMoving(player) || lootClickTicks < LOOT_RECLICK_TICKS)
 			{
 				setStatus("Looting " + getItemName(context.getClient(), loot.itemId));
 				return;
 			}
+		}
+		else if (!isSettled(context, player) && lootSettleTicks++ < 2)
+		{
+			// The previous pickup just landed and the player (and with it the
+			// camera) is still sliding onto that tile. Start the next pickup
+			// once it has settled, so the item is not a moving target. At
+			// most two ticks; the tracked click re-aims anyway.
+			setStatus("Looting " + getItemName(context.getClient(), loot.itemId));
+			return;
 		}
 
 		if (lootAttempts >= LOOT_ATTEMPT_LIMIT && loot.worldLocation != null)
@@ -822,13 +843,26 @@ public final class HillGiantScript extends Script
 		}
 
 		String itemName = getItemName(context.getClient(), loot.itemId);
-		if (input.takeGroundItem(loot.sceneX, loot.sceneY, loot.itemId, itemName))
+		int attempt = lootAttempts + 1;
+		String lootLabel = String.format("item=%s(%d) tile=%d,%d attempt=%d settled=%s",
+			itemName, loot.itemId, loot.worldLocation == null ? -1 : loot.worldLocation.getX(),
+			loot.worldLocation == null ? -1 : loot.worldLocation.getY(), attempt, isSettled(context, player));
+		lootClickFailed = false;
+		if (input.takeGroundItemTracked(loot.sceneX, loot.sceneY, loot.itemId, itemName, result ->
+		{
+			log.info("[HillGiant loot] {} {}", lootLabel, result);
+			if (result.contains("aborted") || result.contains("FAILED"))
+			{
+				lootClickFailed = true;
+			}
+		}))
 		{
 			++lootAttempts;
 			lootClickTicks = 0;
 			setStatus(itemName.isEmpty() ? "Looting" : "Looting " + itemName);
 			return;
 		}
+		log.info("[HillGiant loot] {} result=not started (tile off screen or menu closed), walking closer", lootLabel);
 
 		// The tile is not on screen (or a menu was just closed). Get closer.
 		if (loot.worldLocation != null && !context.getClient().isMenuOpen())
@@ -853,6 +887,8 @@ public final class HillGiantScript extends Script
 		lootAttempts = 0;
 		lootTargetTicks = 0;
 		lootClickTicks = -1;
+		lootSettleTicks = 0;
+		lootClickFailed = false;
 	}
 
 	private void walkToBank(ScriptContext context)
@@ -2695,6 +2731,23 @@ public final class HillGiantScript extends Script
 		}
 
 		return false;
+	}
+
+	/**
+	 * @return true once the player has stopped and its model has finished
+	 * sliding onto its tile (the camera follows the model, so until then
+	 * every tile on screen is still moving)
+	 */
+	private static boolean isSettled(ScriptContext context, Player player)
+	{
+		if (player == null || isMoving(player))
+		{
+			return false;
+		}
+		net.runelite.api.coords.LocalPoint local = player.getLocalLocation();
+		net.runelite.api.coords.LocalPoint tile = net.runelite.api.coords.LocalPoint.fromWorld(
+			context.getClient(), player.getWorldLocation());
+		return local == null || tile == null || local.equals(tile);
 	}
 
 	private static boolean isMoving(Player player)
