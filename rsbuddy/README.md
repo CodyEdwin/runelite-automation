@@ -173,7 +173,8 @@ sardines expected).
 
 Banking: keep the brass key in inventory slot 1 and lock that slot (the bank's inventory slot
 lock), so the bank's Deposit inventory button leaves the key in place. Banking is just Deposit
-inventory, close the bank, walk back; the key is no longer withdrawn each trip. Safety fallback:
+inventory (done as soon as no loot items are left; the key, food and anything in a locked slot
+are ignored), close the bank, walk back; the key is no longer withdrawn each trip. Safety fallback:
 if the key is not in the inventory after depositing, the script logs a `[HillGiant]` warning and
 withdraws one from the bank. If the bank has none either, it stops at the bank with the status
 "Stopped: no brass key in inventory or bank" instead of walking back without a key.
@@ -239,3 +240,5 @@ Shed trip out (strict order, separate from the return trip): arriving on the sur
 Trip-out robustness: an out latch found while the player is still inside the shed is cleared at once and the door is clicked. If a door or ladder is off screen and the camera cannot turn to it (it already faces it, or the player stands on its tile), the option is run directly instead of waiting forever. The watchdog covers the whole bank trip: it fires after 10 ticks without movement or animation (20 if clicks keep being sent that do not move the player), logs `STUCK` and makes the next door/ladder click a direct one. Every bank-trip tick logs a `[HillGiant trip]` line, with the reason first so it is never cut off, and exceptions are logged with a stack trace under `[HillGiant]` instead of stopping the script. Input stuck "busy" is reset after 15 ticks (was 100), and a camera turn after 10.
 
 Loot also includes the Giant key (item 20754, `ItemID.HILLGIANT_BOSS_KEY`) and the Ensouled giant head (item 13474, `ItemID.ARCEUUS_CORPSE_GIANT_INITIAL`). Both are picked up before anything else within a few tiles and banked with the rest of the loot.
+
+Every bank step logs a `[HillGiant bank]` line with the stage, attempts and inventory contents.

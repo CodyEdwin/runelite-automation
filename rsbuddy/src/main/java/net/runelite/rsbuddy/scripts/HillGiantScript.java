@@ -269,6 +269,11 @@ public final class HillGiantScript extends Script
 	// Set when the brass key is missing from both the inventory and the
 	// bank: the script stays at the bank instead of walking back keyless.
 	private boolean haltedNoKey;
+	// Bank deposit tracking: inventory snapshot and how long it has not
+	// changed since the deposit click.
+	private String depositSnapshot;
+	private int depositStillTicks;
+	private int depositRetries;
 	private int bankCloseTicks;
 	private NPC attackTarget;
 	private int attackPendingTicks;
@@ -1826,6 +1831,14 @@ public final class HillGiantScript extends Script
 		{
 			case DEPOSIT:
 			{
+				if (!hasLootInInventory(inventory))
+				{
+					// Nothing to deposit (only the key, food or locked items).
+					logBank(context, "deposit: no loot in inventory, skipping deposit");
+					finishDeposit(context, inventory);
+					return;
+				}
+
 				Widget deposit = context.getTargets()
 					.findWidget(InterfaceID.Bankmain.DEPOSITINV)
 					.orElse(null);
@@ -1833,48 +1846,57 @@ public final class HillGiantScript extends Script
 				{
 					bankStage = BankStage.WAIT_DEPOSIT;
 					bankAttempts = 0;
+					depositSnapshot = inventorySnapshot(inventory);
+					depositStillTicks = 0;
 					cooldown = BANK_ACTION_COOLDOWN_TICKS;
+					logBank(context, "deposit: clicked Deposit inventory");
 				}
 				else
 				{
 					++bankAttempts;
 					cooldown = 1;
+					logBank(context, "deposit: Deposit inventory button not clickable (attempt " + bankAttempts + ")");
+					if (bankAttempts > BANK_STAGE_ATTEMPTS)
+					{
+						logBank(context, "deposit: button never became clickable, leaving anyway");
+						finishDeposit(context, inventory);
+						return;
+					}
 				}
 				setStatus("Depositing loot");
 				return;
 			}
 			case WAIT_DEPOSIT:
 			{
-				// The brass key sits in a locked inventory slot (slot 1), so
-				// Deposit inventory leaves it in place. The deposit is done
-				// once nothing but the key is left.
-				int keys = inventory.countItem(BRASS_KEY_ID);
-				if (inventory.getEmptySlots() + keys >= Inventory.SIZE)
+				// Done as soon as no loot is left. The brass key, food and
+				// anything in a locked slot are ignored: Deposit inventory
+				// skips locked slots, so a "fully empty" or "only the key
+				// left" check can never pass if anything else is locked.
+				if (!hasLootInInventory(inventory))
 				{
-					bankAttempts = 0;
-					if (keys >= BRASS_KEY_AMOUNT)
-					{
-						bankStage = BankStage.LEAVE;
-						setStatus("Leaving bank");
-					}
-					else
-					{
-						// Safety fallback only: the locked slot did not keep the
-						// key (slot unlocked, or the key was never there).
-						log.warn("[HillGiant] brass key NOT in inventory after depositing;"
-							+ " the locked slot did not keep it. Withdrawing one from the bank.");
-						bankStage = BankStage.WITHDRAW_KEY;
-						setStatus("Brass key missing, withdrawing one");
-					}
+					logBank(context, "deposit: done, no loot left");
+					finishDeposit(context, inventory);
 					return;
 				}
 
-				if (++bankAttempts > BANK_STAGE_ATTEMPTS)
+				// Loot still there. If the inventory stopped changing, the
+				// click did not register (or the rest cannot be deposited):
+				// click again a few times, then move on rather than hang.
+				String snapshot = inventorySnapshot(inventory);
+				depositStillTicks = snapshot.equals(depositSnapshot) ? depositStillTicks + 1 : 0;
+				depositSnapshot = snapshot;
+				if (depositStillTicks >= 3)
 				{
-					// The deposit click did not register. Try the button
-					// again instead of waiting forever.
+					bankAttempts = depositRetries + 1;
+					if (bankAttempts > 3)
+					{
+						logBank(context, "deposit: loot still in inventory after 3 deposit clicks, leaving anyway");
+						finishDeposit(context, inventory);
+						return;
+					}
+					logBank(context, "deposit: inventory unchanged, clicking Deposit inventory again");
+					depositRetries = bankAttempts;
 					bankStage = BankStage.DEPOSIT;
-					bankAttempts = 0;
 				}
 				setStatus("Depositing loot");
 				return;
@@ -1883,6 +1905,7 @@ public final class HillGiantScript extends Script
 			{
 				if (inventory.countItem(BRASS_KEY_ID) >= BRASS_KEY_AMOUNT)
 				{
+					logBank(context, "fallback: brass key withdrawn, leaving");
 					bankStage = BankStage.LEAVE;
 					bankAttempts = 0;
 					setStatus("Leaving bank");
@@ -1902,6 +1925,7 @@ public final class HillGiantScript extends Script
 
 				if (input.withdrawBankItem(BRASS_KEY_ID, "Withdraw-1"))
 				{
+					logBank(context, "fallback: Withdraw-1 brass key sent (attempt " + bankAttempts + ")");
 					cooldown = BANK_OPEN_COOLDOWN_TICKS;
 				}
 				else
@@ -1928,6 +1952,7 @@ public final class HillGiantScript extends Script
 				if (bankAttempts <= BANK_CLOSE_ATTEMPTS
 					&& context.getTargets().findWidget(InterfaceID.Bankmain.UNIVERSE).isPresent())
 				{
+					logBank(context, "close: closing bank (attempt " + (bankAttempts + 1) + ")");
 					// Alternate both ways of closing it so a single broken route
 					// cannot keep the bank open: Escape is the client's own close
 					// key, the button click works when the key is swallowed.
@@ -1952,12 +1977,77 @@ public final class HillGiantScript extends Script
 	}
 
 	/**
+	 * After the deposit: keep the brass key (normally in the locked slot 1)
+	 * and leave, or fall back to withdrawing one if it is really missing.
+	 */
+	private void finishDeposit(ScriptContext context, Inventory inventory)
+	{
+		bankAttempts = 0;
+		depositRetries = 0;
+		if (inventory.countItem(BRASS_KEY_ID) >= BRASS_KEY_AMOUNT)
+		{
+			bankStage = BankStage.LEAVE;
+			logBank(context, "deposit finished, brass key kept in inventory, closing bank");
+			setStatus("Leaving bank");
+			return;
+		}
+
+		// Safety fallback only: the locked slot did not keep the key.
+		log.warn("[HillGiant bank] brass key NOT in inventory after depositing (inventory: {});"
+			+ " withdrawing one from the bank.", inventorySnapshot(inventory));
+		bankStage = BankStage.WITHDRAW_KEY;
+		setStatus("Brass key missing, withdrawing one");
+	}
+
+	private static boolean hasLootInInventory(Inventory inventory)
+	{
+		for (net.runelite.api.Item item : inventory.getItems())
+		{
+			if (item != null && isLootItem(item.getId()))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static String inventorySnapshot(Inventory inventory)
+	{
+		StringBuilder builder = new StringBuilder("[");
+		for (net.runelite.api.Item item : inventory.getItems())
+		{
+			if (item != null && item.getId() != -1)
+			{
+				if (builder.length() > 1)
+				{
+					builder.append(',');
+				}
+				builder.append(item.getId());
+				if (item.getQuantity() > 1)
+				{
+					builder.append('x').append(item.getQuantity());
+				}
+			}
+		}
+		return builder.append(']').toString();
+	}
+
+	private void logBank(ScriptContext context, String reason)
+	{
+		Inventory inventory = context.getInventory();
+		log.info("tick={} [HillGiant bank] {} | stage={} attempts={} inventory={} brassKeys={} empty={}",
+			context.getClient().getTickCount(), reason, bankStage, bankAttempts, inventorySnapshot(inventory),
+			inventory.countItem(BRASS_KEY_ID), inventory.getEmptySlots());
+	}
+
+	/**
 	 * Ends the bank visit and heads back to the dungeon. Called once the bank
 	 * interface is really closed, whether by the leave stage itself or because
 	 * it disappeared on its own.
 	 */
 	private void leaveBank()
 	{
+		log.info("[HillGiant bank] bank closed, starting the return walk (state WALK_TO_GIANTS)");
 		cooldown = BANK_ACTION_COOLDOWN_TICKS;
 		ignoredLoot.clear();
 		bankStage = null;
