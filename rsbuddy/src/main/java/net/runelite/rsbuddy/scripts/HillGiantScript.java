@@ -109,14 +109,15 @@ public final class HillGiantScript extends Script
 	// door on the south row, ladder on the north row. The player stands on
 	// DOOR_OUTSIDE (just south of the door) to open it.
 	// Walkable interior of the shed, from Cody's client logs plus the wiki.
-	// Inside seen: 3116,3451 / 3116,3450 / 3115,3450 (door row is inside; the
-	// door's wall edge is between y 3450 and 3449). Outside seen walking
-	// around the shed: x 3112 (west), y 3454-3455 (north), 3117,3453 /
-	// 3117,3454 / 3118,3452-3453 (east), 3114,3449 / 3115,3449 (south). The
-	// wiki footprint x 3113-3117 includes the walls, so the interior is
-	// x 3114-3116, y 3450-3453.
-	private static final int SHED_MIN_X = 3114;
-	private static final int SHED_MAX_X = 3116;
+	// Inside seen: 3117,3451 (arrival tile after climbing up), 3116,3451,
+	// 3116,3450, 3115,3450 (the door row is inside; the door's wall edge is
+	// between y 3450 and 3449). Outside seen walking around the shed:
+	// x 3112 (y 3449-3454), y 3454 (x 3112-3117), 3116,3455, x 3118
+	// (y 3452-3453), and y 3449. So the walls lie between x 3112|3113,
+	// x 3117|3118 and y 3453|3454: the interior is x 3113-3117,
+	// y 3450-3453, the same as the wiki footprint.
+	private static final int SHED_MIN_X = 3113;
+	private static final int SHED_MAX_X = 3117;
 	private static final int SHED_MIN_Y = 3450;
 	private static final int SHED_MAX_Y = 3453;
 	private static final WorldPoint DOOR_OUTSIDE = new WorldPoint(3115, 3449, 0);
@@ -154,7 +155,10 @@ public final class HillGiantScript extends Script
 	// current interaction. The script closes it so no state can block behind
 	// it. An input click that never finishes is reset after a longer wait.
 	private static final int MENU_STUCK_TICKS = 6;
-	private static final int BUSY_STUCK_TICKS = 100;
+	// A simulated mouse move or click takes well under 3 ticks; anything
+	// still "busy" after this is a stuck input, not a slow one.
+	private static final int BUSY_STUCK_TICKS = 15;
+	private static final int CAMERA_STUCK_TICKS = 10;
 
 
 	/**
@@ -252,6 +256,8 @@ public final class HillGiantScript extends Script
 	private final java.util.Map<WorldPoint, Long> ignoredLoot = new java.util.HashMap<>();
 	private int menuOpenTicks;
 	private int busyTicks;
+	private int cameraBusyTicks;
+	private int exceptionCount;
 	private int bankCloseTicks;
 	private NPC attackTarget;
 	private int attackPendingTicks;
@@ -281,6 +287,7 @@ public final class HillGiantScript extends Script
 	private WorldPoint watchdogLocation;
 	private int watchdogTicks;
 	private boolean actionThisTick;
+	private int recentActionTicks;
 	private int stuckRecoveries;
 	private int ladderMenuMisses;
 	private WorldPoint doorClickFrom;
@@ -338,6 +345,7 @@ public final class HillGiantScript extends Script
 		exitDoorAttempts = 0;
 		watchdogLocation = null;
 		watchdogTicks = 0;
+		recentActionTicks = 0;
 		actionThisTick = false;
 		stuckRecoveries = 0;
 		doorClickFrom = null;
@@ -351,6 +359,30 @@ public final class HillGiantScript extends Script
 
 	@Override
 	protected void onGameTick()
+	{
+		try
+		{
+			tickSafely();
+		}
+		catch (RuntimeException ex)
+		{
+			// Log with the stack trace and keep the script alive; the
+			// watchdog recovers whatever state the exception left behind.
+			++exceptionCount;
+			WorldPoint location = getContext().getPlayerLocation();
+			log.error("[HillGiant] exception #{} in state={} step={} loc={} status={}",
+				exceptionCount, state, shedStep, location, getStatus(), ex);
+			shedDebugLine = "exception: " + ex;
+			if (exceptionCount >= 20)
+			{
+				// Twenty in a row means something is badly wrong: let the
+				// script manager stop the script with the error.
+				throw ex;
+			}
+		}
+	}
+
+	private void tickSafely()
 	{
 		ScriptContext context = getContext();
 
@@ -381,6 +413,10 @@ public final class HillGiantScript extends Script
 		if (cooldown > 0)
 		{
 			--cooldown;
+			if (state == State.WALK_TO_BANK)
+			{
+				logTrip(context, "cooldown " + cooldown);
+			}
 			return;
 		}
 
@@ -396,6 +432,7 @@ public final class HillGiantScript extends Script
 				break;
 			case WALK_TO_BANK:
 				walkToBank(context);
+				logTrip(context, "tick");
 				shedWatchdog(context);
 				break;
 			case BANK:
@@ -406,6 +443,7 @@ public final class HillGiantScript extends Script
 				shedWatchdog(context);
 				break;
 		}
+		exceptionCount = 0;
 	}
 
 	/**
@@ -435,6 +473,7 @@ public final class HillGiantScript extends Script
 		{
 			if (++busyTicks > BUSY_STUCK_TICKS)
 			{
+				log.info("[HillGiant] input busy for {} ticks in state={}, resetting input", busyTicks, state);
 				input.reset();
 				busyTicks = 0;
 				setStatus("Resetting input");
@@ -443,6 +482,20 @@ public final class HillGiantScript extends Script
 		else
 		{
 			busyTicks = 0;
+		}
+
+		if (input.isCameraBusy())
+		{
+			if (++cameraBusyTicks > CAMERA_STUCK_TICKS)
+			{
+				log.info("[HillGiant] camera turning for {} ticks in state={}, resetting input", cameraBusyTicks, state);
+				input.reset();
+				cameraBusyTicks = 0;
+			}
+		}
+		else
+		{
+			cameraBusyTicks = 0;
 		}
 
 		// An open bank swallows every walk click. The bank state closes it
@@ -834,6 +887,17 @@ public final class HillGiantScript extends Script
 			return;
 		}
 
+		if (exitedDoorThisTrip && isInShedInterior(location))
+		{
+			// The out latch says we left, but we are standing in the shed:
+			// the latch is wrong. Drop it so the door gets clicked.
+			exitedDoorThisTrip = false;
+			insideShedByEvent = true;
+			doorClickFrom = null;
+			doorWaitTicks = 0;
+			logShed(context, location, "exit: out latch set but still inside the shed, latch cleared, clicking door");
+		}
+
 		boolean nearShed = location.distanceTo(SURFACE_LADDER) <= SHED_LATCH_DISTANCE;
 		if (nearShed && !exitedDoorThisTrip)
 		{
@@ -860,9 +924,9 @@ public final class HillGiantScript extends Script
 	private void exitShed(ScriptContext context, WorldPoint location)
 	{
 		Player player = context.getPlayer();
-		boolean inside = insideShedByEvent
-			? location.getY() >= SURFACE_DOOR.getY()
-			: isInShedFootprint(location);
+		boolean inside = isInShedInterior(location)
+			|| insideShedByEvent && location.getY() >= SURFACE_DOOR.getY()
+				&& location.getX() >= SHED_MIN_X - 1 && location.getX() <= SHED_MAX_X + 1;
 
 		if (!inside)
 		{
@@ -937,10 +1001,7 @@ public final class HillGiantScript extends Script
 	 */
 	private static boolean isInShedFootprint(WorldPoint location)
 	{
-		return location != null
-			&& location.getPlane() == 0
-			&& location.getX() >= 3113 && location.getX() <= 3117
-			&& location.getY() >= SHED_MIN_Y && location.getY() <= SHED_MAX_Y;
+		return isInShedInterior(location);
 	}
 
 	/**
@@ -961,22 +1022,35 @@ public final class HillGiantScript extends Script
 		boolean atShed = location != null && (isInDungeon(location)
 			? location.distanceTo(DUNGEON_LADDER) <= 8
 			: location.distanceTo(SURFACE_LADDER) <= SHED_LATCH_DISTANCE + 4);
-		if (!atShed || state != State.WALK_TO_BANK && state != State.WALK_TO_GIANTS)
+		// The whole bank trip is watched, wherever the player is. The return
+		// trip only at the shed and the dungeon ladder.
+		boolean watched = location != null
+			&& (state == State.WALK_TO_BANK || state == State.WALK_TO_GIANTS && atShed);
+		if (!watched)
 		{
 			watchdogLocation = location;
 			watchdogTicks = 0;
 			return;
 		}
 
-		boolean progress = acted || !location.equals(watchdogLocation) || isAnimating(player);
+		// Progress means the player moved or is animating (climbing). Clicks
+		// that never move the player (for example a minimap click on the
+		// tile we already stand on) do not count as progress; they only
+		// delay the watchdog while they are recent.
+		boolean progress = !location.equals(watchdogLocation) || isAnimating(player);
 		watchdogLocation = location;
 		if (progress)
 		{
 			watchdogTicks = 0;
+			recentActionTicks = 0;
 			return;
 		}
 
-		if (++watchdogTicks < WATCHDOG_TICKS)
+		recentActionTicks = acted || context.getInput().isCameraBusy() ? 3 : Math.max(0, recentActionTicks - 1);
+		++watchdogTicks;
+		boolean fire = watchdogTicks >= 2 * WATCHDOG_TICKS
+			|| watchdogTicks >= WATCHDOG_TICKS && recentActionTicks == 0;
+		if (!fire)
 		{
 			return;
 		}
@@ -1004,14 +1078,23 @@ public final class HillGiantScript extends Script
 		ladderClickFrom = null;
 		ladderBlocked = false;
 		ladderNoMoveFails = 0;
-		doorMenuMisses = 0;
-		ladderMenuMisses = 0;
+		// The next door/ladder click skips the right-click menu and runs the
+		// option directly, in case the menu was what kept failing.
+		doorMenuMisses = 2;
+		ladderMenuMisses = 2;
 		lastWalkClick = null;
 		lastWalkTarget = null;
+		// Arrived on the surface without the dungeon->surface event being
+		// seen: decide from the y coordinate alone.
+		if (state == State.WALK_TO_BANK && climbedUpPending && !isInDungeon(location))
+		{
+			climbedUpPending = false;
+			insideShedByEvent = true;
+		}
 
 		if (state == State.WALK_TO_BANK && !isInDungeon(location))
 		{
-			if (location.getY() >= SURFACE_DOOR.getY() && isInShedFootprint(location))
+			if (isInShedInterior(location))
 			{
 				// Still in the shed: the door has to be used again.
 				exitedDoorThisTrip = false;
@@ -1309,7 +1392,7 @@ public final class HillGiantScript extends Script
 
 	/**
 	 * @return true if the tile is in the shed's walkable interior box,
-	 * x 3114-3116, y 3450-3453, plane 0 (bounded on both axes)
+	 * x 3113-3117, y 3450-3453, plane 0 (bounded on both axes)
 	 */
 	private static boolean isInShedInterior(WorldPoint location)
 	{
@@ -1335,15 +1418,33 @@ public final class HillGiantScript extends Script
 	{
 		Optional<TileObject> door = findShedDoor(context);
 		String doorInfo = door.map(object -> object.getId() + describeActions(context, object)).orElse("none");
-		String line = String.format("[HillGiant shed] state=%s step=%s loc=%d,%d,%d passedDoor=%s exitedDoor=%s"
-				+ " door=%s ladderFails=%d ladderAttempts=%d -> %s",
-			state, shedStep,
+		String line = String.format("[HillGiant shed] %s | state=%s step=%s loc=%d,%d,%d passedDoor=%s exitedDoor=%s"
+				+ " insideByEvent=%s door=%s ladderFails=%d ladderAttempts=%d watchdog=%d",
+			reason, state, shedStep,
 			location == null ? -1 : location.getX(),
 			location == null ? -1 : location.getY(),
 			location == null ? -1 : location.getPlane(),
-			passedDoorThisTrip, exitedDoorThisTrip, doorInfo, ladderNoMoveFails, ladderAttempts, reason);
+			passedDoorThisTrip, exitedDoorThisTrip, insideShedByEvent, doorInfo, ladderNoMoveFails, ladderAttempts,
+			watchdogTicks);
 		log.info("tick={} {}", context.getClient().getTickCount(), line);
 		shedDebugLine = reason;
+	}
+
+	/**
+	 * One line per tick of the bank trip, wherever the player is, so a hang
+	 * anywhere between the dungeon and the bank shows up in the log.
+	 */
+	private void logTrip(ScriptContext context, String reason)
+	{
+		WorldPoint location = context.getPlayerLocation();
+		GameInput input = context.getInput();
+		log.info("tick={} [HillGiant trip] {} | state={} step={} loc={} dungeon={} climbedUpPending={} insideByEvent={}"
+				+ " exitedDoor={} doorClickFrom={} doorWait={} exitAttempts={} ladderWait={} ladderAttempts={}"
+				+ " cooldown={} inputBusy={} cameraBusy={} menuOpen={} watchdog={} status={}",
+			context.getClient().getTickCount(), reason, state, shedStep, location, isInDungeon(location), climbedUpPending,
+			insideShedByEvent, exitedDoorThisTrip, doorClickFrom, doorWaitTicks, exitDoorAttempts, ladderWaitTicks,
+			ladderAttempts, cooldown, input.isBusy(), input.isCameraBusy(), context.getClient().isMenuOpen(),
+			watchdogTicks, getStatus());
 	}
 
 	private static String describeActions(ScriptContext context, TileObject object)
@@ -1422,8 +1523,20 @@ public final class HillGiantScript extends Script
 
 		if (!menuOpen && !input.isVisible(object))
 		{
-			input.turnCameraToward(object.getWorldLocation());
-			return ObjectClick.CAMERA;
+			if (input.turnCameraToward(object.getWorldLocation()))
+			{
+				return ObjectClick.CAMERA;
+			}
+
+			// The camera cannot help: it already faces the object, or the
+			// player stands on its tile (a wall door seen from right next to
+			// it often has no clickbox on screen). Waiting for the camera
+			// here used to hang forever, so run the option directly.
+			boolean sent = input.invokeObjectAction(object, actions);
+			log.info("[HillGiant shed] {} {} not on screen and camera cannot turn to it; direct option {}",
+				object.getId(), Arrays.toString(actions), sent ? "sent" : "FAILED");
+			actionThisTick |= sent;
+			return sent ? ObjectClick.SENT : ObjectClick.NONE;
 		}
 
 		if (viaMenu)
@@ -1503,6 +1616,8 @@ public final class HillGiantScript extends Script
 		Optional<TileObject> ladder = findLadder(context, ladderTile, actions);
 		if (ladder.isEmpty())
 		{
+			log.info("[HillGiant] ladder {} not found near {} (player at {}), walking to it",
+				up ? "up" : "down", ladderTile, location);
 			walkTowards(context, ladderTile, false);
 			setStatus("Walking to ladder");
 			return;
