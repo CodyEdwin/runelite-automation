@@ -32,7 +32,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.ThreadLocalRandom;
 import net.runelite.api.Actor;
 import net.runelite.api.Client;
 import net.runelite.api.Item;
@@ -95,8 +94,6 @@ public final class AnimatedSuitKillerScript extends Script
 	private static final int DROP_WAIT_TICKS = 4;
 	/** Take attempts per item before skipping it. */
 	private static final int LOOT_ATTEMPT_LIMIT = 3;
-	/** Ticks after a Take click before it may be repeated (if nothing moved). */
-	private static final int LOOT_RECLICK_TICKS = 3;
 	/** Ticks without any pickup before giving up on the pile. */
 	private static final int LOOT_STATE_MAX_TICKS = 25;
 	/** Ticks one loot phase may wait on a busy mouse. */
@@ -141,10 +138,6 @@ public final class AnimatedSuitKillerScript extends Script
 		EITHER
 	}
 
-	private static final long ANTI_IDLE_MIN_MS = 30_000L;
-	private static final long ANTI_IDLE_MAX_MS = 60_000L;
-	private static final int ANTI_IDLE_MIN_HOLD_MS = 150;
-	private static final int ANTI_IDLE_MAX_HOLD_MS = 450;
 
 	/** Armour types, with the gameval ids of the animated NPC and its pieces. */
 	enum ArmourType
@@ -182,8 +175,9 @@ public final class AnimatedSuitKillerScript extends Script
 
 	private enum LootPhase
 	{
+		/** Mouse glued to the pile by GameInput's tracker, spam-taking. */
 		IDLE,
-		HOVERED,
+		/** Right-click sent: pick the exact Take row next tick. */
 		MENU
 	}
 
@@ -212,7 +206,6 @@ public final class AnimatedSuitKillerScript extends Script
 	private int lootTargetItemId = -1;
 	private WorldPoint lootTargetTile;
 	private int lootAttempts;
-	private int lootClickTicks = -1;
 	private int lootStateTicks;
 	private int lootInventoryCount = -1;
 	private final Set<String> skippedLoot = new HashSet<>();
@@ -236,7 +229,6 @@ public final class AnimatedSuitKillerScript extends Script
 	/** Potions in drinking order for the chosen mode (empty when OFF). */
 	private final int[] strengthPotions;
 	private long startedAt;
-	private long nextAntiIdleAt;
 
 	public AnimatedSuitKillerScript()
 	{
@@ -378,8 +370,13 @@ public final class AnimatedSuitKillerScript extends Script
 		boostBeforeDrink = 0;
 		potionsDrunk = 0;
 		startedAt = System.currentTimeMillis();
-		scheduleAntiIdle();
 		setStatus(configError == null ? "Ready" : configError);
+	}
+
+	@Override
+	protected void onStop()
+	{
+		getContext().getInput().stopPileTracking();
 	}
 
 	@Override
@@ -431,7 +428,6 @@ public final class AnimatedSuitKillerScript extends Script
 		{
 			return;
 		}
-		antiIdle(context);
 
 		if (cooldown > 0)
 		{
@@ -465,6 +461,11 @@ public final class AnimatedSuitKillerScript extends Script
 	{
 		if (next != state)
 		{
+			if (state == State.LOOT && getContext() != null)
+			{
+				// The mouse lets go of the pile whenever looting ends.
+				getContext().getInput().stopPileTracking();
+			}
 			log.info("[AnimatedSuit] {} -> {}: {}", state, next, reason);
 			state = next;
 			stateTicks = 0;
@@ -708,164 +709,119 @@ public final class AnimatedSuitKillerScript extends Script
 			return;
 		}
 
+		String itemName = itemName(context.getClient(), loot.itemId);
+		String label = String.format("pile=%d,%d (scene %d,%d) next=%s(%d)", loot.worldLocation.getX(),
+			loot.worldLocation.getY(), loot.sceneX, loot.sceneY, itemName, loot.itemId);
+
+		if (lootPhase == LootPhase.MENU)
+		{
+			// The right-click went out last tick: take the exact row.
+			lootPhase = LootPhase.IDLE;
+			boolean sent = input.clickGroundItemMenuRow(loot.itemId, loot.sceneX, loot.sceneY);
+			if (!sent && lootAttempts >= LOOT_ATTEMPT_LIMIT - 1)
+			{
+				input.invokeGroundItemTake(loot.sceneX, loot.sceneY, loot.itemId, itemName);
+				log.info("[AnimatedSuit loot] {} menu had no Take row, last attempt: ran exact Take", label);
+			}
+			else
+			{
+				log.info("[AnimatedSuit loot] {} menu: {}", label, sent ? "clicked exact Take row" : "no Take row");
+			}
+			cooldown = 1;
+			return;
+		}
+
 		if (input.isBusy() || input.isCameraBusy())
 		{
 			if (++lootPhaseTicks > LOOT_PHASE_MAX_TICKS)
 			{
 				log.info("[AnimatedSuit loot] input busy for {} ticks, resetting input", lootPhaseTicks);
 				input.reset();
-				lootPhase = LootPhase.IDLE;
 				lootPhaseTicks = 0;
 			}
 			return;
 		}
+		lootPhaseTicks = 0;
 
-		if (loot.itemId != lootTargetItemId || !Objects.equals(loot.worldLocation, lootTargetTile))
+		if (!Objects.equals(loot.worldLocation, lootTargetTile))
 		{
-			boolean next = lootTargetItemId != -1;
-			lootTargetItemId = loot.itemId;
+			// New pile: fresh per-pile counters.
 			lootTargetTile = loot.worldLocation;
+			lootTargetItemId = loot.itemId;
 			lootAttempts = 0;
-			lootClickTicks = -1;
-			lootPhase = LootPhase.IDLE;
-			lootPhaseTicks = 0;
-			if (next && ThreadLocalRandom.current().nextInt(3) == 0)
-			{
-				// Varied rhythm between pickups: sometimes a one-tick pause,
-				// like a player glancing at the next item.
-				cooldown = 1;
-				return;
-			}
 		}
 
-		Player player = context.getPlayer();
-		String itemName = itemName(context.getClient(), loot.itemId);
-
-		// A Take was sent: let the player walk over and pick it up.
-		if (lootClickTicks >= 0)
+		boolean tracking = input.isPileTracking(loot.sceneX, loot.sceneY);
+		int failed = lootAttempts + (tracking ? input.getPileFailedClicks() : 0);
+		if (failed >= LOOT_ATTEMPT_LIMIT)
 		{
-			++lootClickTicks;
-			if (isMoving(player) && lootClickTicks < LOOT_RECLICK_TICKS * 3 || lootClickTicks < LOOT_RECLICK_TICKS)
-			{
-				setStatus("Looting " + itemName);
-				return;
-			}
-			lootClickTicks = -1;
-		}
-
-		if (lootAttempts >= LOOT_ATTEMPT_LIMIT)
-		{
-			log.info("[AnimatedSuit loot] item={}({}) tile={} gave up after {} attempts", itemName, loot.itemId,
-				loot.worldLocation, lootAttempts);
-			skippedLoot.add(key(loot));
+			log.info("[AnimatedSuit loot] {} gave up after {} failed tries, skipping this pile", label, failed);
+			skippedLoot.add(tileKey(loot.worldLocation));
 			resetLoot();
 			return;
 		}
 
-		// Mouse fallbacks first; the exact Take action without a click is
-		// only used on the last attempt.
-		boolean lastAttempt = lootAttempts + 1 >= LOOT_ATTEMPT_LIMIT;
-		String label = String.format("item=%s(%d) tile=%d,%d attempt=%d/%d", itemName, loot.itemId,
-			loot.worldLocation.getX(), loot.worldLocation.getY(), lootAttempts + 1, LOOT_ATTEMPT_LIMIT);
-
-		if (lootPhase == LootPhase.MENU)
+		if (!tracking)
 		{
-			lootPhase = LootPhase.IDLE;
-			boolean sent = input.clickGroundItemMenuRow(loot.itemId, loot.sceneX, loot.sceneY);
-			if (!sent && lastAttempt)
+			if (context.getClient().isMenuOpen())
 			{
-				input.invokeGroundItemTake(loot.sceneX, loot.sceneY, loot.itemId, itemName);
-				log.info("[AnimatedSuit loot] {} result=menu had no Take row, last attempt: ran exact Take", label);
+				input.closeMenu();
+				return;
 			}
-			else if (!sent)
+			if (input.groundItemPoint(loot.sceneX, loot.sceneY) == null)
 			{
-				log.info("[AnimatedSuit loot] {} result=menu had no Take row, re-aiming", label);
+				// Off screen: one small purposeful camera turn toward it.
+				++lootAttempts;
+				input.turnCameraToward(loot.worldLocation);
+				cooldown = 1;
+				log.info("[AnimatedSuit loot] {} tile off screen, turning camera", label);
+				return;
 			}
-			else
+			if (input.startPileTracking(loot.sceneX, loot.sceneY, lootIds, "[AnimatedSuit loot]"))
 			{
-				log.info("[AnimatedSuit loot] {} result=clicked exact Take row in menu", label);
+				log.info("[AnimatedSuit loot] {} start tracking pile", label);
+				setStatus("Looting " + itemName);
 			}
-			lootSent();
 			return;
 		}
 
-		if (lootPhase == LootPhase.HOVERED)
+		GameInput.PileStatus status = input.getPileStatus();
+		if (status == GameInput.PileStatus.NEEDS_MENU)
 		{
-			lootPhase = LootPhase.IDLE;
+			// Something else is the top option here: use the real menu.
 			java.awt.Point mouse = input.getMouseLocation();
-			int hover = input.groundItemHoverState(loot.itemId, loot.sceneX, loot.sceneY);
-			boolean onTile = input.isOnGroundItemTile(mouse, loot.sceneX, loot.sceneY);
-			if (hover == 2 && onTile && mouse != null)
-			{
-				input.click(mouse);
-				log.info("[AnimatedSuit loot] {} result=left-click Take (top option)", label);
-				lootSent();
-				return;
-			}
-			if (hover == 1 && mouse != null)
+			String top = input.getPileTop();
+			input.stopPileTracking();
+			++lootAttempts;
+			if (mouse != null)
 			{
 				input.rightClick(mouse);
 				lootPhase = LootPhase.MENU;
-				lootPhaseTicks = 0;
-				log.info("[AnimatedSuit loot] {} result=right-click, picking Take row next tick", label);
-				return;
+				log.info("[AnimatedSuit loot] {} top='{}', right-clicking for the exact Take row", label, top);
 			}
-			if (lastAttempt)
-			{
-				input.invokeGroundItemTake(loot.sceneX, loot.sceneY, loot.itemId, itemName);
-				log.info("[AnimatedSuit loot] {} result=item not under cursor (hover={} onTile={}), last attempt:"
-					+ " ran exact Take", label, hover, onTile);
-				lootSent();
-				return;
-			}
-			// The tile moved under the cursor: count it and re-aim next tick.
-			++lootAttempts;
-			log.info("[AnimatedSuit loot] {} result=item not under cursor (hover={} onTile={}), re-aiming",
-				label, hover, onTile);
 			return;
 		}
-
-		if (context.getClient().isMenuOpen())
+		if (status == GameInput.PileStatus.OFF_SCREEN)
 		{
-			input.closeMenu();
+			setStatus("Looting (pile off screen)");
 			return;
 		}
 
-		// IDLE: aim at the tile as it is right now; it is re-checked under
-		// the cursor before clicking.
-		java.awt.Point point = input.groundItemPoint(loot.sceneX, loot.sceneY);
-		log.info("[AnimatedSuit loot] {} start: aim={}", label, point == null ? "none" : point.x + "," + point.y);
-		if (point != null && input.moveTo(point))
-		{
-			lootPhase = LootPhase.HOVERED;
-			lootPhaseTicks = 0;
-			setStatus("Looting " + itemName);
-			return;
-		}
-
-		// Off screen: turn the camera toward it (the drop is always within
-		// a few tiles), then aim again.
-		input.turnCameraToward(loot.worldLocation);
-		++lootAttempts;
-		cooldown = 1;
-		log.info("[AnimatedSuit loot] {} result=tile off screen, turning camera", label);
-	}
-
-	private void lootSent()
-	{
-		++lootAttempts;
-		lootClickTicks = 0;
-		lootPhaseTicks = 0;
+		setStatus("Looting " + itemName + " (" + input.getPileSuccesses() + " picked)");
 	}
 
 	private void resetLoot()
 	{
+		ScriptContext context = getContext();
+		if (context != null)
+		{
+			context.getInput().stopPileTracking();
+		}
 		lootPhase = LootPhase.IDLE;
 		lootPhaseTicks = 0;
 		lootTargetItemId = -1;
 		lootTargetTile = null;
 		lootAttempts = 0;
-		lootClickTicks = -1;
 		lootStateTicks = 0;
 		lootInventoryCount = -1;
 	}
@@ -993,7 +949,7 @@ public final class AnimatedSuitKillerScript extends Script
 					}
 					GroundLoot candidate = new GroundLoot(item.getId(), sceneLocation.getX(), sceneLocation.getY(),
 						location);
-					if (skippedLoot.contains(key(candidate)))
+					if (skippedLoot.contains(key(candidate)) || skippedLoot.contains(tileKey(location)))
 					{
 						continue;
 					}
@@ -1008,6 +964,11 @@ public final class AnimatedSuitKillerScript extends Script
 			}
 		}
 		return best;
+	}
+
+	private static String tileKey(WorldPoint tile)
+	{
+		return "tile@" + tile;
 	}
 
 	private static String key(GroundLoot loot)
@@ -1293,31 +1254,6 @@ public final class AnimatedSuitKillerScript extends Script
 			input.reset();
 			cameraBusyTicks = 0;
 		}
-	}
-
-	private void antiIdle(ScriptContext context)
-	{
-		if (System.currentTimeMillis() < nextAntiIdleAt)
-		{
-			return;
-		}
-		GameInput input = context.getInput();
-		if (input.isBusy() || input.isCameraBusy() || context.getClient().isMenuOpen()
-			|| state == State.LOOT || state == State.ANIMATE)
-		{
-			return;
-		}
-		ThreadLocalRandom random = ThreadLocalRandom.current();
-		if (input.nudgeCamera(random.nextBoolean(), random.nextInt(ANTI_IDLE_MIN_HOLD_MS, ANTI_IDLE_MAX_HOLD_MS + 1)))
-		{
-			scheduleAntiIdle();
-		}
-	}
-
-	private void scheduleAntiIdle()
-	{
-		nextAntiIdleAt = System.currentTimeMillis()
-			+ ThreadLocalRandom.current().nextLong(ANTI_IDLE_MIN_MS, ANTI_IDLE_MAX_MS + 1);
 	}
 
 	private static boolean isMoving(Player player)

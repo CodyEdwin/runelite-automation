@@ -39,6 +39,7 @@ import java.util.Optional;
 import javax.inject.Inject;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
+import net.runelite.api.events.ClientTick;
 import net.runelite.api.events.CommandExecuted;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.MenuEntryAdded;
@@ -286,6 +287,21 @@ public class TestPlugin extends Plugin
 			{
 				configManager.setConfiguration(TestConfig.GROUP, other, false);
 			}
+		}
+	}
+
+	/**
+	 * Per-frame (client thread) update for tracked ground-pile looting: the
+	 * pile's screen point and hover check are recomputed here and published
+	 * to the mouse thread, which never reads the client itself.
+	 */
+	@Subscribe
+	public void onClientTick(ClientTick event)
+	{
+		GameInput current = input;
+		if (current != null)
+		{
+			current.updatePileTracking();
 		}
 	}
 

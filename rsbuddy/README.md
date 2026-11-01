@@ -261,12 +261,14 @@ Loop:
    Animate clicks in a row without a spawn stops the script.
 3. Fight it. The armour attacks you on its own; the script only clicks Attack if you are not
    fighting it after a short 3-tick grace. A fight is capped at 200 ticks.
-4. Loot the 3 pieces and the tokens from the death tile, one item at a time: a short curved mouse
-   move to a random point on the tile, confirm the item is under the cursor, then left-click Take.
-   If something else is on top it right-clicks and picks the exact Take row; if the tile moved it
-   re-aims, and an off-screen tile turns the camera first. Only the last of 3 attempts per item
-   may run the exact Take action without a click. 25 ticks without a pickup gives up. Pickups
-   sometimes pause a tick between items. Each attempt logs `[AnimatedSuit loot] ...`.
+4. Loot the pile on the death tile with the mouse glued to it: the cursor moves onto a fixed
+   random spot on the pile (never the dead centre) and stays there while the player walks over
+   and the camera moves. Whenever the hovered top option is **Take** one of our items on that
+   tile it clicks, and after each pickup it clicks again 80-250 ms later, like a player
+   spam-clicking a pile. If something else is the top option it right-clicks and picks the exact
+   Take row. An off-screen pile gets one small camera turn. 3 failed tries per pile skip it, and
+   25 ticks without any pickup gives up. Every click logs
+   `[AnimatedSuit loot] pile=x,y click #n point=x,y top='Take ...'`.
 5. Repeat.
 
 Priority each tick: **eat > drink > fight/loot/animate**.
@@ -286,8 +288,14 @@ Priority each tick: **eat > drink > fight/loot/animate**.
 Mouse movement uses the fast, attentive profile (short curved paths, random click points, short
 varied reaction delays), like the Hill Giant script. The overlay shows status, armour type, kills/hr, tokens (and tokens gained) and food
 eaten, and the potion mode with potions drunk. State changes log `[AnimatedSuit] OLD -> NEW: reason`; more than 5 ticks in one state logs a
-`stall?` line (repeated every 20 ticks). Stuck mouse, camera or menus are reset on a tick cap, and
-the same anti-idle camera nudges as the Gem Crab Killer run every 30-60 seconds.
+`stall?` line (repeated every 20 ticks). Stuck mouse, camera or menus are reset on a tick cap. This
+script has no random anti-idle camera nudges; the camera only turns to bring an off-screen pile,
+animator or armour into view.
+
+Pile tracking is thread-safe: every frame (`ClientTick`, client thread) `GameInput` recomputes the
+pile's screen point and the hover check and publishes them through volatile fields; the mouse timer
+only reads that point, steers the cursor every 8 ms and presses when a click is requested. It never
+calls the client.
 
 ## Panel and commands
 
