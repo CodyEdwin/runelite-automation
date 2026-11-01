@@ -295,4 +295,42 @@ public interface TestConfig extends Config
 	{
 		return 5;
 	}
+
+	@ConfigItem(
+		keyName = "bowFletcherBowType",
+		name = "Bow fletcher: bow",
+		description = "Which unstrung bow to fletch. The logs withdrawn follow from it (regular, oak, willow,"
+			+ " maple, yew or magic).",
+		position = 22
+	)
+	default BowFletcherBowType bowFletcherBowType()
+	{
+		return BowFletcherBowType.REGULAR_LONGBOW;
+	}
+
+	@Range(
+		min = 0,
+		max = 1000000
+	)
+	@ConfigItem(
+		keyName = "bowFletcherAmount",
+		name = "Bow fletcher: amount",
+		description = "How many bows to make, then stop. 0 = until the bank runs out of logs.",
+		position = 23
+	)
+	default int bowFletcherAmount()
+	{
+		return 0;
+	}
+
+	@ConfigItem(
+		keyName = "bowFletcherClosestBooth",
+		name = "Bow fletcher: bank at closest booth",
+		description = "Open the closest bank booth (or bank chest). Off: the closest of a banker, chest or booth.",
+		position = 24
+	)
+	default boolean bowFletcherClosestBooth()
+	{
+		return true;
+	}
 }

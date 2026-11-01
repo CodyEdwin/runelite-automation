@@ -308,6 +308,45 @@ pile's screen point and the hover check and publishes them through volatile fiel
 only reads that point, steers the cursor every 8 ms and presses when a click is requested. It never
 calls the client.
 
+## Bow Fletcher
+
+`BowFletcherScript` appears in the panel as **Bow Fletcher**. Stand next to a bank with a knife
+in the **locked first inventory slot** and the logs in the bank.
+
+Settings (RuneLite Configuration → **Test Plugin**):
+
+- **Bow fletcher: bow** (default `Longbow (u) - regular logs`): shortbow (u) or longbow (u) for
+  regular, oak, willow, maple, yew or magic logs. The logs to withdraw follow from it.
+- **Bow fletcher: amount** (default `0` = until the bank has no logs left): stop after this many
+  bows. The inventory being fletched when the count is reached may still finish.
+- **Bow fletcher: bank at closest booth** (default on): open the closest bank booth or bank chest.
+  Off: the closest of a banker NPC, bank chest or booth.
+
+Settings are read on Start.
+
+In-game setup it relies on: left click on the logs in the bank set to **Withdraw-All**, and the
+knife's left click set to **Use**. The make menu's quantity should already be **All**.
+
+Loop (every click is a left click, made only after the hovered left-click option is checked):
+
+1. Open the bank (booth/chest: `Bank`/`Use`; banker: `Bank`). If that left click never shows the
+   right option after 3 tries it runs the exact Bank action instead. Off-screen targets get one
+   camera turn.
+2. **Deposit inventory** (the locked knife stays), then left-click the logs (`Withdraw-All`).
+3. **Escape** to close the bank (the close button if Escape does nothing).
+4. Left-click the knife (`Use`), then the logs (`Use Knife -> Logs`).
+5. In the make menu it finds the option for the chosen bow by its item/name (no hard-coded
+   positions) and presses its number key (1 = first option). Once that option has been seen
+   working, later batches press **Space**, which repeats the last-made option.
+6. While fletching (animation / log count going down) it waits. If it stands idle 4 ticks with
+   logs left (for example after a level-up), it uses the knife on the logs again.
+7. When the logs are gone it banks and repeats.
+
+It stops with a clear status when the amount is reached, the bank has no logs left, the knife is
+missing, the knife/logs left click is not `Use`/`Withdraw-All`, or a step keeps failing. Every wait
+is tick-capped. Logs are prefixed `[BowFletcher]` (state changes, every click with the hovered
+top option, bank and make-menu steps).
+
 ## Panel and commands
 
 The sidebar panel lists registered scripts and provides Start/Stop controls with live status and
