@@ -165,7 +165,9 @@ public class TestPlugin extends Plugin
 			config.animatedSuitBlack(),
 			config.animatedSuitMithril(),
 			config.animatedSuitAdamant(),
-			config.animatedSuitRune()));
+			config.animatedSuitRune(),
+			config.animatedSuitPotionMode().name(),
+			config.animatedSuitBoostThreshold()));
 
 		String customScriptError = registerCustomScript(config.customScriptClass());
 
@@ -512,7 +514,9 @@ public class TestPlugin extends Plugin
 				config.animatedSuitBlack(),
 				config.animatedSuitMithril(),
 				config.animatedSuitAdamant(),
-				config.animatedSuitRune());
+				config.animatedSuitRune(),
+				config.animatedSuitPotionMode().name(),
+				config.animatedSuitBoostThreshold());
 		}
 
 		return ScriptLoader.load(className, classLoader);

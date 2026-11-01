@@ -109,7 +109,36 @@ public final class AnimatedSuitKillerScript extends Script
 
 	/** Eat below this share of max hitpoints. */
 	private static final double EAT_BELOW_HP = 0.5;
-	private static final int EAT_COOLDOWN_TICKS = 3;
+	/** Ticks to wait for an eat to register (HP up or food gone) before eating again. */
+	private static final int EAT_WAIT_TICKS = 4;
+	/** Ticks to wait for a drink to register before trying again. */
+	private static final int DRINK_WAIT_TICKS = 5;
+	private static final int DEFAULT_BOOST_THRESHOLD = 3;
+
+	/** Regular strength potions, lowest dose first. */
+	private static final int[] REGULAR_STRENGTH = {
+		ItemID._1DOSE1STRENGTH,  // Strength potion(1) 119
+		ItemID._2DOSE1STRENGTH,  // Strength potion(2) 117
+		ItemID._3DOSE1STRENGTH,  // Strength potion(3) 115
+		ItemID.STRENGTH4         // Strength potion(4) 113
+	};
+
+	/** Super strength potions, lowest dose first. */
+	private static final int[] SUPER_STRENGTH = {
+		ItemID._1DOSE2STRENGTH,  // Super strength(1) 161
+		ItemID._2DOSE2STRENGTH,  // Super strength(2) 159
+		ItemID._3DOSE2STRENGTH,  // Super strength(3) 157
+		ItemID._4DOSE2STRENGTH   // Super strength(4) 2440
+	};
+
+	/** Matches the plugin's AnimatedSuitPotionMode by name (survives hot reload). */
+	private enum PotionMode
+	{
+		OFF,
+		STRENGTH,
+		SUPER_STRENGTH,
+		EITHER
+	}
 
 	private static final long ANTI_IDLE_MIN_MS = 30_000L;
 	private static final long ANTI_IDLE_MAX_MS = 60_000L;
@@ -190,24 +219,50 @@ public final class AnimatedSuitKillerScript extends Script
 	private int kills;
 	private int tokensAtStart = -1;
 	private int tokens;
-	private int eatCooldown;
+	private int eatWaitTicks;
+	private int eatHpBefore;
+	private int eatItemId = -1;
+	private int eatItemCountBefore;
 	private int foodEaten;
+	private int noFoodWarnTicks;
+	private int drinkWaitTicks;
+	private int boostBeforeDrink;
+	private int potionsDrunk;
+
+	private final PotionMode potionMode;
+	private final int boostThreshold;
+	/** Potions in drinking order for the chosen mode (empty when OFF). */
+	private final int[] strengthPotions;
 	private long startedAt;
 	private long nextAntiIdleAt;
 
 	public AnimatedSuitKillerScript()
 	{
-		this(false, false, false, false);
+		this(true, false, false, false, PotionMode.EITHER.name(), DEFAULT_BOOST_THRESHOLD);
+	}
+
+	public AnimatedSuitKillerScript(boolean black, boolean mithril, boolean adamant, boolean rune)
+	{
+		this(black, mithril, adamant, rune, PotionMode.EITHER.name(), DEFAULT_BOOST_THRESHOLD);
 	}
 
 	/**
 	 * One flag per armour type, exactly as ticked in the config. Anything
 	 * other than exactly one ticked refuses to run.
 	 */
-	public AnimatedSuitKillerScript(boolean black, boolean mithril, boolean adamant, boolean rune)
+	/**
+	 * @param potionMode OFF, STRENGTH, SUPER_STRENGTH or EITHER (super first);
+	 * anything else means EITHER
+	 * @param boostThreshold drink again once the Strength boost is this or less
+	 */
+	public AnimatedSuitKillerScript(boolean black, boolean mithril, boolean adamant, boolean rune,
+		String potionMode, int boostThreshold)
 	{
 		super("Animated Suit Killer", "Animates armour on the Warriors' Guild Magical Animator, kills it, loots the"
 			+ " pieces and tokens, and repeats.");
+		this.potionMode = parseMode(potionMode);
+		this.boostThreshold = Math.max(0, boostThreshold);
+		this.strengthPotions = potionOrder(this.potionMode);
 		List<ArmourType> ticked = new ArrayList<>();
 		if (black)
 		{
@@ -247,6 +302,36 @@ public final class AnimatedSuitKillerScript extends Script
 		}
 	}
 
+	private static PotionMode parseMode(String name)
+	{
+		try
+		{
+			return name == null ? PotionMode.EITHER : PotionMode.valueOf(name);
+		}
+		catch (IllegalArgumentException ex)
+		{
+			return PotionMode.EITHER;
+		}
+	}
+
+	private static int[] potionOrder(PotionMode mode)
+	{
+		switch (mode)
+		{
+			case OFF:
+				return new int[0];
+			case STRENGTH:
+				return REGULAR_STRENGTH;
+			case SUPER_STRENGTH:
+				return SUPER_STRENGTH;
+			default:
+				int[] both = new int[SUPER_STRENGTH.length + REGULAR_STRENGTH.length];
+				System.arraycopy(SUPER_STRENGTH, 0, both, 0, SUPER_STRENGTH.length);
+				System.arraycopy(REGULAR_STRENGTH, 0, both, SUPER_STRENGTH.length, REGULAR_STRENGTH.length);
+				return both;
+		}
+	}
+
 	@Override
 	public Set<Integer> getGroundItemPickupFilter()
 	{
@@ -283,8 +368,13 @@ public final class AnimatedSuitKillerScript extends Script
 		kills = 0;
 		tokensAtStart = -1;
 		tokens = 0;
-		eatCooldown = 0;
+		eatWaitTicks = 0;
+		eatItemId = -1;
 		foodEaten = 0;
+		noFoodWarnTicks = 0;
+		drinkWaitTicks = 0;
+		boostBeforeDrink = 0;
+		potionsDrunk = 0;
 		startedAt = System.currentTimeMillis();
 		scheduleAntiIdle();
 		setStatus(configError == null ? "Ready" : configError);
@@ -333,7 +423,12 @@ public final class AnimatedSuitKillerScript extends Script
 
 		recoverStuckInput(context);
 		updateTokens(context);
-		eatIfNeeded(context);
+		// Priority: eat > drink > everything else. A tick that eats or
+		// drinks (or is waiting to) sends no other click.
+		if (eatIfNeeded(context) || drinkIfNeeded(context))
+		{
+			return;
+		}
 		antiIdle(context);
 
 		if (cooldown > 0)
@@ -430,6 +525,18 @@ public final class AnimatedSuitKillerScript extends Script
 			setState(State.CHECK_ARMOUR, "a piece is missing before animating");
 			return;
 		}
+		if (isLowHp(context.getClient()) && findFoodSlot(context.getClient(), context.getInventory()) < 0)
+		{
+			// Never start a new fight below half HP without food: wait for
+			// HP to regenerate (or for food to be added).
+			if (noFoodWarnTicks++ % 20 == 0)
+			{
+				log.warn("[AnimatedSuit] HP below 50% and no food: waiting to regenerate before animating");
+			}
+			setStatus("Low HP, no food: waiting to regenerate");
+			return;
+		}
+		noFoodWarnTicks = 0;
 		if (animateAttempts >= ANIMATE_ATTEMPT_LIMIT)
 		{
 			halt(ANIMATE_ATTEMPT_LIMIT + " Animate clicks without a spawn; is a Magical Animator next to you?");
@@ -613,12 +720,20 @@ public final class AnimatedSuitKillerScript extends Script
 
 		if (loot.itemId != lootTargetItemId || !Objects.equals(loot.worldLocation, lootTargetTile))
 		{
+			boolean next = lootTargetItemId != -1;
 			lootTargetItemId = loot.itemId;
 			lootTargetTile = loot.worldLocation;
 			lootAttempts = 0;
 			lootClickTicks = -1;
 			lootPhase = LootPhase.IDLE;
 			lootPhaseTicks = 0;
+			if (next && ThreadLocalRandom.current().nextInt(3) == 0)
+			{
+				// Varied rhythm between pickups: sometimes a one-tick pause,
+				// like a player glancing at the next item.
+				cooldown = 1;
+				return;
+			}
 		}
 
 		Player player = context.getPlayer();
@@ -645,6 +760,9 @@ public final class AnimatedSuitKillerScript extends Script
 			return;
 		}
 
+		// Mouse fallbacks first; the exact Take action without a click is
+		// only used on the last attempt.
+		boolean lastAttempt = lootAttempts + 1 >= LOOT_ATTEMPT_LIMIT;
 		String label = String.format("item=%s(%d) tile=%d,%d attempt=%d/%d", itemName, loot.itemId,
 			loot.worldLocation.getX(), loot.worldLocation.getY(), lootAttempts + 1, LOOT_ATTEMPT_LIMIT);
 
@@ -652,10 +770,14 @@ public final class AnimatedSuitKillerScript extends Script
 		{
 			lootPhase = LootPhase.IDLE;
 			boolean sent = input.clickGroundItemMenuRow(loot.itemId, loot.sceneX, loot.sceneY);
-			if (!sent)
+			if (!sent && lastAttempt)
 			{
 				input.invokeGroundItemTake(loot.sceneX, loot.sceneY, loot.itemId, itemName);
-				log.info("[AnimatedSuit loot] {} result=menu had no Take row, ran exact Take directly", label);
+				log.info("[AnimatedSuit loot] {} result=menu had no Take row, last attempt: ran exact Take", label);
+			}
+			else if (!sent)
+			{
+				log.info("[AnimatedSuit loot] {} result=menu had no Take row, re-aiming", label);
 			}
 			else
 			{
@@ -686,10 +808,18 @@ public final class AnimatedSuitKillerScript extends Script
 				log.info("[AnimatedSuit loot] {} result=right-click, picking Take row next tick", label);
 				return;
 			}
-			input.invokeGroundItemTake(loot.sceneX, loot.sceneY, loot.itemId, itemName);
-			log.info("[AnimatedSuit loot] {} result=item not under cursor (hover={} onTile={}), ran exact Take",
+			if (lastAttempt)
+			{
+				input.invokeGroundItemTake(loot.sceneX, loot.sceneY, loot.itemId, itemName);
+				log.info("[AnimatedSuit loot] {} result=item not under cursor (hover={} onTile={}), last attempt:"
+					+ " ran exact Take", label, hover, onTile);
+				lootSent();
+				return;
+			}
+			// The tile moved under the cursor: count it and re-aim next tick.
+			++lootAttempts;
+			log.info("[AnimatedSuit loot] {} result=item not under cursor (hover={} onTile={}), re-aiming",
 				label, hover, onTile);
-			lootSent();
 			return;
 		}
 
@@ -711,10 +841,12 @@ public final class AnimatedSuitKillerScript extends Script
 			return;
 		}
 
-		// Off screen: the exact Take walks there by itself.
-		input.invokeGroundItemTake(loot.sceneX, loot.sceneY, loot.itemId, itemName);
-		log.info("[AnimatedSuit loot] {} result=tile off screen, ran exact Take", label);
-		lootSent();
+		// Off screen: turn the camera toward it (the drop is always within
+		// a few tiles), then aim again.
+		input.turnCameraToward(loot.worldLocation);
+		++lootAttempts;
+		cooldown = 1;
+		log.info("[AnimatedSuit loot] {} result=tile off screen, turning camera", label);
 	}
 
 	private void lootSent()
@@ -911,62 +1043,222 @@ public final class AnimatedSuitKillerScript extends Script
 		tokens = now;
 	}
 
-	/** Eats any inventory item with an Eat option once HP is below half. */
-	private void eatIfNeeded(ScriptContext context)
+	private static boolean isLowHp(Client client)
 	{
-		if (eatCooldown > 0)
-		{
-			--eatCooldown;
-			return;
-		}
-		Client client = context.getClient();
 		int max = client.getRealSkillLevel(Skill.HITPOINTS);
+		return max > 0 && client.getBoostedSkillLevel(Skill.HITPOINTS) < max * EAT_BELOW_HP;
+	}
+
+	/**
+	 * Eats any inventory item that has an Eat option once HP is below half,
+	 * in any state, including mid-fight. After an eat it waits until HP went
+	 * up or the food left the inventory (capped) before eating again.
+	 *
+	 * @return true if this tick was spent eating or waiting on an eat
+	 */
+	private boolean eatIfNeeded(ScriptContext context)
+	{
+		Client client = context.getClient();
+		Inventory inventory = context.getInventory();
 		int hp = client.getBoostedSkillLevel(Skill.HITPOINTS);
-		if (max <= 0 || hp >= max * EAT_BELOW_HP)
+
+		if (eatWaitTicks > 0)
 		{
-			return;
+			boolean registered = hp > eatHpBefore || inventory.countItem(eatItemId) < eatItemCountBefore;
+			if (!registered && --eatWaitTicks > 0)
+			{
+				setStatus("Eating");
+				return true;
+			}
+			if (!registered)
+			{
+				log.info("[AnimatedSuit eat] eat of item {} did not register within {} ticks", eatItemId, EAT_WAIT_TICKS);
+			}
+			eatWaitTicks = 0;
 		}
 
-		Inventory inventory = context.getInventory();
-		int slot = findFoodSlot(client, inventory);
-		GameInput input = context.getInput();
-		if (slot < 0 || input.isBusy() || input.isCameraBusy() || client.isMenuOpen())
+		if (!isLowHp(client))
 		{
-			return;
+			return false;
+		}
+
+		int slot = findFoodSlot(client, inventory);
+		if (slot < 0)
+		{
+			// Keep fighting; the animate step refuses to start a new suit.
+			if (noFoodWarnTicks++ % 20 == 0)
+			{
+				log.warn("[AnimatedSuit eat] HP {}/{} below 50% and no food in inventory, continuing",
+					hp, client.getRealSkillLevel(Skill.HITPOINTS));
+			}
+			return false;
+		}
+
+		GameInput input = context.getInput();
+		if (input.isBusy() || input.isCameraBusy())
+		{
+			return true;
+		}
+		if (client.isMenuOpen())
+		{
+			input.closeMenu();
+			return true;
 		}
 		if (!inventory.isOpen())
 		{
 			inventory.open();
-			return;
+			setStatus("Opening inventory to eat");
+			return true;
 		}
+
 		Widget widget = inventory.getSlotWidget(slot);
-		if (widget != null && input.click(widget))
+		if (widget == null)
+		{
+			return true;
+		}
+		int itemId = inventory.getItems()[slot].getId();
+		ItemComposition composition = client.getItemDefinition(itemId);
+		String[] actions = composition == null ? null : composition.getInventoryActions();
+		// Eat is food's left-click option; if an item has it elsewhere, run
+		// the exact Eat action instead of a left click.
+		boolean sent = actions != null && actions.length > 0 && "Eat".equalsIgnoreCase(actions[0])
+			? input.click(widget)
+			: input.interact(widget, "Eat");
+		if (sent)
 		{
 			++foodEaten;
-			eatCooldown = EAT_COOLDOWN_TICKS;
-			log.info("[AnimatedSuit] eating {} at hp {}/{}", itemName(client, inventory.getItems()[slot].getId()), hp, max);
-			setStatus("Eating");
+			eatHpBefore = hp;
+			eatItemId = itemId;
+			eatItemCountBefore = inventory.countItem(itemId);
+			eatWaitTicks = EAT_WAIT_TICKS;
+			log.info("[AnimatedSuit eat] eating {} at hp {}/{} in state={}", itemName(client, itemId), hp,
+				client.getRealSkillLevel(Skill.HITPOINTS), state);
+			setStatus("Eating " + itemName(client, itemId));
 		}
+		return true;
 	}
 
+	/** @return the first inventory slot holding food (an item with an Eat option), or -1 */
 	private int findFoodSlot(Client client, Inventory inventory)
 	{
 		Item[] items = inventory.getItems();
 		for (int slot = 0; slot < Math.min(items.length, Inventory.SIZE); slot++)
 		{
 			Item item = items[slot];
-			if (item == null || item.getId() == -1 || lootIds.contains(item.getId()))
+			// Never the armour pieces or tokens.
+			if (item == null || item.getId() == -1 || lootIds.contains(item.getId()) || isArmourPiece(item.getId()))
 			{
 				continue;
 			}
 			ItemComposition composition = client.getItemDefinition(item.getId());
 			String[] actions = composition == null ? null : composition.getInventoryActions();
-			if (actions != null && actions.length > 0 && "Eat".equalsIgnoreCase(actions[0]))
+			if (actions == null)
 			{
-				return slot;
+				continue;
+			}
+			for (String action : actions)
+			{
+				if ("Eat".equalsIgnoreCase(action))
+				{
+					return slot;
+				}
 			}
 		}
 		return -1;
+	}
+
+	private static boolean isArmourPiece(int itemId)
+	{
+		for (ArmourType type : ArmourType.values())
+		{
+			for (int piece : type.pieces)
+			{
+				if (piece == itemId)
+				{
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Drinks a strength potion (lowest dose first) when the Strength boost is
+	 * at or below the threshold, in any state. Off when the mode is OFF or
+	 * no matching potion is carried.
+	 *
+	 * @return true if this tick was spent drinking or waiting on a drink
+	 */
+	private boolean drinkIfNeeded(ScriptContext context)
+	{
+		if (strengthPotions.length == 0)
+		{
+			return false;
+		}
+		Client client = context.getClient();
+		int boost = client.getBoostedSkillLevel(Skill.STRENGTH) - client.getRealSkillLevel(Skill.STRENGTH);
+
+		if (drinkWaitTicks > 0)
+		{
+			if (boost > boostBeforeDrink)
+			{
+				drinkWaitTicks = 0;
+			}
+			else
+			{
+				// Waiting for the boost to show; fighting goes on meanwhile.
+				--drinkWaitTicks;
+				return false;
+			}
+		}
+
+		if (boost > boostThreshold)
+		{
+			return false;
+		}
+
+		Inventory inventory = context.getInventory();
+		int slot = -1;
+		for (int potion : strengthPotions)
+		{
+			slot = inventory.findSlot(potion);
+			if (slot >= 0)
+			{
+				break;
+			}
+		}
+		if (slot < 0)
+		{
+			return false;
+		}
+
+		GameInput input = context.getInput();
+		if (input.isBusy() || input.isCameraBusy() || client.isMenuOpen())
+		{
+			// Let the current click finish; never steal a menu.
+			return false;
+		}
+		if (!inventory.isOpen())
+		{
+			inventory.open();
+			setStatus("Opening inventory to drink");
+			return true;
+		}
+
+		// Drink is the potion's left-click option.
+		Widget widget = inventory.getSlotWidget(slot);
+		if (widget != null && input.click(widget))
+		{
+			int itemId = inventory.getItems()[slot].getId();
+			boostBeforeDrink = boost;
+			drinkWaitTicks = DRINK_WAIT_TICKS;
+			++potionsDrunk;
+			log.info("[AnimatedSuit drink] {} at strength boost {} (threshold {})", itemName(client, itemId), boost,
+				boostThreshold);
+			setStatus("Drinking " + itemName(client, itemId));
+			return true;
+		}
+		return false;
 	}
 
 	private void recoverStuckInput(ScriptContext context)
@@ -1059,7 +1351,9 @@ public final class AnimatedSuitKillerScript extends Script
 			"Armour: " + (armour == null ? "none (tick exactly one)" : armour.label)
 				+ " | State: " + (state == null ? "-" : state.name()),
 			"Kills: " + kills + " (" + perHour + "/hr)",
-			"Tokens: " + tokens + " (+" + gained + ")" + (foodEaten > 0 ? " | Food eaten: " + foodEaten : ""));
+			"Tokens: " + tokens + " (+" + gained + ")" + (foodEaten > 0 ? " | Food eaten: " + foodEaten : ""),
+			"Strength potions: " + potionsDrunk + " (" + potionMode
+				+ (potionMode == PotionMode.OFF ? ")" : ", at boost <= " + boostThreshold + ")"));
 	}
 
 	private static final class GroundLoot
