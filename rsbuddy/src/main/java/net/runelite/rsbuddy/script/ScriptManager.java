@@ -131,6 +131,7 @@ public final class ScriptManager
 			log.error("Unable to start script {}", script.getName(), ex);
 			activeScript = null;
 			context.getInput().setGroundItemPickupFilter(null);
+			context.getInput().stopPileTracking();
 			context.getInput().setFastMouse(false);
 			script.setStatus("Error: " + ex.getMessage());
 
@@ -152,6 +153,7 @@ public final class ScriptManager
 
 		context.getInput().stopCamera();
 		context.getInput().setGroundItemPickupFilter(null);
+		context.getInput().stopPileTracking();
 		context.getInput().setFastMouse(false);
 
 		if (script == null)
@@ -187,6 +189,7 @@ public final class ScriptManager
 			log.error("Script {} failed", script.getName(), ex);
 			activeScript = null;
 			context.getInput().setGroundItemPickupFilter(null);
+			context.getInput().stopPileTracking();
 			context.getInput().setFastMouse(false);
 
 			try

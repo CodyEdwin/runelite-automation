@@ -85,6 +85,8 @@ public final class GameInput
 		MenuAction.NPC_FIFTH_OPTION
 	};
 
+	private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(GameInput.class);
+
 	private final Client client;
 	private final Random random = new Random();
 
@@ -1866,6 +1868,7 @@ public final class GameInput
 		stopMovement();
 		busy = false;
 		fastClicking = false;
+		pileActive = false;
 	}
 
 	/**
@@ -2328,6 +2331,563 @@ public final class GameInput
 		timer.start();
 	}
 
+
+	/*
+	 * Tracked ground-pile looting.
+	 *
+	 * Threading: the client thread (script tick and every ClientTick frame
+	 * via updatePileTracking) does ALL client reads: the tile polygon, the
+	 * hover menu, ground items, inventory, player pose. It publishes an
+	 * immutable PileTarget (canvas point + scale) and a click token through
+	 * volatile fields. The Swing timer only reads those fields, moves the
+	 * cursor toward the published point and presses the button when a token
+	 * is pending. It never calls the client.
+	 */
+
+	/** Pile tracking status, as seen by the client thread. */
+	public enum PileStatus
+	{
+		IDLE,
+		TRACKING,
+		NEEDS_MENU,
+		OFF_SCREEN,
+		EMPTY
+	}
+
+	private static final class PileTarget
+	{
+		private final int canvasX;
+		private final int canvasY;
+		private final double toGameX;
+		private final double toGameY;
+
+		private PileTarget(int canvasX, int canvasY, double toGameX, double toGameY)
+		{
+			this.canvasX = canvasX;
+			this.canvasY = canvasY;
+			this.toGameX = toGameX;
+			this.toGameY = toGameY;
+		}
+	}
+
+	private static final int PILE_STEER_MS = 8;
+	private static final int PILE_MAX_STEP_PX = 26;
+	private static final int PILE_CLICK_RADIUS_PX = 3;
+	private static final long PILE_TOKEN_MAX_AGE_MS = 400;
+	private static final long PILE_NO_RESULT_MS = 700;
+	private static final long PILE_WALK_RESULT_MS = 2500;
+	private static final long PILE_MENU_DWELL_MS = 150;
+
+	// Shared between threads (volatile only).
+	private volatile boolean pileActive;
+	private volatile int pileSceneX = -1;
+	private volatile int pileSceneY = -1;
+	private volatile PileTarget pileTarget;
+	private volatile int pileClickToken;
+	private volatile long pileClickTokenAt;
+	private volatile long pileSteerAfter;
+	private volatile PileStatus pileStatus = PileStatus.IDLE;
+
+	// Client thread only.
+	private Set<Integer> pileIds = Collections.emptySet();
+	private String pileLogPrefix = "[loot]";
+	private double pileOffsetX;
+	private double pileOffsetY;
+	private int pileWantedCount;
+	private int pileInventoryCount;
+	private boolean pileAwaiting;
+	private long pileClickSentAt;
+	private long pileNextClickAt;
+	private long pileOnTileSince;
+	private int pileClicks;
+	private int pileSuccesses;
+	private int pileFailedClicks;
+	private String pileTop = "";
+
+	// Swing thread only.
+	private Timer pileTimer;
+	private int pileHandledToken;
+	private boolean pilePressing;
+	private double pileCurveSign = 1.0;
+
+	/**
+	 * Starts gluing the mouse to a ground pile and spam-taking our items from
+	 * it. Must be called on the client thread.
+	 *
+	 * @param itemIds the items to take; the top Take entry must be one of these
+	 * @param logPrefix prefix for the per-click log lines
+	 * @return false if the canvas is unavailable or the input is busy
+	 */
+	public boolean startPileTracking(int sceneX, int sceneY, Set<Integer> itemIds, String logPrefix)
+	{
+		Canvas canvas = client.getCanvas();
+		if (canvas == null || busy || fastClicking)
+		{
+			return false;
+		}
+
+		pileIds = itemIds == null ? Collections.emptySet() : new java.util.HashSet<>(itemIds);
+		pileLogPrefix = logPrefix == null ? "[loot]" : logPrefix;
+		// A fixed spot on this pile, chosen once: never the dead centre.
+		pileOffsetX = (random.nextDouble() * 2.0 - 1.0) * 0.22;
+		pileOffsetY = (random.nextDouble() * 2.0 - 1.0) * 0.22;
+		if (Math.abs(pileOffsetX) < 0.05)
+		{
+			pileOffsetX = pileOffsetX < 0 ? -0.07 : 0.07;
+		}
+		pileSceneX = sceneX;
+		pileSceneY = sceneY;
+		pileWantedCount = countPileItems(sceneX, sceneY);
+		pileInventoryCount = countInventory();
+		pileAwaiting = false;
+		pileNextClickAt = 0;
+		pileOnTileSince = 0;
+		pileClicks = 0;
+		pileSuccesses = 0;
+		pileFailedClicks = 0;
+		pileTop = "";
+		pileTarget = null;
+		pileStatus = PileStatus.TRACKING;
+		pileSteerAfter = System.currentTimeMillis() + reactionDelayMs();
+		pileActive = true;
+		publishPileTarget();
+
+		SwingUtilities.invokeLater(() -> startPileTimer(canvas));
+		return true;
+	}
+
+	/** Stops pile tracking. Safe from any thread. */
+	public void stopPileTracking()
+	{
+		pileActive = false;
+		pileStatus = PileStatus.IDLE;
+	}
+
+	/** @return true while the mouse is glued to the pile on this scene tile */
+	public boolean isPileTracking(int sceneX, int sceneY)
+	{
+		return pileActive && pileSceneX == sceneX && pileSceneY == sceneY;
+	}
+
+	public PileStatus getPileStatus()
+	{
+		return pileActive ? pileStatus : PileStatus.IDLE;
+	}
+
+	public int getPileClicks()
+	{
+		return pileClicks;
+	}
+
+	public int getPileSuccesses()
+	{
+		return pileSuccesses;
+	}
+
+	public int getPileFailedClicks()
+	{
+		return pileFailedClicks;
+	}
+
+	public String getPileTop()
+	{
+		return pileTop;
+	}
+
+	/**
+	 * Per-frame update. Call from ClientTick (client thread). Re-aims the
+	 * published point at the pile, detects pickups, and decides when to
+	 * click.
+	 */
+	public void updatePileTracking()
+	{
+		if (!pileActive)
+		{
+			return;
+		}
+
+		try
+		{
+			updatePileTrackingUnsafe();
+		}
+		catch (RuntimeException | AssertionError ex)
+		{
+			log.warn("{} pile tracking failed, stopping it", pileLogPrefix, ex);
+			pileActive = false;
+			pileStatus = PileStatus.IDLE;
+		}
+	}
+
+	private void updatePileTrackingUnsafe()
+	{
+		int sceneX = pileSceneX;
+		int sceneY = pileSceneY;
+		long now = System.currentTimeMillis();
+
+		int wanted = countPileItems(sceneX, sceneY);
+		int inventory = countInventory();
+		if (wanted < pileWantedCount || pileAwaiting && inventory != pileInventoryCount)
+		{
+			++pileSuccesses;
+			pileFailedClicks = 0;
+			pileAwaiting = false;
+			// Click again after a short human beat, same pile.
+			pileNextClickAt = now + 80 + random.nextInt(171);
+			log.info("{} pile={},{} picked up (left on tile={}, pickups={})", pileLogPrefix, sceneX, sceneY,
+				wanted, pileSuccesses);
+		}
+		pileWantedCount = wanted;
+		pileInventoryCount = inventory;
+
+		if (wanted == 0)
+		{
+			pileStatus = PileStatus.EMPTY;
+			pileActive = false;
+			return;
+		}
+
+		Polygon poly = publishPileTarget();
+		if (poly == null)
+		{
+			pileStatus = PileStatus.OFF_SCREEN;
+			return;
+		}
+		if (pileStatus == PileStatus.OFF_SCREEN)
+		{
+			pileStatus = PileStatus.TRACKING;
+		}
+
+		if (pileAwaiting)
+		{
+			Player player = client.getLocalPlayer();
+			boolean moving = player != null && player.getPoseAnimation() != player.getIdlePoseAnimation();
+			long waited = now - pileClickSentAt;
+			if (waited < PILE_NO_RESULT_MS || moving && waited < PILE_WALK_RESULT_MS)
+			{
+				return;
+			}
+			pileAwaiting = false;
+			++pileFailedClicks;
+			pileNextClickAt = now + 80 + random.nextInt(171);
+			log.info("{} pile={},{} click #{} gave no pickup after {} ms (failed in a row={})", pileLogPrefix,
+				sceneX, sceneY, pileClicks, waited, pileFailedClicks);
+		}
+
+		if (client.isMenuOpen())
+		{
+			return;
+		}
+
+		Point mouse = mouseLocation;
+		boolean onTile = mouse != null && poly.contains(mouse);
+		if (!onTile)
+		{
+			pileOnTileSince = 0;
+			return;
+		}
+		if (pileOnTileSince == 0)
+		{
+			pileOnTileSince = now;
+		}
+
+		MenuEntry[] entries = client.getMenuEntries();
+		MenuEntry top = entries == null || entries.length == 0 ? null : entries[entries.length - 1];
+		boolean topWanted = top != null && isGroundItemAction(top.getType())
+			&& matchesOption(top.getOption(), "Take", "Pick up", "Pickup")
+			&& top.getParam0() == sceneX && top.getParam1() == sceneY
+			&& (pileIds.contains(top.getIdentifier()) || pileIds.contains(top.getIdentifier() & 0xFFFF));
+		pileTop = top == null ? "none" : stripTags(top.getOption() + " " + top.getTarget());
+
+		if (now < pileNextClickAt)
+		{
+			return;
+		}
+
+		if (topWanted)
+		{
+			++pileClicks;
+			pileAwaiting = true;
+			pileClickSentAt = now;
+			pileClickTokenAt = now;
+			pileClickToken = pileClickToken + 1;
+			pileStatus = PileStatus.TRACKING;
+			log.info("{} pile={},{} click #{} point={},{} top='{}'", pileLogPrefix, sceneX, sceneY, pileClicks,
+				mouse.x, mouse.y, pileTop);
+			return;
+		}
+
+		if (now - pileOnTileSince >= PILE_MENU_DWELL_MS)
+		{
+			boolean inMenu = false;
+			for (int id : pileIds)
+			{
+				if (findGroundItemMenuEntry(id, sceneX, sceneY) != null)
+				{
+					inMenu = true;
+					break;
+				}
+			}
+			if (inMenu)
+			{
+				if (pileStatus != PileStatus.NEEDS_MENU)
+				{
+					log.info("{} pile={},{} top='{}' is not our Take, needs the right-click menu", pileLogPrefix,
+						sceneX, sceneY, pileTop);
+				}
+				pileStatus = PileStatus.NEEDS_MENU;
+			}
+			else
+			{
+				// Cursor is on the tile but off the item models: aim closer
+				// to the middle (still not the dead centre).
+				pileOffsetX *= 0.5;
+				pileOffsetY *= 0.5;
+				pileOnTileSince = now;
+			}
+		}
+	}
+
+	/** Client thread: computes and publishes the pile's current point. */
+	private Polygon publishPileTarget()
+	{
+		Polygon poly = liveTilePoly(pileSceneX, pileSceneY);
+		if (poly == null || poly.npoints == 0)
+		{
+			pileTarget = null;
+			return null;
+		}
+
+		double cx = 0;
+		double cy = 0;
+		for (int i = 0; i < poly.npoints; i++)
+		{
+			cx += poly.xpoints[i];
+			cy += poly.ypoints[i];
+		}
+		cx /= poly.npoints;
+		cy /= poly.npoints;
+		Rectangle bounds = poly.getBounds();
+
+		double scale = 1.0;
+		int x = (int) Math.round(cx);
+		int y = (int) Math.round(cy);
+		for (int i = 0; i < 4; i++)
+		{
+			int px = (int) Math.round(cx + pileOffsetX * bounds.width * scale);
+			int py = (int) Math.round(cy + pileOffsetY * bounds.height * scale);
+			if (poly.contains(px, py))
+			{
+				x = px;
+				y = py;
+				break;
+			}
+			scale *= 0.5;
+		}
+
+		if (!isInViewport(x, y) || isCoveredByInterface(x, y))
+		{
+			pileTarget = null;
+			return null;
+		}
+
+		Point game = new Point(x, y);
+		Point canvasPoint = toCanvasPoint(game);
+		double toGameX = canvasPoint.x == 0 ? 1.0 : (double) x / canvasPoint.x;
+		double toGameY = canvasPoint.y == 0 ? 1.0 : (double) y / canvasPoint.y;
+		pileTarget = new PileTarget(canvasPoint.x, canvasPoint.y, toGameX, toGameY);
+		return poly;
+	}
+
+	/** Client thread: number of our item stacks on the pile tile. */
+	private int countPileItems(int sceneX, int sceneY)
+	{
+		net.runelite.api.WorldView worldView = client.getTopLevelWorldView();
+		net.runelite.api.Scene scene = worldView == null ? null : worldView.getScene();
+		net.runelite.api.Tile[][][] tiles = scene == null ? null : scene.getTiles();
+		int plane = worldView == null ? -1 : worldView.getPlane();
+		if (tiles == null || plane < 0 || plane >= tiles.length || tiles[plane] == null
+			|| sceneX < 0 || sceneX >= tiles[plane].length || tiles[plane][sceneX] == null
+			|| sceneY < 0 || sceneY >= tiles[plane][sceneX].length)
+		{
+			return 0;
+		}
+		net.runelite.api.Tile tile = tiles[plane][sceneX][sceneY];
+		List<net.runelite.api.TileItem> items = tile == null ? null : tile.getGroundItems();
+		if (items == null)
+		{
+			return 0;
+		}
+		int count = 0;
+		for (net.runelite.api.TileItem item : items)
+		{
+			if (item != null && pileIds.contains(item.getId()))
+			{
+				++count;
+			}
+		}
+		return count;
+	}
+
+	/** Client thread: total item quantity in the inventory. */
+	private int countInventory()
+	{
+		ItemContainer container = client.getItemContainer(InventoryID.INVENTORY);
+		if (container == null)
+		{
+			return 0;
+		}
+		int count = 0;
+		for (net.runelite.api.Item item : container.getItems())
+		{
+			if (item != null && item.getId() != -1)
+			{
+				count += Math.max(1, item.getQuantity());
+			}
+		}
+		return count;
+	}
+
+	/** Swing thread. */
+	private void startPileTimer(Canvas canvas)
+	{
+		stopMovement();
+		if (pileTimer != null)
+		{
+			pileTimer.stop();
+		}
+		pilePressing = false;
+		pileHandledToken = pileClickToken;
+		pileCurveSign = random.nextBoolean() ? 1.0 : -1.0;
+		if (lastMousePoint == null || !canvas.contains(lastMousePoint))
+		{
+			Dimension size = canvas.getSize();
+			lastMousePoint = new Point(Math.max(1, size.width / 2), Math.max(1, size.height / 2));
+		}
+		canvas.requestFocusInWindow();
+
+		Timer timer = new Timer(PILE_STEER_MS, null);
+		timer.addActionListener(event ->
+		{
+			try
+			{
+				pileStep(canvas, timer);
+			}
+			catch (RuntimeException | Error ex)
+			{
+				timer.stop();
+				pileActive = false;
+				throw ex;
+			}
+			finally
+			{
+				if (!pileActive)
+				{
+					// Never leave the timer or a held button behind.
+					timer.stop();
+					if (pileTimer == timer)
+					{
+						pileTimer = null;
+					}
+					if (pilePressing)
+					{
+						pilePressing = false;
+						Point at = lastMousePoint;
+						if (at != null)
+						{
+							dispatch(canvas, MouseEvent.MOUSE_RELEASED, at, MouseEvent.BUTTON1, 1, 0);
+						}
+					}
+				}
+			}
+		});
+		pileTimer = timer;
+		timer.start();
+	}
+
+	/** Swing thread: one steering step, never touches the client. */
+	private void pileStep(Canvas canvas, Timer timer)
+	{
+		if (!pileActive || pilePressing)
+		{
+			return;
+		}
+		PileTarget target = pileTarget;
+		long now = System.currentTimeMillis();
+		if (target == null || now < pileSteerAfter)
+		{
+			return;
+		}
+
+		Point current = lastMousePoint;
+		double dx = target.canvasX - current.x;
+		double dy = target.canvasY - current.y;
+		double distance = Math.hypot(dx, dy);
+
+		if (distance > 1.0)
+		{
+			// Ease in on the target: big steps far away (capped), small near
+			// it, with a slight sideways arc that fades as it closes in.
+			double step = Math.min(distance, Math.min(PILE_MAX_STEP_PX, Math.max(1.5, distance * 0.24)));
+			double ux = dx / distance;
+			double uy = dy / distance;
+			double bend = distance > 12 ? pileCurveSign * Math.min(4.0, distance * 0.05) : 0.0;
+			double nx = current.x + ux * step - uy * bend + (random.nextDouble() - 0.5) * 0.8;
+			double ny = current.y + uy * step + ux * bend + (random.nextDouble() - 0.5) * 0.8;
+			Point next = new Point((int) Math.round(nx), (int) Math.round(ny));
+			if (!next.equals(current) && canvas.contains(next))
+			{
+				dispatch(canvas, MouseEvent.MOUSE_MOVED, next, MouseEvent.NOBUTTON, 0, 0);
+				lastMousePoint = next;
+				mouseLocation = new Point((int) Math.round(next.x * target.toGameX),
+					(int) Math.round(next.y * target.toGameY));
+				current = next;
+				distance = Math.hypot(target.canvasX - current.x, target.canvasY - current.y);
+			}
+		}
+
+		int token = pileClickToken;
+		if (token == pileHandledToken)
+		{
+			return;
+		}
+		if (now - pileClickTokenAt > PILE_TOKEN_MAX_AGE_MS)
+		{
+			// Stale request (the cursor never got there in time): drop it,
+			// the client thread will decide again.
+			pileHandledToken = token;
+			return;
+		}
+		if (distance > PILE_CLICK_RADIUS_PX)
+		{
+			return;
+		}
+
+		pileHandledToken = token;
+		pilePressing = true;
+		Point at = current;
+		Point game = new Point((int) Math.round(at.x * target.toGameX), (int) Math.round(at.y * target.toGameY));
+		clickLocation = game;
+		clickStartedAt = now;
+		clickButton = MouseEvent.BUTTON1;
+		addClickEffect(game, MouseEvent.BUTTON1, now);
+		dispatch(canvas, MouseEvent.MOUSE_PRESSED, at, MouseEvent.BUTTON1, 1, InputEvent.BUTTON1_DOWN_MASK);
+
+		Timer release = new Timer(35 + random.nextInt(45), event ->
+		{
+			try
+			{
+				dispatch(canvas, MouseEvent.MOUSE_RELEASED, at, MouseEvent.BUTTON1, 1, 0);
+				dispatch(canvas, MouseEvent.MOUSE_CLICKED, at, MouseEvent.BUTTON1, 1, 0);
+			}
+			finally
+			{
+				pilePressing = false;
+			}
+		});
+		release.setRepeats(false);
+		release.start();
+	}
+
 	private void addClickEffect(Point gamePoint, int button, long startedAt)
 	{
 		clickEffects.add(new ClickEffect(new Point(gamePoint), button, startedAt));
@@ -2400,6 +2960,8 @@ public final class GameInput
 	private Point beginMovement(Canvas canvas)
 	{
 		stopMovement();
+		// Any other mouse action takes the hand off a tracked pile.
+		pileActive = false;
 
 		Point start = lastMousePoint;
 		if (start == null || !canvas.contains(start))
