@@ -2091,8 +2091,9 @@ public final class GameInput
 			return 0;
 		}
 
-		MenuEntry[] entries = client.getMenuEntries();
-		MenuEntry top = entries == null || entries.length == 0 ? null : entries[entries.length - 1];
+		// The left-click entry, skipping deprioritized rows the client sorts
+		// below the rest (the raw last entry can be a deprioritized Examine).
+		MenuEntry top = leftClickEntry();
 		return take == top ? 2 : 1;
 	}
 
@@ -2359,26 +2360,33 @@ public final class GameInput
 		private final int canvasY;
 		private final double toGameX;
 		private final double toGameY;
+		private final int gameX;
+		private final int gameY;
 
-		private PileTarget(int canvasX, int canvasY, double toGameX, double toGameY)
+		private PileTarget(int canvasX, int canvasY, double toGameX, double toGameY, int gameX, int gameY)
 		{
 			this.canvasX = canvasX;
 			this.canvasY = canvasY;
 			this.toGameX = toGameX;
 			this.toGameY = toGameY;
+			this.gameX = gameX;
+			this.gameY = gameY;
 		}
 	}
 
 	private static final int PILE_STEER_MS = 8;
 	private static final int PILE_MAX_STEP_PX = 26;
-	private static final int PILE_CLICK_RADIUS_PX = 3;
-	private static final long PILE_TOKEN_MAX_AGE_MS = 400;
+	/** The mouse thread presses once within this many px of the target. */
+	private static final int PILE_CLICK_RADIUS_PX = 6;
+	/** The client-thread gate counts the cursor as on the pile within this radius (or inside the tile). */
+	private static final int PILE_GATE_RADIUS_PX = 6;
+	/** Settled on the tile this long with no Take on top: left-click anyway and verify. */
+	private static final long PILE_FORCE_CLICK_MS = 300;
+	/** The tile must move more than this before the target is re-aimed. */
+	private static final int PILE_REAIM_PX = 3;
+	private static final long PILE_TOKEN_MAX_AGE_MS = 1000;
 	private static final long PILE_NO_RESULT_MS = 700;
 	private static final long PILE_WALK_RESULT_MS = 2500;
-	/** How long the cursor rests on a spot whose top option is wrong before moving. */
-	private static final long PILE_NUDGE_DWELL_MS = 120;
-	/** Nudges without a valid Take that count as one failed try. */
-	private static final int PILE_NUDGES_PER_TRY = 4;
 
 	// Shared between threads (volatile only).
 	private volatile boolean pileActive;
@@ -2404,7 +2412,9 @@ public final class GameInput
 	private int pileClicks;
 	private int pileSuccesses;
 	private int pileFailedClicks;
-	private int pileNudges;
+	private int pileFrames;
+	private Point pilePrevMouse;
+	private boolean pileForceRepublish;
 	private String pileTop = "";
 
 	// Swing thread only.
@@ -2448,7 +2458,9 @@ public final class GameInput
 		pileClicks = 0;
 		pileSuccesses = 0;
 		pileFailedClicks = 0;
-		pileNudges = 0;
+		pileFrames = 0;
+		pilePrevMouse = null;
+		pileForceRepublish = false;
 		pileTop = "";
 		pileTarget = null;
 		pileStatus = PileStatus.TRACKING;
@@ -2527,6 +2539,10 @@ public final class GameInput
 		int sceneX = pileSceneX;
 		int sceneY = pileSceneY;
 		long now = System.currentTimeMillis();
+		++pileFrames;
+
+		Player player = client.getLocalPlayer();
+		boolean moving = player != null && player.getPoseAnimation() != player.getIdlePoseAnimation();
 
 		int wanted = countPileItems(sceneX, sceneY);
 		int inventory = countInventory();
@@ -2534,7 +2550,6 @@ public final class GameInput
 		{
 			++pileSuccesses;
 			pileFailedClicks = 0;
-			pileNudges = 0;
 			pileAwaiting = false;
 			// Click again after a short human beat, same pile.
 			pileNextClickAt = now + 80 + random.nextInt(171);
@@ -2564,8 +2579,8 @@ public final class GameInput
 
 		if (pileAwaiting)
 		{
-			Player player = client.getLocalPlayer();
-			boolean moving = player != null && player.getPoseAnimation() != player.getIdlePoseAnimation();
+			// A click was sent: walking toward the pile means it took; wait
+			// for the pickup to land.
 			long waited = now - pileClickSentAt;
 			if (waited < PILE_NO_RESULT_MS || moving && waited < PILE_WALK_RESULT_MS)
 			{
@@ -2574,8 +2589,10 @@ public final class GameInput
 			pileAwaiting = false;
 			++pileFailedClicks;
 			pileNextClickAt = now + 80 + random.nextInt(171);
-			log.info("{} pile={},{} click #{} gave no pickup after {} ms (failed in a row={})", pileLogPrefix,
-				sceneX, sceneY, pileClicks, waited, pileFailedClicks);
+			// Only now (after a real failed click) try another point.
+			pickAlternatePoint();
+			log.info("{} pile={},{} click #{} gave no pickup after {} ms (failed in a row={}), new aim point",
+				pileLogPrefix, sceneX, sceneY, pileClicks, waited, pileFailedClicks);
 		}
 
 		if (client.isMenuOpen())
@@ -2584,31 +2601,62 @@ public final class GameInput
 		}
 
 		Point mouse = mouseLocation;
-		boolean onTile = mouse != null && poly.contains(mouse);
-		if (!onTile)
+		PileTarget target = pileTarget;
+		double distance = mouse == null || target == null ? Double.MAX_VALUE
+			: Math.hypot(mouse.x - target.gameX, mouse.y - target.gameY);
+		boolean onTile = mouse != null && (poly.contains(mouse) || distance <= PILE_GATE_RADIUS_PX);
+
+		// Settled: the cursor did not move since the last frame.
+		boolean settled = mouse != null && mouse.equals(pilePrevMouse);
+		pilePrevMouse = mouse == null ? null : new Point(mouse);
+		if (!onTile || !settled)
 		{
 			pileOnTileSince = 0;
-			return;
 		}
-		if (pileOnTileSince == 0)
+		else if (pileOnTileSince == 0)
 		{
 			pileOnTileSince = now;
 		}
 
-		MenuEntry[] entries = client.getMenuEntries();
-		MenuEntry top = entries == null || entries.length == 0 ? null : entries[entries.length - 1];
-		boolean topWanted = top != null && isGroundItemAction(top.getType())
-			&& matchesOption(top.getOption(), "Take", "Pick up", "Pickup")
-			&& top.getParam0() == sceneX && top.getParam1() == sceneY
-			&& (pileIds.contains(top.getIdentifier()) || pileIds.contains(top.getIdentifier() & 0xFFFF));
-		pileTop = top == null ? "none" : stripTags(top.getOption() + " " + top.getTarget());
+		MenuEntry top = leftClickEntry();
+		boolean topWanted = isOurTake(top);
+		pileTop = describe(top);
 
-		if (now < pileNextClickAt)
+		String decision;
+		if (!onTile)
 		{
-			return;
+			decision = "moving to pile";
+		}
+		else if (!settled)
+		{
+			decision = "settling";
+		}
+		else if (now < pileNextClickAt)
+		{
+			decision = "human delay";
+		}
+		else if (topWanted)
+		{
+			decision = "CLICK (top is our Take)";
+		}
+		else if (now - pileOnTileSince >= PILE_FORCE_CLICK_MS)
+		{
+			decision = "CLICK (forced after " + (now - pileOnTileSince) + " ms settled)";
+		}
+		else
+		{
+			decision = "waiting for Take";
 		}
 
-		if (topWanted)
+		if (pileFrames % 5 == 0 || decision.startsWith("CLICK"))
+		{
+			log.info("{} hover pile={},{} cursor={} target={},{} dist={} top='{}' -> {}", pileLogPrefix, sceneX,
+				sceneY, mouse == null ? "none" : mouse.x + "," + mouse.y, target == null ? -1 : target.gameX,
+				target == null ? -1 : target.gameY, distance == Double.MAX_VALUE ? "-" : String.format("%.1f", distance),
+				pileTop, decision);
+		}
+
+		if (decision.startsWith("CLICK"))
 		{
 			++pileClicks;
 			pileAwaiting = true;
@@ -2616,39 +2664,61 @@ public final class GameInput
 			pileClickTokenAt = now;
 			pileClickToken = pileClickToken + 1;
 			pileStatus = PileStatus.TRACKING;
-			log.info("{} pile={},{} click #{} point={},{} top='{}'", pileLogPrefix, sceneX, sceneY, pileClicks,
-				mouse.x, mouse.y, pileTop);
-			return;
+			log.info("{} pile={},{} click #{} point={},{} top='{}' {}", pileLogPrefix, sceneX, sceneY, pileClicks,
+				mouse.x, mouse.y, pileTop, topWanted ? "" : "(forced)");
 		}
+	}
 
-		if (now - pileOnTileSince >= PILE_NUDGE_DWELL_MS)
+	/** Client thread: a different aim point on the tile, used only after a failed click. */
+	private void pickAlternatePoint()
+	{
+		boolean nearCentre = pileFailedClicks % 2 == 1;
+		double spread = nearCentre ? 0.08 : 0.25;
+		pileOffsetX = (random.nextDouble() * 2.0 - 1.0) * spread;
+		pileOffsetY = (random.nextDouble() * 2.0 - 1.0) * spread;
+		pileForceRepublish = true;
+	}
+
+	/**
+	 * The entry a left click runs right now. Deprioritized entries are
+	 * sorted below the rest by the client, so the raw last entry can be one
+	 * of them (for example Examine, which the pickup filter deprioritizes);
+	 * the real top is the last entry that is not deprioritized.
+	 */
+	private MenuEntry leftClickEntry()
+	{
+		MenuEntry[] entries = currentMenuEntries();
+		for (int i = entries.length - 1; i >= 0; i--)
 		{
-			// Left-click only: the top option is not a Take of our items
-			// here (Walk here, an NPC, someone else's drop, or between item
-			// models). Move to another point on the tile and try again.
-			++pileNudges;
-			pileOnTileSince = now;
-			if (pileNudges % 2 == 1)
+			if (entries[i] != null && !entries[i].isDeprioritized())
 			{
-				// Near the tile centre, where the item models sit (but not
-				// the exact centre).
-				pileOffsetX = (random.nextDouble() * 2.0 - 1.0) * 0.08;
-				pileOffsetY = (random.nextDouble() * 2.0 - 1.0) * 0.08;
-			}
-			else
-			{
-				pileOffsetX = (random.nextDouble() * 2.0 - 1.0) * 0.3;
-				pileOffsetY = (random.nextDouble() * 2.0 - 1.0) * 0.3;
-			}
-			log.info("{} pile={},{} top='{}' is not our Take, nudging cursor (nudge {})", pileLogPrefix,
-				sceneX, sceneY, pileTop, pileNudges);
-			if (pileNudges % PILE_NUDGES_PER_TRY == 0)
-			{
-				++pileFailedClicks;
-				log.info("{} pile={},{} no Take of our items after {} nudges (failed tries={})", pileLogPrefix,
-					sceneX, sceneY, pileNudges, pileFailedClicks);
+				return entries[i];
 			}
 		}
+		return entries.length == 0 ? null : entries[entries.length - 1];
+	}
+
+	/** @return true if the entry is a Take of one of the tracked loot items (any tile) */
+	private boolean isOurTake(MenuEntry entry)
+	{
+		if (entry == null || !isGroundItemAction(entry.getType()) || entry.getOption() == null
+			|| !stripTags(entry.getOption()).equalsIgnoreCase("Take"))
+		{
+			return false;
+		}
+		int id = entry.getIdentifier();
+		return pileIds.contains(id) || pileIds.contains(id & 0xFFFF);
+	}
+
+	private static String describe(MenuEntry entry)
+	{
+		if (entry == null)
+		{
+			return "none";
+		}
+		return stripTags(String.valueOf(entry.getOption()) + " " + String.valueOf(entry.getTarget()))
+			+ " id=" + entry.getIdentifier() + " type=" + entry.getType()
+			+ " p=" + entry.getParam0() + "," + entry.getParam1();
 	}
 
 	/** Client thread: computes and publishes the pile's current point. */
@@ -2694,11 +2764,22 @@ public final class GameInput
 			return null;
 		}
 
+		// Re-aim only when the tile really moved (walking, camera), so the
+		// cursor can settle instead of chasing a point that jitters by a
+		// pixel every frame.
+		PileTarget current = pileTarget;
+		if (!pileForceRepublish && current != null && Math.abs(current.gameX - x) <= PILE_REAIM_PX
+			&& Math.abs(current.gameY - y) <= PILE_REAIM_PX && poly.contains(current.gameX, current.gameY))
+		{
+			return poly;
+		}
+		pileForceRepublish = false;
+
 		Point game = new Point(x, y);
 		Point canvasPoint = toCanvasPoint(game);
 		double toGameX = canvasPoint.x == 0 ? 1.0 : (double) x / canvasPoint.x;
 		double toGameY = canvasPoint.y == 0 ? 1.0 : (double) y / canvasPoint.y;
-		pileTarget = new PileTarget(canvasPoint.x, canvasPoint.y, toGameX, toGameY);
+		pileTarget = new PileTarget(canvasPoint.x, canvasPoint.y, toGameX, toGameY, x, y);
 		return poly;
 	}
 
