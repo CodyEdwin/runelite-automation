@@ -251,7 +251,7 @@ armour type". Settings are read on Start.
 | Adamant | 2455 | 1161 | 1123 | 1073 |
 | Rune | 2456 | 1163 | 1127 | 1079 |
 
-Warrior guild tokens are item `8851` (stackable).
+Warrior guild tokens are item `8851` (stackable); its stack-appearance ids 8852-8855 are accepted too.
 
 Loop:
 
@@ -261,13 +261,18 @@ Loop:
    Animate clicks in a row without a spawn stops the script.
 3. Fight it. The armour attacks you on its own; the script only clicks Attack if you are not
    fighting it after a short 3-tick grace. A fight is capped at 200 ticks.
-4. Loot the pile on the death tile with the mouse glued to it: the cursor moves onto a fixed
-   random spot on the pile (never the dead centre) and stays there while the player walks over
-   and the camera moves. Whenever the hovered top option is **Take** one of our items on that
-   tile it clicks, and after each pickup it clicks again 80-250 ms later, like a player
-   spam-clicking a pile. If something else is the top option it right-clicks and picks the exact
-   Take row. An off-screen pile gets one small camera turn. 3 failed tries per pile skip it, and
-   25 ticks without any pickup gives up. Every click logs
+4. Loot with left clicks only, the mouse glued to the pile: the cursor sits on a fixed random
+   spot on the pile (never the dead centre) and stays there while the player walks over and the
+   camera moves. Whenever the hovered top option is **Take** for any of our items on that tile
+   (armour piece or tokens) it left-clicks, and after each pickup it clicks again 80-250 ms later.
+   If the top option is something else (Walk here, the armour, someone else's drop) it moves the
+   cursor to another point on the tile, alternating near the centre where the item models sit and
+   elsewhere on the tile, and tries again. There is no right-click or menu-free Take: 4 nudges
+   without a Take count as one failed try, 3 failed tries log it and skip that pile for this
+   round, and 25 ticks without any pickup gives up. An off-screen pile gets one small camera turn.
+   Drops are searched within 3 tiles of the death tile and of the player. The round only ends once
+   the Warrior guild tokens are in too (it waits up to 4 extra ticks for them). The loot start logs
+   every nearby ground item (`id x qty @ tile own=ownership`), and every click logs
    `[AnimatedSuit loot] pile=x,y click #n point=x,y top='Take ...'`.
 5. Repeat.
 

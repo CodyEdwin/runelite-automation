@@ -73,6 +73,14 @@ public final class AnimatedSuitKillerScript extends Script
 	private static final String ANIMATE_ACTION = "Animate";
 	private static final String ATTACK_ACTION = "Attack";
 	private static final int TOKEN_ID = ItemID.WARGUILD_TOKENS; // 8851, stackable
+	/**
+	 * 8851 is the real token item. 8852-8855 are its stack-size appearance
+	 * variants; they are accepted too in case a ground stack reports one.
+	 */
+	private static final Set<Integer> TOKEN_IDS = Set.of(ItemID.WARGUILD_TOKENS, ItemID.WARGUILD_TOKENS_2,
+		ItemID.WARGUILD_TOKENS_3, ItemID.WARGUILD_TOKENS_4, ItemID.WARGUILD_TOKENS_5);
+	/** Ticks to keep waiting for tokens after the armour pieces are back. */
+	private static final int TOKEN_WAIT_TICKS = 4;
 
 	private static final int SEARCH_DISTANCE = 10;
 	/** Loot this far from the death tile (or the player when it is unknown). */
@@ -173,13 +181,6 @@ public final class AnimatedSuitKillerScript extends Script
 		HALTED
 	}
 
-	private enum LootPhase
-	{
-		/** Mouse glued to the pile by GameInput's tracker, spam-taking. */
-		IDLE,
-		/** Right-click sent: pick the exact Take row next tick. */
-		MENU
-	}
 
 	private final ArmourType armour;
 	private final String configError;
@@ -201,7 +202,9 @@ public final class AnimatedSuitKillerScript extends Script
 	private WorldPoint deathTile;
 	private int dropWaitTicks;
 
-	private LootPhase lootPhase = LootPhase.IDLE;
+	private int tokensAtKill;
+	private int tokenWaitTicks;
+	private boolean lootListed;
 	private int lootPhaseTicks;
 	private int lootTargetItemId = -1;
 	private WorldPoint lootTargetTile;
@@ -284,7 +287,7 @@ public final class AnimatedSuitKillerScript extends Script
 			{
 				ids.add(piece);
 			}
-			ids.add(TOKEN_ID);
+			ids.addAll(TOKEN_IDS);
 			lootIds = Collections.unmodifiableSet(ids);
 		}
 		else
@@ -610,6 +613,11 @@ public final class AnimatedSuitKillerScript extends Script
 			deathTile = target == null ? null : target.getWorldLocation();
 			target = null;
 			dropWaitTicks = 0;
+			tokenWaitTicks = 0;
+			tokensAtKill = tokens;
+			lootListed = false;
+			// A pile given up on last round must not block this round's drop.
+			skippedLoot.clear();
 			resetLoot();
 			setState(State.LOOT, "armour killed (kill " + kills + ") at " + deathTile);
 			setStatus("Looting");
@@ -674,6 +682,12 @@ public final class AnimatedSuitKillerScript extends Script
 		WorldPoint center = deathTile;
 		GroundLoot loot = findLoot(context, center, center == null ? MISSING_PIECE_RADIUS : LOOT_RADIUS);
 
+		if (!lootListed && (loot != null || dropWaitTicks >= DROP_WAIT_TICKS))
+		{
+			lootListed = true;
+			logGroundItems(context, center);
+		}
+
 		if (loot == null)
 		{
 			if (center != null && ++dropWaitTicks <= DROP_WAIT_TICKS && missingPieces(inventory).size() == 3)
@@ -681,15 +695,27 @@ public final class AnimatedSuitKillerScript extends Script
 				setStatus("Waiting for the drop");
 				return;
 			}
+			// The pieces are back, but the round is not over until the
+			// tokens are in too.
+			if (center != null && tokens <= tokensAtKill && ++tokenWaitTicks <= TOKEN_WAIT_TICKS)
+			{
+				setStatus("Waiting for tokens");
+				return;
+			}
+			if (center != null && tokens <= tokensAtKill)
+			{
+				log.info("[AnimatedSuit loot] no Warrior guild tokens found after the kill (have {})", tokens);
+			}
 			resetLoot();
 			setState(State.CHECK_ARMOUR, "nothing left to loot");
 			checkArmour(context);
 			return;
 		}
 
-		if (inventory.isFull() && !(loot.itemId == TOKEN_ID && inventory.findSlot(TOKEN_ID) >= 0))
+		if (inventory.isFull() && !(TOKEN_IDS.contains(loot.itemId) && inventory.findSlot(TOKEN_ID) >= 0))
 		{
-			halt("inventory full, cannot pick up the armour");
+			halt("inventory full, cannot pick up " + itemName(context.getClient(), loot.itemId)
+				+ (TOKEN_IDS.contains(loot.itemId) ? " (no token stack yet; free one slot)" : ""));
 			return;
 		}
 
@@ -712,24 +738,6 @@ public final class AnimatedSuitKillerScript extends Script
 		String itemName = itemName(context.getClient(), loot.itemId);
 		String label = String.format("pile=%d,%d (scene %d,%d) next=%s(%d)", loot.worldLocation.getX(),
 			loot.worldLocation.getY(), loot.sceneX, loot.sceneY, itemName, loot.itemId);
-
-		if (lootPhase == LootPhase.MENU)
-		{
-			// The right-click went out last tick: take the exact row.
-			lootPhase = LootPhase.IDLE;
-			boolean sent = input.clickGroundItemMenuRow(loot.itemId, loot.sceneX, loot.sceneY);
-			if (!sent && lootAttempts >= LOOT_ATTEMPT_LIMIT - 1)
-			{
-				input.invokeGroundItemTake(loot.sceneX, loot.sceneY, loot.itemId, itemName);
-				log.info("[AnimatedSuit loot] {} menu had no Take row, last attempt: ran exact Take", label);
-			}
-			else
-			{
-				log.info("[AnimatedSuit loot] {} menu: {}", label, sent ? "clicked exact Take row" : "no Take row");
-			}
-			cooldown = 1;
-			return;
-		}
 
 		if (input.isBusy() || input.isCameraBusy())
 		{
@@ -786,21 +794,6 @@ public final class AnimatedSuitKillerScript extends Script
 		}
 
 		GameInput.PileStatus status = input.getPileStatus();
-		if (status == GameInput.PileStatus.NEEDS_MENU)
-		{
-			// Something else is the top option here: use the real menu.
-			java.awt.Point mouse = input.getMouseLocation();
-			String top = input.getPileTop();
-			input.stopPileTracking();
-			++lootAttempts;
-			if (mouse != null)
-			{
-				input.rightClick(mouse);
-				lootPhase = LootPhase.MENU;
-				log.info("[AnimatedSuit loot] {} top='{}', right-clicking for the exact Take row", label, top);
-			}
-			return;
-		}
 		if (status == GameInput.PileStatus.OFF_SCREEN)
 		{
 			setStatus("Looting (pile off screen)");
@@ -817,7 +810,6 @@ public final class AnimatedSuitKillerScript extends Script
 		{
 			context.getInput().stopPileTracking();
 		}
-		lootPhase = LootPhase.IDLE;
 		lootPhaseTicks = 0;
 		lootTargetItemId = -1;
 		lootTargetTile = null;
@@ -936,12 +928,17 @@ public final class AnimatedSuitKillerScript extends Script
 				}
 				WorldPoint location = tile.getWorldLocation();
 				net.runelite.api.Point sceneLocation = tile.getSceneLocation();
-				if (location == null || sceneLocation == null || location.distanceTo(origin) > radius)
+				// Around the death tile and around the player: a drop may land
+				// on either.
+				if (location == null || sceneLocation == null
+					|| location.distanceTo(origin) > radius && location.distanceTo(playerLocation) > LOOT_RADIUS)
 				{
 					continue;
 				}
 				for (TileItem item : items)
 				{
+					// Only other players' drops are skipped; NONE, SELF and
+					// GROUP are all ours to take.
 					if (item == null || !lootIds.contains(item.getId())
 						|| item.getOwnership() == TileItem.OWNERSHIP_OTHER)
 					{
@@ -954,7 +951,7 @@ public final class AnimatedSuitKillerScript extends Script
 						continue;
 					}
 					// Nearest first; armour before tokens on the same tile.
-					int score = location.distanceTo(playerLocation) * 10 + (item.getId() == TOKEN_ID ? 1 : 0);
+					int score = location.distanceTo(playerLocation) * 10 + (TOKEN_IDS.contains(item.getId()) ? 1 : 0);
 					if (score < bestScore)
 					{
 						bestScore = score;
@@ -964,6 +961,45 @@ public final class AnimatedSuitKillerScript extends Script
 			}
 		}
 		return best;
+	}
+
+	/** Logs every ground item near the death tile and the player: id, qty, tile, ownership. */
+	private void logGroundItems(ScriptContext context, WorldPoint center)
+	{
+		WorldPoint playerLocation = context.getPlayerLocation();
+		WorldView worldView = context.getClient().getTopLevelWorldView();
+		Scene scene = worldView == null ? null : worldView.getScene();
+		Tile[][][] tiles = scene == null ? null : scene.getTiles();
+		int plane = worldView == null ? -1 : worldView.getPlane();
+		if (playerLocation == null || tiles == null || plane < 0 || plane >= tiles.length || tiles[plane] == null)
+		{
+			return;
+		}
+		WorldPoint origin = center == null ? playerLocation : center;
+		List<String> found = new ArrayList<>();
+		for (Tile[] row : tiles[plane])
+		{
+			for (Tile tile : row == null ? new Tile[0] : row)
+			{
+				List<TileItem> items = tile == null ? null : tile.getGroundItems();
+				WorldPoint location = tile == null ? null : tile.getWorldLocation();
+				if (items == null || location == null
+					|| location.distanceTo(origin) > 5 && location.distanceTo(playerLocation) > 5)
+				{
+					continue;
+				}
+				for (TileItem item : items)
+				{
+					if (item != null)
+					{
+						found.add(item.getId() + "x" + item.getQuantity() + "@" + location.getX() + "," + location.getY()
+							+ " own=" + item.getOwnership() + (lootIds.contains(item.getId()) ? " (loot)" : ""));
+					}
+				}
+			}
+		}
+		log.info("[AnimatedSuit loot] ground items at loot start (death tile {}, player {}): {}", center,
+			playerLocation, found.isEmpty() ? "none" : String.join("; ", found));
 	}
 
 	private static String tileKey(WorldPoint tile)
@@ -994,7 +1030,7 @@ public final class AnimatedSuitKillerScript extends Script
 		int now = 0;
 		for (Item item : context.getInventory().getItems())
 		{
-			if (item != null && item.getId() == TOKEN_ID)
+			if (item != null && TOKEN_IDS.contains(item.getId()))
 			{
 				now += item.getQuantity();
 			}
@@ -1233,7 +1269,7 @@ public final class AnimatedSuitKillerScript extends Script
 		{
 			menuOpenTicks = 0;
 		}
-		else if (++menuOpenTicks > MENU_STUCK_TICKS && !input.isBusy() && lootPhase != LootPhase.MENU)
+		else if (++menuOpenTicks > MENU_STUCK_TICKS && !input.isBusy())
 		{
 			menuOpenTicks = 0;
 			input.closeMenu();
