@@ -44,6 +44,7 @@ import net.runelite.api.events.GameTick;
 import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
+import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.input.MouseManager;
 import net.runelite.client.plugins.Plugin;
@@ -62,6 +63,7 @@ import net.runelite.rsbuddy.script.Script;
 import net.runelite.rsbuddy.script.ScriptContext;
 import net.runelite.rsbuddy.script.ScriptLoader;
 import net.runelite.rsbuddy.script.ScriptManager;
+import net.runelite.rsbuddy.scripts.AnimatedSuitKillerScript;
 import net.runelite.rsbuddy.scripts.ArdougneBakerStallStealerScript;
 import net.runelite.rsbuddy.scripts.BarbarianFisherCookerScript;
 import net.runelite.rsbuddy.scripts.CatherbySharkFisherScript;
@@ -93,6 +95,9 @@ public class TestPlugin extends Plugin
 
 	@Inject
 	private TestConfig config;
+
+	private static final List<String> ANIMATED_SUIT_KEYS = List.of(
+		"animatedSuitBlack", "animatedSuitMithril", "animatedSuitAdamant", "animatedSuitRune");
 
 	@Inject
 	private ConfigManager configManager;
@@ -156,6 +161,11 @@ public class TestPlugin extends Plugin
 			config.gemCrabPotionMode().name(),
 			config.gemCrabBoostThreshold()));
 		scriptManager.register(new GrandExchangeFlipperScript());
+		scriptManager.register(new AnimatedSuitKillerScript(
+			config.animatedSuitBlack(),
+			config.animatedSuitMithril(),
+			config.animatedSuitAdamant(),
+			config.animatedSuitRune()));
 
 		String customScriptError = registerCustomScript(config.customScriptClass());
 
@@ -249,6 +259,34 @@ public class TestPlugin extends Plugin
 	 * pickup list is running. RuneLite fires this for every row of the menu it
 	 * builds, so the filter is in place before anything can be clicked.
 	 */
+	/**
+	 * The four Animated suit armour checkboxes act like radio buttons:
+	 * ticking one unticks the other three. Unticking the last one is allowed;
+	 * the script then refuses to run until exactly one is ticked.
+	 */
+	@Subscribe
+	public void onConfigChanged(ConfigChanged event)
+	{
+		if (!TestConfig.GROUP.equals(event.getGroup()) || !"true".equals(event.getNewValue()))
+		{
+			return;
+		}
+
+		String key = event.getKey();
+		if (!ANIMATED_SUIT_KEYS.contains(key))
+		{
+			return;
+		}
+
+		for (String other : ANIMATED_SUIT_KEYS)
+		{
+			if (!other.equals(key))
+			{
+				configManager.setConfiguration(TestConfig.GROUP, other, false);
+			}
+		}
+	}
+
 	@Subscribe
 	public void onMenuEntryAdded(MenuEntryAdded event)
 	{
@@ -466,6 +504,15 @@ public class TestPlugin extends Plugin
 			return ScriptLoader.load(className, classLoader,
 				config.gemCrabPotionMode().name(),
 				config.gemCrabBoostThreshold());
+		}
+
+		if (AnimatedSuitKillerScript.class.getName().equals(className))
+		{
+			return ScriptLoader.load(className, classLoader,
+				config.animatedSuitBlack(),
+				config.animatedSuitMithril(),
+				config.animatedSuitAdamant(),
+				config.animatedSuitRune());
 		}
 
 		return ScriptLoader.load(className, classLoader);

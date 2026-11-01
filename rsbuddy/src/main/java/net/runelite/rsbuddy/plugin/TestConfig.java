@@ -219,4 +219,52 @@ public interface TestConfig extends Config
 	{
 		return 3;
 	}
+
+	@ConfigItem(
+		keyName = "animatedSuitBlack",
+		name = "Animated suit: Black",
+		description = "Animated Suit Killer animates black armour. Only one armour type can be ticked;"
+			+ " ticking one unticks the others.",
+		position = 16
+	)
+	default boolean animatedSuitBlack()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "animatedSuitMithril",
+		name = "Animated suit: Mithril",
+		description = "Animated Suit Killer animates mithril armour. Only one armour type can be ticked;"
+			+ " ticking one unticks the others.",
+		position = 17
+	)
+	default boolean animatedSuitMithril()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "animatedSuitAdamant",
+		name = "Animated suit: Adamant",
+		description = "Animated Suit Killer animates adamant armour. Only one armour type can be ticked;"
+			+ " ticking one unticks the others.",
+		position = 18
+	)
+	default boolean animatedSuitAdamant()
+	{
+		return false;
+	}
+
+	@ConfigItem(
+		keyName = "animatedSuitRune",
+		name = "Animated suit: Rune",
+		description = "Animated Suit Killer animates rune armour. Only one armour type can be ticked;"
+			+ " ticking one unticks the others.",
+		position = 19
+	)
+	default boolean animatedSuitRune()
+	{
+		return false;
+	}
 }

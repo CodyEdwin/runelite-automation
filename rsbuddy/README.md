@@ -233,6 +233,46 @@ config (RuneLite Configuration, wrench icon, then the "Test Plugin" entry):
 Settings are read when the script is started, so change them, then press Start (or Stop and Start).
 The overlay shows the mode and threshold next to the potion count.
 
+## Animated Suit Killer (Warriors' Guild)
+
+`AnimatedSuitKillerScript` appears in the panel as **Animated Suit Killer**. Start it next to a
+Magical Animator (object `23955`, `ObjectID.WARGUILD_ANIMATOR_CENT`) with the chosen metal's full
+helm, platebody and platelegs in the inventory.
+
+**Choosing the armour:** RuneLite Configuration (wrench icon) → **Test Plugin** → tick one of
+**Animated suit: Black**, **Mithril**, **Adamant** or **Rune**. Ticking one unticks the others. If
+none (or somehow more than one) is ticked, the script will not run and shows "Tick exactly one
+armour type". Settings are read on Start.
+
+| Type | Animated NPC | Full helm | Platebody | Platelegs |
+| --- | --- | --- | --- | --- |
+| Black | 2453 | 1165 | 1125 | 1077 |
+| Mithril | 2454 | 1159 | 1121 | 1071 |
+| Adamant | 2455 | 1161 | 1123 | 1073 |
+| Rune | 2456 | 1163 | 1127 | 1079 |
+
+Warrior guild tokens are item `8851` (stackable).
+
+Loop:
+
+1. Check the 3 pieces are in the inventory. Missing pieces lying within 8 tiles are picked up
+   first; otherwise it stops with a status naming what is missing.
+2. Click **Animate** on the animator once and wait (up to 20 ticks) for the armour to appear. Three
+   Animate clicks in a row without a spawn stops the script.
+3. Fight it. The armour attacks you on its own; the script only clicks Attack if you are not
+   fighting it after a short 3-tick grace. A fight is capped at 200 ticks.
+4. Loot the 3 pieces and the tokens from the death tile, one item at a time: aim, confirm under
+   the cursor, left-click Take (or right-click → exact Take row, or the exact Take action), up to
+   3 attempts per item, 25 ticks without a pickup gives up. Each attempt logs
+   `[AnimatedSuit loot] ...`.
+5. Repeat.
+
+Safety: below 50% HP it eats any inventory item whose first option is **Eat** (bring food if you
+want this). The overlay shows status, armour type, kills/hr, tokens (and tokens gained) and food
+eaten. State changes log `[AnimatedSuit] OLD -> NEW: reason`; more than 5 ticks in one state logs a
+`stall?` line (repeated every 20 ticks). Stuck mouse, camera or menus are reset on a tick cap, and
+the same anti-idle camera nudges as the Gem Crab Killer run every 30-60 seconds.
+
 ## Panel and commands
 
 The sidebar panel lists registered scripts and provides Start/Stop controls with live status and
