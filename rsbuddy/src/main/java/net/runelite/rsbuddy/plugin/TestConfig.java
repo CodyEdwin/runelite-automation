@@ -281,17 +281,18 @@ public interface TestConfig extends Config
 	}
 
 	@Range(
-		min = 0,
-		max = 15
+		min = 1,
+		max = 16
 	)
 	@ConfigItem(
-		keyName = "animatedSuitBoostThreshold",
-		name = "Animated suit: re-drink at boost",
-		description = "Drink another potion once the Strength boost has dropped to this many levels or less.",
+		keyName = "animatedSuitDrinkBelowBoost",
+		name = "Animated suit: drink when boost below",
+		description = "Drink a strength potion when the Strength boost is below this many levels"
+			+ " (default 5: drinks at a boost of 4 or less, including unboosted).",
 		position = 21
 	)
-	default int animatedSuitBoostThreshold()
+	default int animatedSuitDrinkBelowBoost()
 	{
-		return 3;
+		return 5;
 	}
 }
