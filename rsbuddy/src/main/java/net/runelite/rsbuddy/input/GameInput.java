@@ -2349,7 +2349,6 @@ public final class GameInput
 	{
 		IDLE,
 		TRACKING,
-		NEEDS_MENU,
 		OFF_SCREEN,
 		EMPTY
 	}
@@ -2376,7 +2375,10 @@ public final class GameInput
 	private static final long PILE_TOKEN_MAX_AGE_MS = 400;
 	private static final long PILE_NO_RESULT_MS = 700;
 	private static final long PILE_WALK_RESULT_MS = 2500;
-	private static final long PILE_MENU_DWELL_MS = 150;
+	/** How long the cursor rests on a spot whose top option is wrong before moving. */
+	private static final long PILE_NUDGE_DWELL_MS = 120;
+	/** Nudges without a valid Take that count as one failed try. */
+	private static final int PILE_NUDGES_PER_TRY = 4;
 
 	// Shared between threads (volatile only).
 	private volatile boolean pileActive;
@@ -2402,6 +2404,7 @@ public final class GameInput
 	private int pileClicks;
 	private int pileSuccesses;
 	private int pileFailedClicks;
+	private int pileNudges;
 	private String pileTop = "";
 
 	// Swing thread only.
@@ -2445,6 +2448,7 @@ public final class GameInput
 		pileClicks = 0;
 		pileSuccesses = 0;
 		pileFailedClicks = 0;
+		pileNudges = 0;
 		pileTop = "";
 		pileTarget = null;
 		pileStatus = PileStatus.TRACKING;
@@ -2530,6 +2534,7 @@ public final class GameInput
 		{
 			++pileSuccesses;
 			pileFailedClicks = 0;
+			pileNudges = 0;
 			pileAwaiting = false;
 			// Click again after a short human beat, same pile.
 			pileNextClickAt = now + 80 + random.nextInt(171);
@@ -2616,33 +2621,32 @@ public final class GameInput
 			return;
 		}
 
-		if (now - pileOnTileSince >= PILE_MENU_DWELL_MS)
+		if (now - pileOnTileSince >= PILE_NUDGE_DWELL_MS)
 		{
-			boolean inMenu = false;
-			for (int id : pileIds)
+			// Left-click only: the top option is not a Take of our items
+			// here (Walk here, an NPC, someone else's drop, or between item
+			// models). Move to another point on the tile and try again.
+			++pileNudges;
+			pileOnTileSince = now;
+			if (pileNudges % 2 == 1)
 			{
-				if (findGroundItemMenuEntry(id, sceneX, sceneY) != null)
-				{
-					inMenu = true;
-					break;
-				}
-			}
-			if (inMenu)
-			{
-				if (pileStatus != PileStatus.NEEDS_MENU)
-				{
-					log.info("{} pile={},{} top='{}' is not our Take, needs the right-click menu", pileLogPrefix,
-						sceneX, sceneY, pileTop);
-				}
-				pileStatus = PileStatus.NEEDS_MENU;
+				// Near the tile centre, where the item models sit (but not
+				// the exact centre).
+				pileOffsetX = (random.nextDouble() * 2.0 - 1.0) * 0.08;
+				pileOffsetY = (random.nextDouble() * 2.0 - 1.0) * 0.08;
 			}
 			else
 			{
-				// Cursor is on the tile but off the item models: aim closer
-				// to the middle (still not the dead centre).
-				pileOffsetX *= 0.5;
-				pileOffsetY *= 0.5;
-				pileOnTileSince = now;
+				pileOffsetX = (random.nextDouble() * 2.0 - 1.0) * 0.3;
+				pileOffsetY = (random.nextDouble() * 2.0 - 1.0) * 0.3;
+			}
+			log.info("{} pile={},{} top='{}' is not our Take, nudging cursor (nudge {})", pileLogPrefix,
+				sceneX, sceneY, pileTop, pileNudges);
+			if (pileNudges % PILE_NUDGES_PER_TRY == 0)
+			{
+				++pileFailedClicks;
+				log.info("{} pile={},{} no Take of our items after {} nudges (failed tries={})", pileLogPrefix,
+					sceneX, sceneY, pileNudges, pileFailedClicks);
 			}
 		}
 	}
