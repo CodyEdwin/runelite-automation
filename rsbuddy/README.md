@@ -213,8 +213,18 @@ holds the left or right arrow key (random direction, 150-450 ms) to rotate the c
 The nudge only happens while the simulated mouse is idle and no menu is open.
 
 If strength potions are in the inventory, the script drinks one (lowest dose first) whenever the
-Strength boost is 3 or less, including at the start when unboosted. Super strength potions are used
-as a fallback. Without potions it simply keeps fighting.
+Strength boost is at or below the threshold (default 3), including at the start when unboosted.
+Without potions it simply keeps fighting. Which potions it drinks is set in the RSBuddy plugin's
+config (RuneLite Configuration, wrench icon, then the "Test Plugin" entry):
+
+- **Gem crab: strength potions**: `Strength potion` (regular 4-1 doses only), `Super strength`
+  (super strength 4-1 doses only: 2440, 157, 159, 161), or `Either (prefer super)` (default: super
+  strength first, then regular).
+- **Gem crab: re-drink at boost**: drink again once the boost is this many levels or less
+  (0-15, default 3).
+
+Settings are read when the script is started, so change them, then press Start (or Stop and Start).
+The overlay shows the mode and threshold next to the potion count.
 
 ## Panel and commands
 
