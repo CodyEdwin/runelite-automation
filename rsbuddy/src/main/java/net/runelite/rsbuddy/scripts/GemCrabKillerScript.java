@@ -55,6 +55,8 @@ import net.runelite.rsbuddy.script.ScriptContext;
  */
 public final class GemCrabKillerScript extends Script
 {
+	private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(GemCrabKillerScript.class);
+
 	private static final int CRAB_ID = NpcID.GEMSTONE_CRAB; // 14779
 	private static final String ATTACK_ACTION = "Attack";
 	private static final String CAVE_NAME = "Cave";
@@ -69,10 +71,16 @@ public final class GemCrabKillerScript extends Script
 	private static final int REATTACK_IDLE_TICKS = 4;
 	/** Ticks after the crab dies before heading for the cave. */
 	private static final int POST_KILL_DELAY_TICKS = 2;
-	/** Ticks to wait for the crawl to move us before clicking the cave again. */
-	private static final int CRAWL_TIMEOUT_TICKS = 25;
-	/** A location change at least this large means we went through the cave. */
+	/** Ticks with no movement or animation at all after a cave click: the click did not take. */
+	private static final int CRAWL_NO_START_TICKS = 8;
+	/** Hard cap on one crawl; after this it is treated as done. */
+	private static final int CRAWL_MAX_TICKS = 30;
+	/** Idle ticks after moving or animating that mean the crawl has finished. */
+	private static final int CRAWL_SETTLE_TICKS = 2;
+	/** A location change at least this large is the crawl's teleport. */
 	private static final int CRAWL_TELEPORT_DISTANCE = 10;
+	/** Cave clicks per kill before giving up and waiting for a spawn instead. */
+	private static final int CRAWL_CLICK_LIMIT = 3;
 	/** Ticks (about 36 seconds) to wait for the crab to spawn after crawling. */
 	private static final int SPAWN_TIMEOUT_TICKS = 60;
 
@@ -120,6 +128,7 @@ public final class GemCrabKillerScript extends Script
 		FIND_CRAB,
 		FIGHT,
 		GO_TO_CAVE,
+		CRAWLING,
 		WAIT_FOR_SPAWN
 	}
 
@@ -128,8 +137,13 @@ public final class GemCrabKillerScript extends Script
 	private NPC target;
 	private int idleTicks;
 	private int waitTicks;
-	private boolean crawlClicked;
 	private WorldPoint crawlStartLocation;
+	// One crawl is allowed after each kill (and once as recovery after a
+	// spawn timeout). Never set anywhere else.
+	private boolean crawlArmed;
+	private int crawlClicks;
+	private boolean crawlStarted;
+	private int crawlIdleTicks;
 	private int kills;
 	private long startedAt;
 	private long nextAntiIdleAt;
@@ -197,8 +211,11 @@ public final class GemCrabKillerScript extends Script
 		target = null;
 		idleTicks = 0;
 		waitTicks = 0;
-		crawlClicked = false;
 		crawlStartLocation = null;
+		crawlArmed = false;
+		crawlClicks = 0;
+		crawlStarted = false;
+		crawlIdleTicks = 0;
 		kills = 0;
 		startedAt = System.currentTimeMillis();
 		scheduleAntiIdle();
@@ -238,6 +255,9 @@ public final class GemCrabKillerScript extends Script
 			case GO_TO_CAVE:
 				goToCave(context);
 				break;
+			case CRAWLING:
+				crawling(context);
+				break;
 			case WAIT_FOR_SPAWN:
 				waitForSpawn(context);
 				break;
@@ -260,18 +280,27 @@ public final class GemCrabKillerScript extends Script
 		{
 			target = fighting;
 			idleTicks = 0;
-			state = State.FIGHT;
+			setState(State.FIGHT, "already fighting a crab");
 			setStatus("Fighting Gemstone Crab");
 			return;
 		}
 
-		Optional<NPC> crab = context.getTargets().findNpc(CRAB_ID, CRAB_SEARCH_DISTANCE);
+		Optional<NPC> crab = findLiveCrab(context);
 		if (crab.isEmpty())
 		{
-			// No live crab here. It has either already died or not spawned
-			// yet, so take the cave to the next location.
-			state = State.GO_TO_CAVE;
-			setStatus("No crab, heading to cave");
+			// No live crab here. Only a kill (or a spawn timeout) allows a
+			// crawl; otherwise the crab just has not spawned yet.
+			if (crawlArmed)
+			{
+				setState(State.GO_TO_CAVE, "no crab and a crawl is armed");
+				setStatus("Heading to cave");
+			}
+			else
+			{
+				waitTicks = 0;
+				setState(State.WAIT_FOR_SPAWN, "no live crab yet");
+				setStatus("Waiting for crab to spawn");
+			}
 			return;
 		}
 
@@ -292,7 +321,9 @@ public final class GemCrabKillerScript extends Script
 			target = null;
 			idleTicks = 0;
 			cooldown = POST_KILL_DELAY_TICKS;
-			state = State.GO_TO_CAVE;
+			crawlArmed = true;
+			crawlClicks = 0;
+			setState(State.GO_TO_CAVE, "crab killed (kill " + kills + "), one crawl armed");
 			setStatus("Crab dead, heading to cave");
 			return;
 		}
@@ -343,7 +374,7 @@ public final class GemCrabKillerScript extends Script
 			target = crab;
 			idleTicks = 0;
 			cooldown = ATTACK_COOLDOWN_TICKS;
-			state = State.FIGHT;
+			setState(State.FIGHT, "attack click on crab");
 			setStatus("Attacking Gemstone Crab");
 		}
 		else
@@ -353,42 +384,38 @@ public final class GemCrabKillerScript extends Script
 		}
 	}
 
+	/**
+	 * Clicks the cave exactly once per armed crawl, then hands over to
+	 * {@link State#CRAWLING}, which never clicks.
+	 */
 	private void goToCave(ScriptContext context)
 	{
 		Player player = context.getPlayer();
 		WorldPoint location = player == null ? null : player.getWorldLocation();
 		GameInput input = context.getInput();
 
-		if (crawlClicked)
+		if (!crawlArmed)
 		{
-			if (hasTeleported(location))
-			{
-				crawlClicked = false;
-				crawlStartLocation = null;
-				waitTicks = 0;
-				state = State.WAIT_FOR_SPAWN;
-				setStatus("Waiting for crab to spawn");
-				return;
-			}
-
-			// Walking to the cave and the crawl animation take a few ticks.
-			if (++waitTicks < CRAWL_TIMEOUT_TICKS)
-			{
-				setStatus("Crawling through cave");
-				return;
-			}
-
-			// The click did not take. Try the cave again.
-			crawlClicked = false;
-			crawlStartLocation = null;
+			waitTicks = 0;
+			setState(State.WAIT_FOR_SPAWN, "no crawl armed");
+			return;
 		}
 
-		// A new crab may already be up at this location (e.g. the script was
-		// started while one was alive). Fight it instead of leaving.
-		if (!context.getClient().isMenuOpen()
-			&& context.getTargets().findNpc(CRAB_ID, CRAB_SEARCH_DISTANCE).isPresent())
+		// A live crab is already up here (for example the script was started
+		// next to one): fight it instead of leaving.
+		if (!context.getClient().isMenuOpen() && findLiveCrab(context).isPresent())
 		{
-			state = State.FIND_CRAB;
+			crawlArmed = false;
+			setState(State.FIND_CRAB, "live crab present, crawl not needed");
+			return;
+		}
+
+		if (crawlClicks >= CRAWL_CLICK_LIMIT)
+		{
+			crawlArmed = false;
+			waitTicks = 0;
+			log.info("[GemCrab] {} cave clicks did not start a crawl, waiting for a spawn instead", crawlClicks);
+			setState(State.WAIT_FOR_SPAWN, "cave click limit reached");
 			return;
 		}
 
@@ -411,8 +438,7 @@ public final class GemCrabKillerScript extends Script
 		}
 
 		TileObject object = cave.get();
-		boolean menuOpen = context.getClient().isMenuOpen();
-		if (!menuOpen && !input.isVisible(object))
+		if (!context.getClient().isMenuOpen() && !input.isVisible(object))
 		{
 			input.turnCameraToward(object.getWorldLocation());
 			cooldown = 2;
@@ -420,22 +446,20 @@ public final class GemCrabKillerScript extends Script
 			return;
 		}
 
-		// interact() right-clicks the cave first, then picks Crawl-through
-		// from the opened menu on the next call.
+		// Crawl-through is the cave's left-click option, so this is one
+		// click (or one direct menu action), never a menu that needs a
+		// second call. Either way the crawl counts as sent right now.
 		if (input.interact(object, CAVE_ACTION))
 		{
-			if (menuOpen)
-			{
-				crawlClicked = true;
-				crawlStartLocation = location;
-				waitTicks = 0;
-				cooldown = 1;
-				setStatus("Crawling through cave");
-			}
-			else
-			{
-				setStatus("Opening cave menu");
-			}
+			++crawlClicks;
+			crawlArmed = false;
+			crawlStartLocation = location;
+			crawlStarted = false;
+			crawlIdleTicks = 0;
+			waitTicks = 0;
+			cooldown = 1;
+			setState(State.CRAWLING, "Crawl-through clicked (click " + crawlClicks + ") from " + location);
+			setStatus("Crawling through cave");
 			return;
 		}
 
@@ -443,6 +467,57 @@ public final class GemCrabKillerScript extends Script
 		setStatus("Cannot crawl through cave");
 	}
 
+	/**
+	 * Waits for the crawl to finish. Never clicks the cave. Done when the
+	 * player teleported (plane change or a big jump), or moved/animated and
+	 * then stood still for {@value #CRAWL_SETTLE_TICKS} ticks.
+	 */
+	private void crawling(ScriptContext context)
+	{
+		Player player = context.getPlayer();
+		WorldPoint location = player == null ? null : player.getWorldLocation();
+		++waitTicks;
+
+		boolean teleported = location != null && crawlStartLocation != null
+			&& (location.getPlane() != crawlStartLocation.getPlane()
+				|| location.distanceTo(crawlStartLocation) >= CRAWL_TELEPORT_DISTANCE);
+		boolean active = isMoving(player) || isAnimating(player);
+		if (active || location != null && !location.equals(crawlStartLocation))
+		{
+			crawlStarted = true;
+		}
+		crawlIdleTicks = active ? 0 : crawlIdleTicks + 1;
+
+		if (teleported || crawlStarted && crawlIdleTicks >= CRAWL_SETTLE_TICKS || waitTicks >= CRAWL_MAX_TICKS)
+		{
+			String reason = teleported ? "teleported to " + location
+				: crawlStarted ? "moved and settled at " + location : "crawl time cap reached";
+			crawlStartLocation = null;
+			waitTicks = 0;
+			setState(State.WAIT_FOR_SPAWN, "crawl complete: " + reason);
+			setStatus("Waiting for crab to spawn");
+			return;
+		}
+
+		if (!crawlStarted && waitTicks >= CRAWL_NO_START_TICKS)
+		{
+			// Nothing happened at all: the click did not take. Re-arm the
+			// same crawl (capped by CRAWL_CLICK_LIMIT).
+			crawlArmed = true;
+			crawlStartLocation = null;
+			waitTicks = 0;
+			setState(State.GO_TO_CAVE, "cave click did nothing, retrying");
+			return;
+		}
+
+		setStatus("Crawling through cave");
+	}
+
+	/**
+	 * After a crawl (or at start with no crab): never clicks the cave. Attacks
+	 * the crab as soon as a live one appears. After a long wait with no crab,
+	 * arms one recovery crawl.
+	 */
 	private void waitForSpawn(ScriptContext context)
 	{
 		if (context.getClient().isMenuOpen())
@@ -451,25 +526,61 @@ public final class GemCrabKillerScript extends Script
 			return;
 		}
 
-		Optional<NPC> crab = context.getTargets().findNpc(CRAB_ID, CRAB_SEARCH_DISTANCE);
+		Optional<NPC> crab = findLiveCrab(context);
 		if (crab.isPresent())
 		{
 			waitTicks = 0;
-			state = State.FIND_CRAB;
+			crawlClicks = 0;
+			setState(State.FIND_CRAB, "crab spawned at " + crab.get().getWorldLocation());
 			setStatus("Crab spawned");
+			// React right away instead of a tick later.
+			GameInput input = context.getInput();
+			if (!input.isBusy() && !input.isCameraBusy())
+			{
+				attack(context, crab.get());
+			}
 			return;
 		}
 
 		if (++waitTicks >= SPAWN_TIMEOUT_TICKS)
 		{
-			// No crab showed up. Move on through the cave again.
+			log.info("[GemCrab] no crab spawned within {} ticks, allowing one recovery crawl", SPAWN_TIMEOUT_TICKS);
 			waitTicks = 0;
-			state = State.GO_TO_CAVE;
+			crawlArmed = true;
+			crawlClicks = 0;
+			setState(State.GO_TO_CAVE, "spawn timeout, one recovery crawl");
 			setStatus("No spawn, heading to cave");
 			return;
 		}
 
 		setStatus("Waiting for crab to spawn (" + waitTicks + ")");
+	}
+
+	private void setState(State next, String reason)
+	{
+		if (next != state)
+		{
+			log.info("[GemCrab] {} -> {}: {}", state, next, reason);
+		}
+		state = next;
+	}
+
+	/** @return the nearest Gemstone Crab that is alive (not dying) */
+	private static Optional<NPC> findLiveCrab(ScriptContext context)
+	{
+		WorldPoint location = context.getPlayerLocation();
+		WorldView worldView = context.getClient().getTopLevelWorldView();
+		if (location == null || worldView == null)
+		{
+			return Optional.empty();
+		}
+
+		java.util.stream.Stream<NPC> npcs = worldView.npcs().stream().map(npc -> (NPC) npc);
+		return npcs
+			.filter(npc -> npc != null && npc.getId() == CRAB_ID && !npc.isDead())
+			.filter(npc -> npc.getWorldLocation() != null
+				&& npc.getWorldLocation().distanceTo(location) <= CRAB_SEARCH_DISTANCE)
+			.min(Comparator.comparingInt((NPC npc) -> npc.getWorldLocation().distanceTo(location)));
 	}
 
 	/**
@@ -586,17 +697,6 @@ public final class GemCrabKillerScript extends Script
 	{
 		nextAntiIdleAt = System.currentTimeMillis()
 			+ ThreadLocalRandom.current().nextLong(ANTI_IDLE_MIN_MS, ANTI_IDLE_MAX_MS + 1);
-	}
-
-	private boolean hasTeleported(WorldPoint location)
-	{
-		if (location == null || crawlStartLocation == null)
-		{
-			return false;
-		}
-
-		return location.getPlane() != crawlStartLocation.getPlane()
-			|| location.distanceTo(crawlStartLocation) >= CRAWL_TELEPORT_DISTANCE;
 	}
 
 	private Optional<TileObject> findCave(ScriptContext context)
