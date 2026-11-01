@@ -278,8 +278,9 @@ Priority each tick: **eat > drink > fight/loot/animate**.
   a new suit; it waits ("Low HP, no food: waiting to regenerate") until HP is back to 50% or food
   is added.
 - **Strength potions:** Test Plugin → **Animated suit: strength potions**: `Off`, `Strength potion`,
-  `Super strength`, or `Either (prefer super)` (default). **Animated suit: re-drink at boost**
-  (0-15, default 3): drinks the lowest dose first whenever the Strength boost is that or less.
+  `Super strength`, or `Either (prefer super)` (default). **Animated suit: drink when boost below**
+  (1-16, default 5): drinks the lowest dose first whenever the Strength boost is below that number
+  (default: at a boost of 4 or less, including unboosted).
   Without potions it simply keeps going.
 
 Mouse movement uses the fast, attentive profile (short curved paths, random click points, short

@@ -167,7 +167,7 @@ public class TestPlugin extends Plugin
 			config.animatedSuitAdamant(),
 			config.animatedSuitRune(),
 			config.animatedSuitPotionMode().name(),
-			config.animatedSuitBoostThreshold()));
+			config.animatedSuitDrinkBelowBoost()));
 
 		String customScriptError = registerCustomScript(config.customScriptClass());
 
@@ -516,7 +516,7 @@ public class TestPlugin extends Plugin
 				config.animatedSuitAdamant(),
 				config.animatedSuitRune(),
 				config.animatedSuitPotionMode().name(),
-				config.animatedSuitBoostThreshold());
+				config.animatedSuitDrinkBelowBoost());
 		}
 
 		return ScriptLoader.load(className, classLoader);

@@ -113,7 +113,8 @@ public final class AnimatedSuitKillerScript extends Script
 	private static final int EAT_WAIT_TICKS = 4;
 	/** Ticks to wait for a drink to register before trying again. */
 	private static final int DRINK_WAIT_TICKS = 5;
-	private static final int DEFAULT_BOOST_THRESHOLD = 3;
+	/** Default: drink when the Strength boost is below 5 (at 4 or less). */
+	private static final int DEFAULT_DRINK_BELOW_BOOST = 5;
 
 	/** Regular strength potions, lowest dose first. */
 	private static final int[] REGULAR_STRENGTH = {
@@ -230,7 +231,8 @@ public final class AnimatedSuitKillerScript extends Script
 	private int potionsDrunk;
 
 	private final PotionMode potionMode;
-	private final int boostThreshold;
+	/** Drink when the Strength boost is strictly below this. */
+	private final int drinkBelowBoost;
 	/** Potions in drinking order for the chosen mode (empty when OFF). */
 	private final int[] strengthPotions;
 	private long startedAt;
@@ -238,12 +240,12 @@ public final class AnimatedSuitKillerScript extends Script
 
 	public AnimatedSuitKillerScript()
 	{
-		this(true, false, false, false, PotionMode.EITHER.name(), DEFAULT_BOOST_THRESHOLD);
+		this(true, false, false, false, PotionMode.EITHER.name(), DEFAULT_DRINK_BELOW_BOOST);
 	}
 
 	public AnimatedSuitKillerScript(boolean black, boolean mithril, boolean adamant, boolean rune)
 	{
-		this(black, mithril, adamant, rune, PotionMode.EITHER.name(), DEFAULT_BOOST_THRESHOLD);
+		this(black, mithril, adamant, rune, PotionMode.EITHER.name(), DEFAULT_DRINK_BELOW_BOOST);
 	}
 
 	/**
@@ -253,15 +255,15 @@ public final class AnimatedSuitKillerScript extends Script
 	/**
 	 * @param potionMode OFF, STRENGTH, SUPER_STRENGTH or EITHER (super first);
 	 * anything else means EITHER
-	 * @param boostThreshold drink again once the Strength boost is this or less
+	 * @param drinkBelowBoost drink when the Strength boost is below this (5 = at 4 or less)
 	 */
 	public AnimatedSuitKillerScript(boolean black, boolean mithril, boolean adamant, boolean rune,
-		String potionMode, int boostThreshold)
+		String potionMode, int drinkBelowBoost)
 	{
 		super("Animated Suit Killer", "Animates armour on the Warriors' Guild Magical Animator, kills it, loots the"
 			+ " pieces and tokens, and repeats.");
 		this.potionMode = parseMode(potionMode);
-		this.boostThreshold = Math.max(0, boostThreshold);
+		this.drinkBelowBoost = Math.max(1, drinkBelowBoost);
 		this.strengthPotions = potionOrder(this.potionMode);
 		List<ArmourType> ticked = new ArrayList<>();
 		if (black)
@@ -1184,7 +1186,7 @@ public final class AnimatedSuitKillerScript extends Script
 
 	/**
 	 * Drinks a strength potion (lowest dose first) when the Strength boost is
-	 * at or below the threshold, in any state. Off when the mode is OFF or
+	 * below the configured value (default 5), in any state. Off when the mode is OFF or
 	 * no matching potion is carried.
 	 *
 	 * @return true if this tick was spent drinking or waiting on a drink
@@ -1212,7 +1214,7 @@ public final class AnimatedSuitKillerScript extends Script
 			}
 		}
 
-		if (boost > boostThreshold)
+		if (boost >= drinkBelowBoost)
 		{
 			return false;
 		}
@@ -1253,8 +1255,8 @@ public final class AnimatedSuitKillerScript extends Script
 			boostBeforeDrink = boost;
 			drinkWaitTicks = DRINK_WAIT_TICKS;
 			++potionsDrunk;
-			log.info("[AnimatedSuit drink] {} at strength boost {} (threshold {})", itemName(client, itemId), boost,
-				boostThreshold);
+			log.info("[AnimatedSuit drink] {} at strength boost {} (drinks below {})", itemName(client, itemId), boost,
+				drinkBelowBoost);
 			setStatus("Drinking " + itemName(client, itemId));
 			return true;
 		}
@@ -1353,7 +1355,7 @@ public final class AnimatedSuitKillerScript extends Script
 			"Kills: " + kills + " (" + perHour + "/hr)",
 			"Tokens: " + tokens + " (+" + gained + ")" + (foodEaten > 0 ? " | Food eaten: " + foodEaten : ""),
 			"Strength potions: " + potionsDrunk + " (" + potionMode
-				+ (potionMode == PotionMode.OFF ? ")" : ", at boost <= " + boostThreshold + ")"));
+				+ (potionMode == PotionMode.OFF ? ")" : ", drinks when boost < " + drinkBelowBoost + ")"));
 	}
 
 	private static final class GroundLoot
