@@ -990,7 +990,9 @@ public final class GameInput
 			long when = System.currentTimeMillis();
 			dispatchKey(canvas, KeyEvent.KEY_PRESSED, keyCode);
 
-			char keyChar = keyCode == KeyEvent.VK_SPACE ? ' ' : KeyEvent.CHAR_UNDEFINED;
+			char keyChar = keyCode == KeyEvent.VK_SPACE ? ' '
+				: keyCode >= KeyEvent.VK_0 && keyCode <= KeyEvent.VK_9 ? (char) ('0' + keyCode - KeyEvent.VK_0)
+				: KeyEvent.CHAR_UNDEFINED;
 			if (keyChar != KeyEvent.CHAR_UNDEFINED)
 			{
 				canvas.dispatchEvent(new KeyEvent(canvas, KeyEvent.KEY_TYPED, when, 0,
@@ -2696,6 +2698,21 @@ public final class GameInput
 			}
 		}
 		return entries.length == 0 ? null : entries[entries.length - 1];
+	}
+
+	/**
+	 * @return the entry a left click runs right now (deprioritized rows
+	 * skipped, like the client's own sort), or null. Client thread only.
+	 */
+	public MenuEntry getLeftClickEntry()
+	{
+		return client.isMenuOpen() ? null : leftClickEntry();
+	}
+
+	/** @return the text with colour/formatting tags removed */
+	public static String plainText(String value)
+	{
+		return value == null ? "" : stripTags(value);
 	}
 
 	/** @return true if the entry is a Take of one of the tracked loot items (any tile) */
