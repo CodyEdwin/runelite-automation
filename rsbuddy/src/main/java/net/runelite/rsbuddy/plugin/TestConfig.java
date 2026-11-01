@@ -267,4 +267,31 @@ public interface TestConfig extends Config
 	{
 		return false;
 	}
+
+	@ConfigItem(
+		keyName = "animatedSuitPotionMode",
+		name = "Animated suit: strength potions",
+		description = "Which strength potions the Animated Suit Killer drinks: Off, regular Strength potions only,"
+			+ " Super strength only, or Either (super strength first, then regular). Lowest dose first.",
+		position = 20
+	)
+	default AnimatedSuitPotionMode animatedSuitPotionMode()
+	{
+		return AnimatedSuitPotionMode.EITHER;
+	}
+
+	@Range(
+		min = 0,
+		max = 15
+	)
+	@ConfigItem(
+		keyName = "animatedSuitBoostThreshold",
+		name = "Animated suit: re-drink at boost",
+		description = "Drink another potion once the Strength boost has dropped to this many levels or less.",
+		position = 21
+	)
+	default int animatedSuitBoostThreshold()
+	{
+		return 3;
+	}
 }

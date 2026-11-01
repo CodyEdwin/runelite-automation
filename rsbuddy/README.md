@@ -261,15 +261,30 @@ Loop:
    Animate clicks in a row without a spawn stops the script.
 3. Fight it. The armour attacks you on its own; the script only clicks Attack if you are not
    fighting it after a short 3-tick grace. A fight is capped at 200 ticks.
-4. Loot the 3 pieces and the tokens from the death tile, one item at a time: aim, confirm under
-   the cursor, left-click Take (or right-click → exact Take row, or the exact Take action), up to
-   3 attempts per item, 25 ticks without a pickup gives up. Each attempt logs
-   `[AnimatedSuit loot] ...`.
+4. Loot the 3 pieces and the tokens from the death tile, one item at a time: a short curved mouse
+   move to a random point on the tile, confirm the item is under the cursor, then left-click Take.
+   If something else is on top it right-clicks and picks the exact Take row; if the tile moved it
+   re-aims, and an off-screen tile turns the camera first. Only the last of 3 attempts per item
+   may run the exact Take action without a click. 25 ticks without a pickup gives up. Pickups
+   sometimes pause a tick between items. Each attempt logs `[AnimatedSuit loot] ...`.
 5. Repeat.
 
-Safety: below 50% HP it eats any inventory item whose first option is **Eat** (bring food if you
-want this). The overlay shows status, armour type, kills/hr, tokens (and tokens gained) and food
-eaten. State changes log `[AnimatedSuit] OLD -> NEW: reason`; more than 5 ticks in one state logs a
+Priority each tick: **eat > drink > fight/loot/animate**.
+
+- **Eating:** below 50% HP it eats any inventory item that has an **Eat** option (any food; never
+  the armour pieces or tokens), in every state, including mid-fight. After each bite it waits for
+  HP to rise or the food to leave the inventory (up to 4 ticks) before eating again.
+- **Low HP, no food:** it keeps fighting the current suit and logs a warning, but will not animate
+  a new suit; it waits ("Low HP, no food: waiting to regenerate") until HP is back to 50% or food
+  is added.
+- **Strength potions:** Test Plugin → **Animated suit: strength potions**: `Off`, `Strength potion`,
+  `Super strength`, or `Either (prefer super)` (default). **Animated suit: re-drink at boost**
+  (0-15, default 3): drinks the lowest dose first whenever the Strength boost is that or less.
+  Without potions it simply keeps going.
+
+Mouse movement uses the fast, attentive profile (short curved paths, random click points, short
+varied reaction delays), like the Hill Giant script. The overlay shows status, armour type, kills/hr, tokens (and tokens gained) and food
+eaten, and the potion mode with potions drunk. State changes log `[AnimatedSuit] OLD -> NEW: reason`; more than 5 ticks in one state logs a
 `stall?` line (repeated every 20 ticks). Stuck mouse, camera or menus are reset on a tick cap, and
 the same anti-idle camera nudges as the Gem Crab Killer run every 30-60 seconds.
 
