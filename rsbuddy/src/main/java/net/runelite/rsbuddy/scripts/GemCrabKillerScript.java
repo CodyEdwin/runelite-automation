@@ -83,25 +83,37 @@ public final class GemCrabKillerScript extends Script
 	private static final int ANTI_IDLE_MIN_HOLD_MS = 150;
 	private static final int ANTI_IDLE_MAX_HOLD_MS = 450;
 
-	/** Drink another strength potion once the boost has dropped to this. */
-	private static final int STRENGTH_BOOST_THRESHOLD = 3;
+	/** Default: drink another strength potion once the boost has dropped to this. */
+	private static final int DEFAULT_BOOST_THRESHOLD = 3;
 	/** Ticks to wait for a drink to register before trying again. */
 	private static final int DRINK_TIMEOUT_TICKS = 5;
 
-	/**
-	 * Strength potions in the order they are drunk: regular strength
-	 * potions lowest dose first, then super strength as a fallback.
-	 */
-	private static final int[] STRENGTH_POTIONS = {
-		ItemID._1DOSE1STRENGTH,  // Strength potion(1)
-		ItemID._2DOSE1STRENGTH,  // Strength potion(2)
-		ItemID._3DOSE1STRENGTH,  // Strength potion(3)
-		ItemID.STRENGTH4,        // Strength potion(4)
-		ItemID._1DOSE2STRENGTH,  // Super strength(1)
-		ItemID._2DOSE2STRENGTH,  // Super strength(2)
-		ItemID._3DOSE2STRENGTH,  // Super strength(3)
-		ItemID._4DOSE2STRENGTH   // Super strength(4)
+	/** Regular strength potions, lowest dose first. */
+	private static final int[] REGULAR_STRENGTH = {
+		ItemID._1DOSE1STRENGTH,  // Strength potion(1) 119
+		ItemID._2DOSE1STRENGTH,  // Strength potion(2) 117
+		ItemID._3DOSE1STRENGTH,  // Strength potion(3) 115
+		ItemID.STRENGTH4         // Strength potion(4) 113
 	};
+
+	/** Super strength potions, lowest dose first. */
+	private static final int[] SUPER_STRENGTH = {
+		ItemID._1DOSE2STRENGTH,  // Super strength(1) 161
+		ItemID._2DOSE2STRENGTH,  // Super strength(2) 159
+		ItemID._3DOSE2STRENGTH,  // Super strength(3) 157
+		ItemID._4DOSE2STRENGTH   // Super strength(4) 2440
+	};
+
+	/**
+	 * Which potions are drunk. Matches the plugin's GemCrabPotionMode by
+	 * name, so the option survives a script hot-reload.
+	 */
+	private enum PotionMode
+	{
+		STRENGTH,
+		SUPER_STRENGTH,
+		EITHER
+	}
 
 	private enum State
 	{
@@ -125,9 +137,55 @@ public final class GemCrabKillerScript extends Script
 	private int boostBeforeDrink;
 	private int potionsDrunk;
 
+	private final PotionMode potionMode;
+	private final int boostThreshold;
+	/** Potions in the order they are drunk for the chosen mode. */
+	private final int[] strengthPotions;
+
 	public GemCrabKillerScript()
 	{
+		this(PotionMode.EITHER.name(), DEFAULT_BOOST_THRESHOLD);
+	}
+
+	/**
+	 * @param potionMode STRENGTH, SUPER_STRENGTH or EITHER (super strength
+	 * first, then regular); anything else means EITHER
+	 * @param boostThreshold drink again once the Strength boost is this or less
+	 */
+	public GemCrabKillerScript(String potionMode, int boostThreshold)
+	{
 		super("Gem Crab Killer", "Kills the Gemstone Crab (14779), crawls through the cave, and repeats.");
+		this.potionMode = parseMode(potionMode);
+		this.boostThreshold = Math.max(0, boostThreshold);
+		this.strengthPotions = potionOrder(this.potionMode);
+	}
+
+	private static PotionMode parseMode(String name)
+	{
+		try
+		{
+			return name == null ? PotionMode.EITHER : PotionMode.valueOf(name);
+		}
+		catch (IllegalArgumentException ex)
+		{
+			return PotionMode.EITHER;
+		}
+	}
+
+	private static int[] potionOrder(PotionMode mode)
+	{
+		switch (mode)
+		{
+			case STRENGTH:
+				return REGULAR_STRENGTH;
+			case SUPER_STRENGTH:
+				return SUPER_STRENGTH;
+			default:
+				int[] both = new int[SUPER_STRENGTH.length + REGULAR_STRENGTH.length];
+				System.arraycopy(SUPER_STRENGTH, 0, both, 0, SUPER_STRENGTH.length);
+				System.arraycopy(REGULAR_STRENGTH, 0, both, SUPER_STRENGTH.length, REGULAR_STRENGTH.length);
+				return both;
+		}
 	}
 
 	@Override
@@ -416,7 +474,7 @@ public final class GemCrabKillerScript extends Script
 
 	/**
 	 * Drinks a strength potion whenever the Strength boost (boosted level
-	 * minus real level) is {@value #STRENGTH_BOOST_THRESHOLD} or less, which
+	 * minus real level) is the configured threshold (default 3) or less, which
 	 * includes being unboosted. Does nothing when no strength potions are in
 	 * the inventory. Drinking does not interrupt combat, so this runs in
 	 * every state, but never while the mouse is moving, the camera is
@@ -442,7 +500,7 @@ public final class GemCrabKillerScript extends Script
 			}
 		}
 
-		if (boost > STRENGTH_BOOST_THRESHOLD)
+		if (boost > boostThreshold)
 		{
 			return;
 		}
@@ -481,9 +539,9 @@ public final class GemCrabKillerScript extends Script
 		}
 	}
 
-	private static int findStrengthPotionSlot(Inventory inventory)
+	private int findStrengthPotionSlot(Inventory inventory)
 	{
-		for (int potion : STRENGTH_POTIONS)
+		for (int potion : strengthPotions)
 		{
 			int slot = inventory.findSlot(potion);
 			if (slot >= 0)
@@ -639,6 +697,6 @@ public final class GemCrabKillerScript extends Script
 		return Arrays.asList(
 			"State: " + (state == null ? "-" : state.name()),
 			"Kills: " + kills + " (" + perHour + "/hr)",
-			"Strength potions: " + potionsDrunk);
+			"Strength potions: " + potionsDrunk + " (" + potionMode + ", at boost <= " + boostThreshold + ")");
 	}
 }

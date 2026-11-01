@@ -192,4 +192,31 @@ public interface TestConfig extends Config
 	{
 		return "";
 	}
+
+	@ConfigItem(
+		keyName = "gemCrabPotionMode",
+		name = "Gem crab: strength potions",
+		description = "Which strength potions the Gem Crab Killer drinks: regular Strength potions only,"
+			+ " Super strength only, or Either (super strength first, then regular). Lowest dose first.",
+		position = 14
+	)
+	default GemCrabPotionMode gemCrabPotionMode()
+	{
+		return GemCrabPotionMode.EITHER;
+	}
+
+	@Range(
+		min = 0,
+		max = 15
+	)
+	@ConfigItem(
+		keyName = "gemCrabBoostThreshold",
+		name = "Gem crab: re-drink at boost",
+		description = "Drink another potion once the Strength boost has dropped to this many levels or less.",
+		position = 15
+	)
+	default int gemCrabBoostThreshold()
+	{
+		return 3;
+	}
 }

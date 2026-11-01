@@ -152,7 +152,9 @@ public class TestPlugin extends Plugin
 			config.fruitStallKeepStrangeFruit(),
 			config.fruitStallKeepJangerberries()));
 		scriptManager.register(new HillGiantScript());
-		scriptManager.register(new GemCrabKillerScript());
+		scriptManager.register(new GemCrabKillerScript(
+			config.gemCrabPotionMode().name(),
+			config.gemCrabBoostThreshold()));
 		scriptManager.register(new GrandExchangeFlipperScript());
 
 		String customScriptError = registerCustomScript(config.customScriptClass());
@@ -455,6 +457,15 @@ public class TestPlugin extends Plugin
 				config.fruitStallKeepGolovanova(),
 				config.fruitStallKeepStrangeFruit(),
 				config.fruitStallKeepJangerberries());
+		}
+
+		if (GemCrabKillerScript.class.getName().equals(className))
+		{
+			// The mode is passed by name: a reloaded script has its own copy
+			// of every class, so a plugin enum would not match its constructor.
+			return ScriptLoader.load(className, classLoader,
+				config.gemCrabPotionMode().name(),
+				config.gemCrabBoostThreshold());
 		}
 
 		return ScriptLoader.load(className, classLoader);
