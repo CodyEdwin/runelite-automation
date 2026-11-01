@@ -265,11 +265,17 @@ Loop:
    spot on the pile (never the dead centre) and stays there while the player walks over and the
    camera moves. Whenever the hovered top option is **Take** for any of our items on that tile
    (armour piece or tokens) it left-clicks, and after each pickup it clicks again 80-250 ms later.
-   If the top option is something else (Walk here, the armour, someone else's drop) it moves the
-   cursor to another point on the tile, alternating near the centre where the item models sit and
-   elsewhere on the tile, and tries again. There is no right-click or menu-free Take: 4 nudges
-   without a Take count as one failed try, 3 failed tries log it and skip that pile for this
-   round, and 25 ticks without any pickup gives up. An off-screen pile gets one small camera turn.
+   The left-click option is read the way the client sorts the menu (deprioritized rows such as
+   Examine are skipped). Once the cursor has settled on the tile it clicks when that option is
+   Take for any of our items; if no Take shows after 300 ms settled it left-clicks the tile anyway
+   and checks the result (an item gone, the inventory changed, or the player walking to it). Only
+   after a click that picked nothing up does it aim at another point on the tile (alternating near
+   the centre and elsewhere). The aim point only moves when the tile itself moves by more than a
+   few pixels, so the cursor never wanders. There is no right-click or menu-free Take: 3 failed
+   clicks log it and skip that pile for this
+   round, and 25 ticks without any pickup gives up. If pieces are then still on the ground, the
+   armour check loots them again (up to 3 rounds) instead of stopping. Every 5 frames while
+   hovering it logs `hover pile=… cursor=… target=… dist=… top='…' -> decision`. An off-screen pile gets one small camera turn.
    Drops are searched within 3 tiles of the death tile and of the player. The round only ends once
    the Warrior guild tokens are in too (it waits up to 4 extra ticks for them). The loot start logs
    every nearby ground item (`id x qty @ tile own=ownership`), and every click logs

@@ -79,6 +79,8 @@ public final class AnimatedSuitKillerScript extends Script
 	 */
 	private static final Set<Integer> TOKEN_IDS = Set.of(ItemID.WARGUILD_TOKENS, ItemID.WARGUILD_TOKENS_2,
 		ItemID.WARGUILD_TOKENS_3, ItemID.WARGUILD_TOKENS_4, ItemID.WARGUILD_TOKENS_5);
+	/** Re-loot rounds of skipped piles before stopping with missing pieces. */
+	private static final int RELOOT_ROUND_LIMIT = 3;
 	/** Ticks to keep waiting for tokens after the armour pieces are back. */
 	private static final int TOKEN_WAIT_TICKS = 4;
 
@@ -203,6 +205,7 @@ public final class AnimatedSuitKillerScript extends Script
 	private int dropWaitTicks;
 
 	private int tokensAtKill;
+	private int relootRounds;
 	private int tokenWaitTicks;
 	private boolean lootListed;
 	private int lootPhaseTicks;
@@ -497,11 +500,22 @@ public final class AnimatedSuitKillerScript extends Script
 		List<Integer> missing = missingPieces(context.getInventory());
 		if (missing.isEmpty())
 		{
+			relootRounds = 0;
 			setState(State.ANIMATE, "all 3 " + armour.label + " pieces in inventory");
 			return;
 		}
 
 		GroundLoot onGround = findLoot(context, null, MISSING_PIECE_RADIUS);
+		if (onGround == null && !skippedLoot.isEmpty() && relootRounds < RELOOT_ROUND_LIMIT)
+		{
+			// The pieces may be on a pile that looting gave up on. They are
+			// right there, so forget the skip and loot again (capped).
+			++relootRounds;
+			log.info("[AnimatedSuit] missing pieces may be on a skipped pile, re-looting (round {}/{})",
+				relootRounds, RELOOT_ROUND_LIMIT);
+			skippedLoot.clear();
+			onGround = findLoot(context, null, MISSING_PIECE_RADIUS);
+		}
 		if (onGround != null)
 		{
 			deathTile = null;
