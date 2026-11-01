@@ -202,8 +202,15 @@ Start it next to the Gemstone Crab (NPC `14779`) or its cave.
 It will:
 
 1. Attack the Gemstone Crab and wait, without re-clicking, until it dies.
-2. Right-click the nearby **Cave** and choose **Crawl-through**.
-3. Wait up to about 36 seconds for the crab to spawn at the new location, attack it, and repeat.
+2. Click the nearby **Cave** (**Crawl-through**) exactly once. A crawl is only armed by a kill.
+3. Wait for the crawl to finish (teleport, or moved/animated then stood still), without clicking
+   the cave again. If the click did nothing for about 5 seconds it retries, at most 3 clicks.
+4. Wait for the new crab (live `14779`, not dying), never clicking the cave, and attack it the
+   same tick it appears. Repeat.
+
+If no crab appears within about 36 seconds, one recovery crawl is allowed. Starting with no crab
+nearby waits for a spawn instead of crawling. State changes are logged as
+`[GemCrab] OLD -> NEW: reason`.
 
 If the crab or cave is off screen, the camera is turned toward it first. The overlay shows the
 current state and kills per hour.
