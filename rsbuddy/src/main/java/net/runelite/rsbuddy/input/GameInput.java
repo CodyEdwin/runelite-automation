@@ -72,6 +72,14 @@ public final class GameInput
 	private static final double TAU = Math.PI * 2.0;
 	private static final long CLICK_EFFECT_LIFETIME_MS = 1000L;
 
+	// Continuous cursor tracking: a follow target is refreshed every client
+	// frame but eased toward at frame rate, so the cursor keeps moving with the
+	// object instead of hopping once per tick. The per-step cap keeps a long
+	// flick human-fast instead of teleporting straight to the object.
+	private static final int FOLLOW_FRAME_MS = 15;
+	private static final double FOLLOW_EPSILON_PX = 0.75;
+	private static final double FOLLOW_MAX_STEP_PX = 24.0;
+
 	private static final int CAMERA_YAW_UNITS = 16384;
 	private static final int CAMERA_HALF_TURN = CAMERA_YAW_UNITS / 2;
 	private static final int CAMERA_DEADBAND = 128;
@@ -94,6 +102,11 @@ public final class GameInput
 	private Timer movementTimer;
 	private boolean busy;
 	private volatile boolean fastClicking;
+
+	// Cursor target that is eased toward continuously. The script updates it
+	// each tick; the Swing timer follows it at frame rate.
+	private volatile Point followPoint;
+	private volatile Timer followTimer;
 
 	// Item ids whose "Take" option stays the default left click on the ground.
 	// While a script is running every other ground item is pushed below
@@ -411,9 +424,173 @@ public final class GameInput
 			return false;
 		}
 
+		stopFollowing();
 		busy = true;
 		SwingUtilities.invokeLater(() -> beginMove(canvas, canvasPoint));
 		return true;
+	}
+
+	/**
+	 * Eases the simulated cursor toward a point and keeps following it while
+	 * the point moves, refreshing at frame rate. Unlike {@link #moveTo(Point)},
+	 * which plays one fixed path and then stops, this keeps easing toward the
+	 * latest target until it is reached. The script re-reads a moving object's
+	 * projection every client frame, so the cursor glides with it instead of
+	 * hopping once per game tick.
+	 *
+	 * @param gamePoint point to follow, or null to stop following
+	 * @return true if the point is on the canvas and will be followed
+	 */
+	public boolean follow(Point gamePoint)
+	{
+		if (gamePoint == null)
+		{
+			stopFollowing();
+			return false;
+		}
+
+		Canvas canvas = client.getCanvas();
+		if (canvas == null)
+		{
+			return false;
+		}
+
+		Point canvasPoint = toCanvasPoint(gamePoint);
+		if (!canvas.contains(canvasPoint))
+		{
+			stopFollowing();
+			return false;
+		}
+
+		followPoint = new Point(gamePoint);
+		if (followTimer == null)
+		{
+			// Only pay for the EDT hop when the follower is not already
+			// running; onClientTick calls this every frame.
+			SwingUtilities.invokeLater(() -> ensureFollowTimer(canvas));
+		}
+		return true;
+	}
+
+	/**
+	 * Stops continuous cursor following. The target is cleared immediately so
+	 * a step that is already queued does nothing; the timer is stopped on the
+	 * Swing event thread.
+	 */
+	private void stopFollowing()
+	{
+		followPoint = null;
+		SwingUtilities.invokeLater(this::stopFollowTimer);
+	}
+
+	private void ensureFollowTimer(Canvas canvas)
+	{
+		if (followPoint == null || followTimer != null)
+		{
+			return;
+		}
+
+		Point target = toCanvasPoint(followPoint);
+		if (lastMousePoint != null
+			&& lastMousePoint.distance(target) < FOLLOW_EPSILON_PX)
+		{
+			return;
+		}
+
+		followTimer = new Timer(FOLLOW_FRAME_MS, event -> stepFollow(canvas));
+		followTimer.start();
+	}
+
+	private void stepFollow(Canvas canvas)
+	{
+		Point point = followPoint;
+		if (point == null)
+		{
+			stopFollowTimer();
+			return;
+		}
+
+		// Never fight a click or a normal animated path.
+		if (busy || fastClicking || movementTimer != null)
+		{
+			return;
+		}
+
+		Point target = toCanvasPoint(point);
+		if (!canvas.contains(target))
+		{
+			stopFollowTimer();
+			return;
+		}
+
+		Point current = lastMousePoint;
+		if (current == null || !canvas.contains(current))
+		{
+			Dimension size = canvas.getSize();
+			if (size.width <= 0 || size.height <= 0)
+			{
+				return;
+			}
+
+			current = new Point(size.width / 2, size.height / 2);
+			lastMousePoint = current;
+			mouseLocation = toGamePoint(current);
+		}
+
+		double dx = target.x - current.x;
+		double dy = target.y - current.y;
+		double distance = Math.hypot(dx, dy);
+
+		if (distance < FOLLOW_EPSILON_PX)
+		{
+			if (!target.equals(current))
+			{
+				lastMousePoint = target;
+				mouseLocation = toGamePoint(target);
+				dispatch(canvas, MouseEvent.MOUSE_MOVED, target, MouseEvent.NOBUTTON, 0, 0);
+			}
+
+			stopFollowTimer();
+			return;
+		}
+
+		// Ease out toward the point. The fraction is larger while far away so
+		// the cursor catches up quickly, then shrinks into a smooth landing.
+		// Cap the step so a long move cannot jump across the screen in a frame.
+		double fraction = distance > 90.0
+			? 0.30 + Math.min(0.20, distance / 1200.0)
+			: 0.30;
+		double step = Math.min(distance * fraction, FOLLOW_MAX_STEP_PX);
+		if (step < 1.0)
+		{
+			// Always advance at least one pixel, or integer rounding could
+			// leave the cursor stuck just short of a slow-moving target.
+			step = 1.0;
+		}
+
+		int x = (int) Math.round(current.x + dx / distance * step);
+		int y = (int) Math.round(current.y + dy / distance * step);
+
+		// A little hand tremor while travelling, gone as it settles.
+		if (distance > 12.0)
+		{
+			x += random.nextInt(3) - 1;
+			y += random.nextInt(3) - 1;
+		}
+
+		Point next = new Point(x, y);
+		lastMousePoint = next;
+		mouseLocation = toGamePoint(next);
+		dispatch(canvas, MouseEvent.MOUSE_MOVED, next, MouseEvent.NOBUTTON, 0, 0);
+	}
+
+	private void stopFollowTimer()
+	{
+		if (followTimer != null)
+		{
+			followTimer.stop();
+			followTimer = null;
+		}
 	}
 
 	/**
@@ -529,6 +706,7 @@ public final class GameInput
 		}
 
 		stopCamera();
+		stopFollowing();
 		final List<Point> targets = gamePoints;
 		final List<Point> canvasTargets = canvasPoints;
 		fastClicking = true;
@@ -597,6 +775,7 @@ public final class GameInput
 		}
 
 		stopCamera();
+		stopFollowing();
 		busy = true;
 		final double speed = Math.max(0.1, speedMultiplier);
 		final List<Point> targets = gamePoints;
@@ -2292,6 +2471,7 @@ public final class GameInput
 		}
 
 		stopCamera();
+		stopFollowing();
 		busy = true;
 		SwingUtilities.invokeLater(() -> beginClick(canvas, canvasPoint, button));
 		return true;

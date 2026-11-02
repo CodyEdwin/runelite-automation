@@ -241,6 +241,11 @@ public final class RooftopAgilityTrainerScript extends Script
 	private int failedClicks;
 	private int aimTicks;
 	private int stuckTicks;
+
+	// The object the cursor should stay glued to. onClientTick re-projects it
+	// every client frame, so the cursor follows the object continuously while
+	// the camera and player move instead of hopping once per game tick.
+	private volatile TileObject hoverTarget;
 	private WorldPoint lastWalkLocation;
 	private boolean aligned;
 
@@ -331,7 +336,36 @@ public final class RooftopAgilityTrainerScript extends Script
 		startAgilityXp = 0;
 		lastMarkCount = 0;
 		marksCollected = 0;
+		hoverTarget = null;
+		getContext().getInput().follow(null);
 		setStatus("Ready for " + course.name);
+	}
+
+	@Override
+	protected void onClientTick()
+	{
+		TileObject target = hoverTarget;
+		if (target == null)
+		{
+			return;
+		}
+
+		java.awt.Point aim = aimOf(target);
+		if (aim != null)
+		{
+			// Runs every client frame on the client thread: the follower is
+			// always easing toward the object's current screen position, so a
+			// moving camera produces one continuous glide rather than a burst
+			// of movement followed by a pause until the next game tick.
+			getContext().getInput().follow(aim);
+		}
+	}
+
+	@Override
+	protected void onStop()
+	{
+		hoverTarget = null;
+		getContext().getInput().follow(null);
 	}
 
 	@Override
@@ -341,6 +375,7 @@ public final class RooftopAgilityTrainerScript extends Script
 
 		if (!context.isLoggedIn())
 		{
+			hoverTarget = null;
 			waiting = false;
 			setStatus("Waiting for login");
 			return;
@@ -358,6 +393,7 @@ public final class RooftopAgilityTrainerScript extends Script
 		Player player = context.getPlayer();
 		if (player == null)
 		{
+			hoverTarget = null;
 			setStatus("Waiting for player");
 			return;
 		}
@@ -543,6 +579,10 @@ public final class RooftopAgilityTrainerScript extends Script
 
 		context.getInput().stopCamera();
 
+		// Keep the cursor glued to this object every client frame from now on,
+		// including through the animation after the click.
+		hoverTarget = target;
+
 		// No "wait for a still frame" pause. The cursor is re-aimed at the
 		// object every tick, so it follows the object as the camera and player
 		// move, and the left-click menu check is what guarantees the click
@@ -587,7 +627,7 @@ public final class RooftopAgilityTrainerScript extends Script
 				aimTicks = 0;
 			}
 
-			if (context.getInput().moveTo(aim))
+			if (context.getInput().follow(aim))
 			{
 				setStatus("Hovering " + obstacle.name);
 				return;
@@ -666,6 +706,9 @@ public final class RooftopAgilityTrainerScript extends Script
 			return;
 		}
 
+		// onClientTick keeps following this object every frame.
+		hoverTarget = target;
+
 		java.awt.Point aim = aimOf(target);
 		if (aim == null)
 		{
@@ -675,7 +718,10 @@ public final class RooftopAgilityTrainerScript extends Script
 		java.awt.Point mouse = context.getInput().getMouseLocation();
 		if (mouse == null || mouse.distance(aim) > AIM_TOLERANCE_PX)
 		{
-			context.getInput().moveTo(aim);
+			// Follow rather than one-shot move: the object keeps drifting with
+			// the camera, and the frame-rate follower keeps the cursor gliding
+			// with it instead of hopping once per game tick.
+			context.getInput().follow(aim);
 		}
 	}
 
@@ -717,6 +763,8 @@ public final class RooftopAgilityTrainerScript extends Script
 	 */
 	private void walkToward(WorldPoint target, int stopDistance, String name, boolean useMinimap)
 	{
+		hoverTarget = null;
+		getContext().getInput().follow(null);
 		Player player = getContext().getPlayer();
 		WorldPoint location = player == null ? null : player.getWorldLocation();
 
@@ -751,6 +799,8 @@ public final class RooftopAgilityTrainerScript extends Script
 	 */
 	private void walkToFirstWall(WorldPoint wall, WorldPoint playerLocation, TileObject target, Obstacle obstacle)
 	{
+		hoverTarget = null;
+		getContext().getInput().follow(null);
 		WorldPoint standTile = firstWallStandTile(wall, playerLocation);
 		if (standTile == null)
 		{
@@ -937,6 +987,7 @@ public final class RooftopAgilityTrainerScript extends Script
 
 	private void completeObstacle()
 	{
+		hoverTarget = null;
 		waiting = false;
 		failedClicks = 0;
 		missingTicks = 0;
@@ -1051,6 +1102,8 @@ public final class RooftopAgilityTrainerScript extends Script
 
 	private void recover(String reason)
 	{
+		hoverTarget = null;
+		getContext().getInput().follow(null);
 		waiting = false;
 		missingTicks = 0;
 		failedClicks = 0;
@@ -1089,6 +1142,7 @@ public final class RooftopAgilityTrainerScript extends Script
 	 */
 	private void alignToCourse(Player player)
 	{
+		hoverTarget = null;
 		WorldPoint location = player.getWorldLocation();
 		if (location == null || location.getPlane() == 0)
 		{
@@ -1169,6 +1223,14 @@ public final class RooftopAgilityTrainerScript extends Script
 	 */
 	private boolean updateMarkPickup(ScriptContext context, Player player)
 	{
+		// While a mark is being handled, the cursor belongs to the mark, not
+		// the rooftop obstacle. Clearing the hover target stops onClientTick
+		// from dragging it back to the obstacle every frame.
+		if (markTarget != null)
+		{
+			hoverTarget = null;
+		}
+
 		if (markTarget != null && !markStillPresent(context, markTarget))
 		{
 			// The mark was picked up or despawned.
@@ -1191,6 +1253,8 @@ public final class RooftopAgilityTrainerScript extends Script
 			{
 				return false;
 			}
+
+			hoverTarget = null;
 
 			markTicks = 0;
 			markAttemptTicks = 0;
