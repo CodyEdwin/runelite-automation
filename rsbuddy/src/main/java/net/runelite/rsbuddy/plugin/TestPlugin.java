@@ -323,6 +323,10 @@ public class TestPlugin extends Plugin
 		{
 			current.updatePileTracking();
 		}
+		if (scriptManager != null)
+		{
+			scriptManager.onClientTick();
+		}
 	}
 
 	@Subscribe

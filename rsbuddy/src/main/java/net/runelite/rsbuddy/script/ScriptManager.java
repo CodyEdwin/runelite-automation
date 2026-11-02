@@ -172,6 +172,24 @@ public final class ScriptManager
 		}
 	}
 
+	/** Client thread, every frame: forwards to the active script's onClientTick. */
+	public synchronized void onClientTick()
+	{
+		Script script = activeScript;
+		if (script == null)
+		{
+			return;
+		}
+		try
+		{
+			script.clientTick();
+		}
+		catch (Throwable ex)
+		{
+			log.warn("Script {} client tick failed", script.getName(), ex);
+		}
+	}
+
 	public synchronized void onGameTick()
 	{
 		Script script = activeScript;

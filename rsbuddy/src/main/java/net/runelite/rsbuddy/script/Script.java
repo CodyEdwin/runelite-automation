@@ -88,7 +88,21 @@ public abstract class Script
 		onGameTick();
 	}
 
+	/** Every client frame (client thread), for the active script only. */
+	final void clientTick()
+	{
+		onClientTick();
+	}
+
 	protected abstract void onGameTick();
+
+	/**
+	 * Optional per-frame hook (client thread) for steps that should follow
+	 * each other faster than one game tick. Keep it cheap.
+	 */
+	protected void onClientTick()
+	{
+	}
 
 	protected void onStart()
 	{
