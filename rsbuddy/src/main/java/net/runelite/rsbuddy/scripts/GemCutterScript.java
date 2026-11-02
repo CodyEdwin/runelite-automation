@@ -26,9 +26,7 @@ package net.runelite.rsbuddy.scripts;
 
 import java.awt.event.KeyEvent;
 import java.util.Arrays;
-import java.util.Comparator;
 import java.util.List;
-import java.util.Optional;
 import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
 import net.runelite.api.Client;
@@ -36,12 +34,9 @@ import net.runelite.api.Item;
 import net.runelite.api.ItemComposition;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.NPC;
-import net.runelite.api.NPCComposition;
 import net.runelite.api.ObjectComposition;
 import net.runelite.api.Player;
 import net.runelite.api.TileObject;
-import net.runelite.api.WorldView;
-import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.ItemID;
 import net.runelite.api.widgets.Widget;
@@ -49,6 +44,7 @@ import net.runelite.rsbuddy.input.GameInput;
 import net.runelite.rsbuddy.inventory.Inventory;
 import net.runelite.rsbuddy.script.Script;
 import net.runelite.rsbuddy.script.ScriptContext;
+import net.runelite.rsbuddy.target.BankFinder;
 
 /**
  * Cuts gems at a bank (built for the Grand Exchange): deposit inventory (the
@@ -62,7 +58,7 @@ public final class GemCutterScript extends Script
 	private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(GemCutterScript.class);
 
 	private static final int CHISEL_ID = ItemID.CHISEL; // 1755
-	private static final int BANK_SEARCH_DISTANCE = 15;
+	private static final int BANK_SEARCH_DISTANCE = 20;
 
 	private static final int HOVER_ATTEMPTS = 3;
 	private static final int BANK_OPEN_WAIT_TICKS = 8;
@@ -358,7 +354,7 @@ public final class GemCutterScript extends Script
 		Object target = findBankTarget(context);
 		if (target == null)
 		{
-			halt("no bank booth, chest or banker within " + BANK_SEARCH_DISTANCE + " tiles");
+			halt("no bank booth, chest or banker within " + BANK_SEARCH_DISTANCE + " tiles (nearby objects logged)");
 			return;
 		}
 
@@ -947,102 +943,31 @@ public final class GemCutterScript extends Script
 	}
 
 	/**
-	 * Closest-booth mode: the nearest bank booth or bank chest object.
-	 * Otherwise the nearest of a banker NPC, chest or booth.
+	 * The bank to open, via the shared {@link BankFinder}: closest booth or
+	 * chest (Grand Exchange booths included) when that option is on, falling
+	 * back to a banker; otherwise the closest of banker, chest or booth.
+	 *
+	 * @return a TileObject or an NPC, or null
 	 */
 	private Object findBankTarget(ScriptContext context)
 	{
-		WorldPoint location = context.getPlayerLocation();
-		if (location == null)
+		BankFinder.BankTarget target = BankFinder.find(context.getClient(), context.getTargets(),
+			context.getPlayerLocation(), BANK_SEARCH_DISTANCE, closestBooth, "[GemCutter bank]");
+		if (target == null)
 		{
 			return null;
 		}
-		List<TileObject> objects = context.getTargets().getTileObjects(location, BANK_SEARCH_DISTANCE);
-		Optional<TileObject> booth = objects.stream()
-			.filter(object -> bankAction(context, object) != null)
-			.min(Comparator.comparingInt(object -> object.getWorldLocation().distanceTo(location)));
-		if (closestBooth)
-		{
-			return booth.orElse(null);
-		}
-
-		Optional<NPC> banker = findBanker(context, location);
-		if (banker.isPresent() && (booth.isEmpty()
-			|| banker.get().getWorldLocation().distanceTo(location) < booth.get().getWorldLocation().distanceTo(location)))
-		{
-			return banker.get();
-		}
-		return booth.orElse(null);
+		return target.getObject() != null ? target.getObject() : target.getNpc();
 	}
 
-	private static Optional<NPC> findBanker(ScriptContext context, WorldPoint location)
-	{
-		WorldView worldView = context.getClient().getTopLevelWorldView();
-		if (worldView == null)
-		{
-			return Optional.empty();
-		}
-		NPC best = null;
-		for (NPC npc : worldView.npcs())
-		{
-			NPCComposition composition = npc == null ? null : npc.getTransformedComposition();
-			if (composition == null || composition.getActions() == null || npc.getWorldLocation() == null
-				|| npc.getWorldLocation().distanceTo(location) > BANK_SEARCH_DISTANCE)
-			{
-				continue;
-			}
-			boolean bank = Arrays.stream(composition.getActions()).anyMatch(a -> "Bank".equalsIgnoreCase(a));
-			if (bank && (best == null
-				|| npc.getWorldLocation().distanceTo(location) < best.getWorldLocation().distanceTo(location)))
-			{
-				best = npc;
-			}
-		}
-		return Optional.ofNullable(best);
-	}
-
-	/** @return "Bank" or "Use" for a bank booth/chest object, else null */
 	private static String bankAction(ScriptContext context, TileObject object)
 	{
-		ObjectComposition composition = composition(context, object);
-		if (composition == null || composition.getActions() == null || object.getWorldLocation() == null)
-		{
-			return null;
-		}
-		String name = composition.getName() == null ? "" : composition.getName().toLowerCase();
-		String[] actions = composition.getActions();
-		for (String action : actions)
-		{
-			if ("Bank".equalsIgnoreCase(action) && (name.contains("bank") || name.contains("chest")))
-			{
-				return "Bank";
-			}
-		}
-		if (name.contains("bank chest"))
-		{
-			for (String action : actions)
-			{
-				if ("Use".equalsIgnoreCase(action))
-				{
-					return "Use";
-				}
-			}
-		}
-		return null;
+		return BankFinder.bankAction(BankFinder.composition(context.getClient(), object));
 	}
 
 	private static ObjectComposition composition(ScriptContext context, TileObject object)
 	{
-		ObjectComposition composition = context.getClient().getObjectDefinition(object.getId());
-		if (composition != null && composition.getImpostorIds() != null)
-		{
-			ObjectComposition impostor = composition.getImpostor();
-			if (impostor != null)
-			{
-				composition = impostor;
-			}
-		}
-		return composition;
+		return BankFinder.composition(context.getClient(), object);
 	}
 
 	private static String objectName(ScriptContext context, TileObject object)
@@ -1075,6 +1000,6 @@ public final class GemCutterScript extends Script
 			"Status: " + getStatus(),
 			"Gem: " + gem + " | State: " + (state == null ? "-" : state.name()),
 			"Cut: " + gemsCut + (amount > 0 ? " / " + amount : " (unlimited)") + " | Inventories: " + batches,
-			"Bank: " + (closestBooth ? "closest booth/chest" : "closest banker/chest/booth"));
+			"Bank: " + (closestBooth ? "closest booth/chest/banker" : "banker first, then booth/chest"));
 	}
 }
