@@ -29,9 +29,12 @@ import java.awt.Component;
 import java.awt.GridLayout;
 import java.awt.event.FocusAdapter;
 import java.awt.event.FocusEvent;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListCellRenderer;
 import javax.swing.JButton;
@@ -55,7 +58,9 @@ import net.runelite.client.ui.PluginPanel;
 import net.runelite.rsbuddy.script.Script;
 import net.runelite.rsbuddy.script.ScriptLoader;
 import net.runelite.rsbuddy.script.ScriptManager;
+import net.runelite.rsbuddy.scripts.BowFletcherScript;
 import net.runelite.rsbuddy.scripts.FruitStallStealerScript;
+import net.runelite.rsbuddy.scripts.GemCutterScript;
 import net.runelite.rsbuddy.scripts.ObjectInteractScript;
 
 /**
@@ -86,6 +91,12 @@ public final class TestPluginPanel extends PluginPanel
 	private final Timer refreshTimer;
 
 	private Script settingsScript;
+
+	/**
+	 * Config key -> refresher for the settings controls currently shown, so a
+	 * change made in the Test Plugin config (wrench) shows up here too.
+	 */
+	private final Map<String, Runnable> settingSyncers = new HashMap<>();
 
 	public TestPluginPanel(ScriptManager scriptManager, TestConfig config, ConfigManager configManager,
 		Function<Script, Script> startScript, Function<Script, Script> reloadScript)
@@ -251,6 +262,19 @@ public final class TestPluginPanel extends PluginPanel
 	public void onDeactivate()
 	{
 		refreshTimer.stop();
+	}
+
+	/**
+	 * Called on the EDT when a Test Plugin config key changes (from the
+	 * wrench config or from this panel) to keep the shown controls in sync.
+	 */
+	void configChanged(String key)
+	{
+		Runnable syncer = settingSyncers.get(key);
+		if (syncer != null)
+		{
+			syncer.run();
+		}
 	}
 
 	void shutdown()
@@ -448,6 +472,7 @@ public final class TestPluginPanel extends PluginPanel
 	private void rebuildScriptSettings(Script script)
 	{
 		scriptSettingsPanel.removeAll();
+		settingSyncers.clear();
 		boolean hasSettings = false;
 
 		if (script != null && FruitStallStealerScript.class.getName().equals(script.getClass().getName()))
@@ -508,6 +533,37 @@ public final class TestPluginPanel extends PluginPanel
 			hasSettings = true;
 		}
 
+		else if (script != null && BowFletcherScript.class.getName().equals(script.getClass().getName()))
+		{
+			addComboSetting("Bow to make", "Which unstrung bow to fletch; the logs follow from it.",
+				BowFletcherBowType.values(), "bowFletcherBowType", config::bowFletcherBowType);
+			addSpinnerSetting("Amount (0 = unlimited)",
+				"How many bows to make, then stop. 0 = until the bank runs out of logs.",
+				"bowFletcherAmount", config::bowFletcherAmount);
+			addCheckSetting("Bank at closest booth",
+				"Open the closest bank: booth, chest or banker NPC. Off: prefer a banker NPC.",
+				"bowFletcherClosestBooth", config::bowFletcherClosestBooth);
+
+			scriptSettingsHint.setText("<html>Knife in locked slot 1. Used the next time the script starts."
+				+ " Same settings as Test Plugin config.</html>");
+			hasSettings = true;
+		}
+		else if (script != null && GemCutterScript.class.getName().equals(script.getClass().getName()))
+		{
+			addComboSetting("Gem to cut", "Which uncut gem to withdraw and cut.",
+				GemCutterGemType.values(), "gemCutterGemType", config::gemCutterGemType);
+			addSpinnerSetting("Amount (0 = unlimited)",
+				"How many gems to cut, then stop. 0 = until the bank runs out of uncut gems.",
+				"gemCutterAmount", config::gemCutterAmount);
+			addCheckSetting("Bank at closest booth",
+				"Open the closest bank: booth, chest or banker NPC. Off: prefer a banker NPC.",
+				"gemCutterClosestBooth", config::gemCutterClosestBooth);
+
+			scriptSettingsHint.setText("<html>Chisel in locked slot 1. Used the next time the script starts."
+				+ " Same settings as Test Plugin config.</html>");
+			hasSettings = true;
+		}
+
 		if (!hasSettings)
 		{
 			scriptSettingsHint.setText("");
@@ -531,6 +587,80 @@ public final class TestPluginPanel extends PluginPanel
 		checkBox.setToolTipText(tooltip);
 		checkBox.addActionListener(event -> save.accept(checkBox.isSelected()));
 		scriptSettingsPanel.add(checkBox);
+	}
+
+	/** A checkbox bound to a boolean config key, kept in sync both ways. */
+	private void addCheckSetting(String label, String tooltip, String key, Supplier<Boolean> current)
+	{
+		JCheckBox checkBox = new JCheckBox(label);
+		checkBox.setOpaque(false);
+		checkBox.setForeground(ColorScheme.TEXT_COLOR);
+		checkBox.setFocusPainted(false);
+		checkBox.setSelected(current.get());
+		checkBox.setToolTipText(tooltip);
+		checkBox.addActionListener(event ->
+			configManager.setConfiguration(TestConfig.GROUP, key, checkBox.isSelected()));
+		scriptSettingsPanel.add(checkBox);
+		settingSyncers.put(key, () ->
+		{
+			boolean value = current.get();
+			if (checkBox.isSelected() != value)
+			{
+				checkBox.setSelected(value);
+			}
+		});
+	}
+
+	/** A dropdown bound to an enum config key, kept in sync both ways. */
+	private <E extends Enum<E>> void addComboSetting(String label, String tooltip, E[] values, String key,
+		Supplier<E> current)
+	{
+		JLabel title = new JLabel(label);
+		title.setForeground(ColorScheme.TEXT_COLOR);
+		scriptSettingsPanel.add(title);
+
+		JComboBox<E> combo = new JComboBox<>(values);
+		combo.setToolTipText(tooltip);
+		combo.setSelectedItem(current.get());
+		combo.addActionListener(event ->
+		{
+			Object selected = combo.getSelectedItem();
+			if (selected != null)
+			{
+				configManager.setConfiguration(TestConfig.GROUP, key, ((Enum<?>) selected).name());
+			}
+		});
+		scriptSettingsPanel.add(combo);
+		settingSyncers.put(key, () ->
+		{
+			E value = current.get();
+			if (combo.getSelectedItem() != value)
+			{
+				combo.setSelectedItem(value);
+			}
+		});
+	}
+
+	/** A 0..1,000,000 spinner bound to an int config key, kept in sync both ways. */
+	private void addSpinnerSetting(String label, String tooltip, String key, Supplier<Integer> current)
+	{
+		JLabel title = new JLabel(label);
+		title.setForeground(ColorScheme.TEXT_COLOR);
+		scriptSettingsPanel.add(title);
+
+		JSpinner spinner = new JSpinner(new SpinnerNumberModel((int) current.get(), 0, 1000000, 1));
+		spinner.setToolTipText(tooltip);
+		spinner.addChangeListener(event ->
+			configManager.setConfiguration(TestConfig.GROUP, key, (Integer) spinner.getValue()));
+		scriptSettingsPanel.add(spinner);
+		settingSyncers.put(key, () ->
+		{
+			int value = current.get();
+			if (!Integer.valueOf(value).equals(spinner.getValue()))
+			{
+				spinner.setValue(value);
+			}
+		});
 	}
 
 	private void addTextSetting(String label, String value, Consumer<String> save)

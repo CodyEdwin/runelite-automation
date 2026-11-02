@@ -313,7 +313,9 @@ calls the client.
 `BowFletcherScript` appears in the panel as **Bow Fletcher**. Stand next to a bank with a knife
 in the **locked first inventory slot** and the logs in the bank.
 
-Settings (RuneLite Configuration → **Test Plugin**):
+Settings: select **Bow Fletcher** in the RSBuddy side panel and they show under **Script settings**
+(Bow to make, Amount (0 = unlimited), Bank at closest booth). The same settings are in RuneLite
+Configuration → **Test Plugin**; both places stay in sync and are read on Start:
 
 - **Bow fletcher: bow** (default `Longbow (u) - regular logs`): shortbow (u) or longbow (u) for
   regular, oak, willow, maple, yew or magic logs. The logs to withdraw follow from it.
@@ -354,7 +356,9 @@ top option, bank and make-menu steps).
 (works at any bank). Keep a chisel in the **locked first inventory slot** and the uncut gems in the
 bank. It works like the Bow Fletcher.
 
-Settings (RuneLite Configuration → **Test Plugin**, read on Start):
+Settings: select **Gem Cutter** in the RSBuddy side panel and they show under **Script settings**
+(Gem to cut, Amount (0 = unlimited), Bank at closest booth). The same settings are in RuneLite
+Configuration → **Test Plugin**; both places stay in sync and are read on Start:
 
 - **Gem cutter: gem** (default `Sapphire`): Opal, Jade, Red topaz, Sapphire, Emerald, Ruby,
   Diamond, Dragonstone, Onyx or Zenyte.
