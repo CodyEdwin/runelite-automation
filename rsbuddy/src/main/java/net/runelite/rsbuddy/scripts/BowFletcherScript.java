@@ -27,6 +27,7 @@ package net.runelite.rsbuddy.scripts;
 import java.awt.event.KeyEvent;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
 import net.runelite.api.Client;
@@ -36,6 +37,7 @@ import net.runelite.api.MenuEntry;
 import net.runelite.api.NPC;
 import net.runelite.api.ObjectComposition;
 import net.runelite.api.Player;
+import net.runelite.api.Skill;
 import net.runelite.api.TileObject;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.ItemID;
@@ -68,8 +70,10 @@ public final class BowFletcherScript extends Script
 	private static final int ACTION_ATTEMPTS = 3;
 	private static final int MAKE_MENU_WAIT_TICKS = 5;
 	/** No animation and no log used for this long with logs left: restart (level-up etc.). */
-	private static final int IDLE_RESTART_TICKS = 4;
 	private static final int RESTART_LIMIT = 5;
+	/** Pause before each client-tick restart step (ms). */
+	private static final long FAST_STEP_MIN_MS = 60;
+	private static final long FAST_STEP_MAX_MS = 140;
 	private static final int BUSY_STUCK_TICKS = 15;
 	private static final int STALL_LOG_TICKS = 5;
 
@@ -147,6 +151,9 @@ public final class BowFletcherScript extends Script
 	private int lastProductCount = -1;
 	private int lastLogCount = -1;
 	private int idleTicks;
+	private final SkillInterruptWatcher interruptWatcher = new SkillInterruptWatcher(Skill.FLETCHING);
+	/** Client-tick fast path: earliest time (ms) for the next restart step, 0 = not armed. */
+	private long fastStepAtMs;
 	private int restarts;
 	private int batches;
 	/** Make-menu slot confirmed to make our bow last time; Space repeats it. */
@@ -232,6 +239,70 @@ public final class BowFletcherScript extends Script
 			{
 				throw ex;
 			}
+		}
+	}
+
+	@Override
+	protected void onClientTick()
+	{
+		// Client thread, every frame. Walks the restart chain (knife ->
+		// logs -> make menu) as soon as the mouse is free instead of
+		// waiting for the next game tick, after a short human pause.
+		try
+		{
+			fastStep();
+		}
+		catch (RuntimeException ex)
+		{
+			log.error("[BowFletcher] fast step failed in state={}", state, ex);
+			getContext().getInput().reset();
+			hoverKey = null;
+			fastStepAtMs = 0;
+		}
+	}
+
+	private void fastStep()
+	{
+		State current = state;
+		if (current != State.USE_KNIFE && current != State.USE_ON_LOGS && current != State.WAIT_MAKE_MENU)
+		{
+			fastStepAtMs = 0;
+			return;
+		}
+		ScriptContext context = getContext();
+		if (context == null || !context.isLoggedIn() || context.getInput().isBusy())
+		{
+			fastStepAtMs = 0;
+			return;
+		}
+		long now = System.currentTimeMillis();
+		if (fastStepAtMs == 0)
+		{
+			// Let the hovered menu entry refresh, like a player glancing
+			// before the next click (the move itself adds its own reaction).
+			fastStepAtMs = now + ThreadLocalRandom.current().nextLong(FAST_STEP_MIN_MS, FAST_STEP_MAX_MS + 1);
+			return;
+		}
+		if (now < fastStepAtMs)
+		{
+			return;
+		}
+		fastStepAtMs = 0;
+		switch (current)
+		{
+			case USE_KNIFE:
+				useKnife(context);
+				break;
+			case USE_ON_LOGS:
+				useOnLogs(context);
+				break;
+			default:
+				if (pressedOption < 0 && context.getTargets().findWidget(InterfaceID.Skillmulti.UNIVERSE).isPresent())
+				{
+					setState(State.CHOOSE_BOW, "make menu open");
+					chooseBow(context);
+				}
+				break;
 		}
 	}
 
@@ -678,6 +749,7 @@ public final class BowFletcherScript extends Script
 				startedFletching = false;
 				idleTicks = 0;
 				lastLogCount = context.getInventory().countItem(bow.logId);
+				interruptWatcher.reset(context.getClient());
 				++batches;
 				setState(State.FLETCHING, "make menu closed after choosing option " + (pressedOption + 1));
 				return;
@@ -721,7 +793,8 @@ public final class BowFletcherScript extends Script
 		Player player = context.getPlayer();
 		boolean animating = player != null && player.getAnimation() != -1;
 
-		if (logs < lastLogCount)
+		boolean usedItem = lastLogCount >= 0 && logs < lastLogCount;
+		if (usedItem)
 		{
 			if (pressedOption >= 0 && !startedFletching)
 			{
@@ -741,19 +814,17 @@ public final class BowFletcherScript extends Script
 			return;
 		}
 
-		if (animating)
+		// Level-up (real level up or the dialog opening) stops the batch at
+		// once; otherwise 2 ticks with no animation and no item used. One
+		// tick without animation between two items is normal.
+		String interrupt = interruptWatcher.update(context.getClient(), animating, usedItem);
+		if (interrupt == null)
 		{
-			idleTicks = 0;
+			idleTicks = animating ? 0 : idleTicks + 1;
 			setStatus("Fletching (" + logs + " logs left)");
 			return;
 		}
 
-		if (++idleTicks < IDLE_RESTART_TICKS)
-		{
-			return;
-		}
-
-		// Stopped with logs left: a level-up dialog or an interruption.
 		if (++restarts > RESTART_LIMIT)
 		{
 			halt("fletching keeps stopping with logs left");
@@ -761,9 +832,9 @@ public final class BowFletcherScript extends Script
 		}
 		pressedOption = -1;
 		attempts = 0;
-		log.info("[BowFletcher] idle {} ticks with {} logs left (level-up?), using knife on logs again", idleTicks,
-			logs);
-		setState(State.USE_KNIFE, "restart after idle");
+		fastStepAtMs = 0;
+		log.info("[BowFletcher] {} with {} logs left, using knife on logs again right away", interrupt, logs);
+		setState(State.USE_KNIFE, "restart: " + interrupt);
 	}
 
 	// --------------------------------------------------------------- helpers
