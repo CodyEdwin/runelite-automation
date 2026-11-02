@@ -64,12 +64,13 @@ import net.runelite.rsbuddy.walk.Walker;
  * the {@link RoofCourse} setting in Test Plugin config (Varrock by default;
  * add more courses as {@link Course} instances to support other locations).
  * <p>
- * The course is a fixed sequence of obstacles. After an obstacle is clicked the
- * script waits until its animation has finished and the player has stopped
- * moving before it looks for the next one, so the next click is sent as soon as
- * the current part can be reached. If the player falls, or the next obstacle is
- * not where it should be, the script walks back to the first obstacle and
- * starts the lap over.
+ * The course is a fixed sequence of obstacles. The simulated cursor is kept
+ * on the object currently being used: it follows that object as the camera and
+ * player move, then glides onto the next obstacle the moment the previous
+ * animation ends. The click is sent as soon as the client's left-click menu
+ * confirms the obstacle, so the mouse never sits idle between parts. If the
+ * player falls, or the next obstacle is not where it should be, the script
+ * walks back to the first obstacle and starts the lap over.
  */
 public final class RooftopAgilityTrainerScript extends Script
 {
@@ -89,12 +90,9 @@ public final class RooftopAgilityTrainerScript extends Script
 	private static final int MAX_STUCK_TICKS = 12;
 	private static final int MOVE_ONLY_MIN_DISTANCE = 2;
 	private static final int MOVE_ONLY_MIN_CROSS_DISTANCE = 4;
-	private static final int STATIC_TICKS_BEFORE_CLICK = 1;
 	private static final int ANIMATION_SETTLE_TICKS = 2;
 	private static final int AIM_TOLERANCE_PX = 3;
 	private static final int AIM_MENU_ATTEMPTS = 3;
-	private static final int CAMERA_SETTLE_UNITS = 64;
-	private static final int CAMERA_WAIT_LIMIT_TICKS = 10;
 
 	private static final int MARK_PICKUP_DISTANCE = 12;
 	private static final int MARK_NEAR_DISTANCE = 3;
@@ -242,7 +240,6 @@ public final class RooftopAgilityTrainerScript extends Script
 	private int missingTicks;
 	private int failedClicks;
 	private int aimTicks;
-	private int cameraWaitTicks;
 	private int stuckTicks;
 	private WorldPoint lastWalkLocation;
 	private boolean aligned;
@@ -255,9 +252,6 @@ public final class RooftopAgilityTrainerScript extends Script
 	private WorldPoint waitStartLocation;
 	private WorldPoint lastLocation;
 	private int stableTicks;
-
-	private WorldPoint lastTickPlayerLocation;
-	private int playerStillTicks;
 
 	private GroundLoot markTarget;
 	private int markTicks;
@@ -312,7 +306,6 @@ public final class RooftopAgilityTrainerScript extends Script
 		missingTicks = 0;
 		failedClicks = 0;
 		aimTicks = 0;
-		cameraWaitTicks = 0;
 		stuckTicks = 0;
 		lastWalkLocation = null;
 		aligned = false;
@@ -324,8 +317,6 @@ public final class RooftopAgilityTrainerScript extends Script
 		waitStartLocation = null;
 		lastLocation = null;
 		stableTicks = 0;
-		lastTickPlayerLocation = null;
-		playerStillTicks = 0;
 		markTarget = null;
 		markTicks = 0;
 		markAttemptTicks = 0;
@@ -371,20 +362,6 @@ public final class RooftopAgilityTrainerScript extends Script
 			return;
 		}
 
-		// Track how long the player has been standing still. Obstacle clicks
-		// are only sent once the character is stationary, so the camera and
-		// the object stay put while the mouse travels to the click point.
-		WorldPoint tickLocation = player.getWorldLocation();
-		if (tickLocation != null && tickLocation.equals(lastTickPlayerLocation))
-		{
-			++playerStillTicks;
-		}
-		else
-		{
-			playerStillTicks = 0;
-		}
-		lastTickPlayerLocation = tickLocation;
-
 		if (!aligned)
 		{
 			alignToCourse(player);
@@ -400,6 +377,10 @@ public final class RooftopAgilityTrainerScript extends Script
 			// idling for another tick.
 			if (waiting)
 			{
+				// Keep the cursor on the obstacle being used so it follows the
+				// object through the animation instead of sitting where the
+				// last click left it.
+				hoverObstacle(context, course.obstacles[index]);
 				return;
 			}
 		}
@@ -419,6 +400,9 @@ public final class RooftopAgilityTrainerScript extends Script
 
 		if (isAnimating(player))
 		{
+			// Put the cursor on the next object now so it is already hovering
+			// when the animation ends and the click is due.
+			hoverObstacle(context, course.obstacles[index]);
 			setStatus("Waiting for animation");
 			return;
 		}
@@ -559,106 +543,82 @@ public final class RooftopAgilityTrainerScript extends Script
 
 		context.getInput().stopCamera();
 
-		// Wait until the character is standing still. The camera follows the
-		// player while they move, so a click sent mid-step drags the object
-		// out from under the cursor and lands on the pathway instead.
-		if (playerStillTicks < STATIC_TICKS_BEFORE_CLICK)
+		// No "wait for a still frame" pause. The cursor is re-aimed at the
+		// object every tick, so it follows the object as the camera and player
+		// move, and the left-click menu check is what guarantees the click
+		// lands on the obstacle.
+		java.awt.Point aim = aimOf(target);
+		if (aim == null || failedClicks >= MAX_CLICK_ATTEMPTS - 1)
 		{
-			setStatus("Waiting to click " + obstacle.name);
+			clickObstacle(context, target, obstacle, playerLocation);
 			return;
 		}
 
-		// The camera keeps easing after the arrow key is released. Clicking
-		// before it stops slides the object out from under the cursor. The
-		// wait is bounded so a camera that never quite settles cannot stall
-		// the script; the hover-menu check below still blocks a blind click.
-		if (!isCameraSettled(context))
+		if (context.getInput().isBusy())
 		{
-			if (++cameraWaitTicks < CAMERA_WAIT_LIMIT_TICKS)
-			{
-				setStatus("Waiting for camera");
-				return;
-			}
-		}
-		else
-		{
-			cameraWaitTicks = 0;
+			setStatus("Moving mouse");
+			return;
 		}
 
-		// Aim at the centre of the object's hull and click from there. A
-		// random point on a tall clickbox can sit beside the model, where the
-		// click walks instead of using the obstacle.
-		java.awt.Point aim = aimOf(target);
-		boolean sent;
-		if (aim == null || failedClicks >= MAX_CLICK_ATTEMPTS - 1)
+		java.awt.Point mouse = context.getInput().getMouseLocation();
+		boolean atAim = mouse != null && mouse.distance(aim) <= AIM_TOLERANCE_PX;
+		// A few objects report neither a clickbox nor a tile polygon until
+		// their model is drawn. Trust the cursor position for those; the
+		// left-click menu check below still guards the actual click.
+		boolean unverifiable = target.getClickbox() == null
+			&& target.getCanvasTilePoly() == null;
+		boolean onTarget = atAim
+			&& (unverifiable || context.getInput().isMouseOver(target));
+
+		if (!onTarget)
 		{
-			sent = context.getInput().invokeObjectAction(target, obstacle.actions);
-		}
-		else
-		{
-			if (context.getInput().isBusy())
+			if (atAim && ++aimTicks >= AIM_MENU_ATTEMPTS)
 			{
-				setStatus("Moving mouse");
+				// The cursor is on the aim point but the client never accepts
+				// the hover (for example a clipped tall object). Use the exact
+				// option so the obstacle does not stall.
+				aimTicks = 0;
+				clickObstacle(context, target, obstacle, playerLocation);
 				return;
 			}
 
-			java.awt.Point mouse = context.getInput().getMouseLocation();
-			boolean atAim = mouse != null && mouse.distance(aim) <= AIM_TOLERANCE_PX;
-			// A few objects report neither a clickbox nor a tile polygon until
-			// their model is drawn. Trust the cursor position for those; the
-			// left-click menu check below still guards the actual click.
-			boolean unverifiable = target.getClickbox() == null
-				&& target.getCanvasTilePoly() == null;
-			boolean onTarget = atAim
-				&& (unverifiable || context.getInput().isMouseOver(target));
-
-			if (!onTarget)
+			if (!atAim)
 			{
-				if (++aimTicks >= AIM_MENU_ATTEMPTS)
-				{
-					// The cursor is on the aim point but the client never
-					// accepts the hover (for example a clipped tall object).
-					// Use the exact option so the obstacle does not stall.
-					aimTicks = 0;
-					sent = context.getInput().invokeObjectAction(target, obstacle.actions);
-				}
-				else if (context.getInput().moveTo(aim))
-				{
-					setStatus("Hovering " + obstacle.name);
-					return;
-				}
-				else
-				{
-					// No part of the object is on screen, so clicking at the
-					// cursor would hit something else. Use the exact option.
-					aimTicks = 0;
-					sent = context.getInput().invokeObjectAction(target, obstacle.actions);
-				}
+				aimTicks = 0;
 			}
-			else if (!isDefaultObjectAction(context, target, obstacle.actions))
+
+			if (context.getInput().moveTo(aim))
 			{
-				// The camera is still settling or another object slid under
-				// the cursor. Do not click blind; wait for the client to agree
-				// about what a left click would do.
-				if (++aimTicks >= AIM_MENU_ATTEMPTS)
-				{
-					aimTicks = 0;
-					sent = context.getInput().invokeObjectAction(target, obstacle.actions);
-				}
-				else
-				{
-					setStatus("Lining up " + obstacle.name);
-					return;
-				}
+				setStatus("Hovering " + obstacle.name);
+				return;
+			}
+
+			// No part of the object is on screen, so clicking at the cursor
+			// would hit something else. Use the exact option.
+			aimTicks = 0;
+			clickObstacle(context, target, obstacle, playerLocation);
+			return;
+		}
+
+		if (!isDefaultObjectAction(context, target, obstacle.actions))
+		{
+			// Another object or a walk option is under the cursor. Keep the
+			// cursor on the object and re-aim for a few ticks, then fall back
+			// to the exact option rather than clicking blind.
+			if (++aimTicks >= AIM_MENU_ATTEMPTS)
+			{
+				aimTicks = 0;
+				clickObstacle(context, target, obstacle, playerLocation);
 			}
 			else
 			{
-				aimTicks = 0;
-				sent = context.getInput().click(mouse);
+				setStatus("Lining up " + obstacle.name);
 			}
+			return;
 		}
 
-		if (sent)
+		aimTicks = 0;
+		if (context.getInput().click(mouse))
 		{
 			beginWaiting(playerLocation);
 			setStatus("Clicked " + obstacle.name);
@@ -685,6 +645,60 @@ public final class RooftopAgilityTrainerScript extends Script
 		stableTicks = 0;
 		lastWalkLocation = null;
 		stuckTicks = 0;
+	}
+
+	/**
+	 * Keeps the simulated cursor sitting on an obstacle. Called every tick
+	 * while the player is animating or the script is lining up a click, so the
+	 * cursor follows the object as the camera and player move instead of
+	 * sitting idle on a stale point.
+	 */
+	private void hoverObstacle(ScriptContext context, Obstacle obstacle)
+	{
+		if (obstacle == null || context.getInput().isBusy())
+		{
+			return;
+		}
+
+		TileObject target = findObstacle(context, obstacle);
+		if (target == null || !context.getInput().isVisible(target))
+		{
+			return;
+		}
+
+		java.awt.Point aim = aimOf(target);
+		if (aim == null)
+		{
+			return;
+		}
+
+		java.awt.Point mouse = context.getInput().getMouseLocation();
+		if (mouse == null || mouse.distance(aim) > AIM_TOLERANCE_PX)
+		{
+			context.getInput().moveTo(aim);
+		}
+	}
+
+	/**
+	 * Sends the obstacle's exact menu option when the cursor cannot be placed
+	 * on the object (nothing on screen, or repeated failed aiming).
+	 */
+	private void clickObstacle(ScriptContext context, TileObject target, Obstacle obstacle,
+		WorldPoint playerLocation)
+	{
+		if (context.getInput().invokeObjectAction(target, obstacle.actions))
+		{
+			beginWaiting(playerLocation);
+			setStatus("Clicked " + obstacle.name);
+		}
+		else if (++failedClicks >= MAX_CLICK_ATTEMPTS)
+		{
+			recover("could not click " + obstacle.name);
+		}
+		else
+		{
+			setStatus("Retrying " + obstacle.name);
+		}
 	}
 
 	/**
@@ -1041,7 +1055,6 @@ public final class RooftopAgilityTrainerScript extends Script
 		missingTicks = 0;
 		failedClicks = 0;
 		aimTicks = 0;
-		cameraWaitTicks = 0;
 		stuckTicks = 0;
 		lastWalkLocation = null;
 		clearMarkTarget();
@@ -1674,33 +1687,6 @@ public final class RooftopAgilityTrainerScript extends Script
 		}
 
 		return new WorldPoint(obstacle.getX() + dx, obstacle.getY() + dy, player.getPlane());
-	}
-
-	/**
-	 * @return true once the camera has finished easing toward its target, so
-	 * an object's screen position will not move while it is being clicked
-	 */
-	private static boolean isCameraSettled(ScriptContext context)
-	{
-		if (context.getInput().isCameraBusy() || context.getInput().isZooming())
-		{
-			return false;
-		}
-
-		Client client = context.getClient();
-		int yaw = client.getCameraYaw() & 0x3FFF;
-		int target = client.getCameraYawTarget() & 0x3FFF;
-		int delta = target - yaw;
-		if (delta > 0x2000)
-		{
-			delta -= 0x4000;
-		}
-		else if (delta < -0x2000)
-		{
-			delta += 0x4000;
-		}
-
-		return Math.abs(delta) <= CAMERA_SETTLE_UNITS;
 	}
 
 	/**
