@@ -44,6 +44,7 @@ import net.runelite.api.events.CommandExecuted;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.client.callback.ClientThread;
+import javax.swing.SwingUtilities;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.eventbus.Subscribe;
@@ -280,6 +281,15 @@ public class TestPlugin extends Plugin
 	@Subscribe
 	public void onConfigChanged(ConfigChanged event)
 	{
+		if (TestConfig.GROUP.equals(event.getGroup()) && panel != null)
+		{
+			// Keep the side panel's script settings in sync with the config
+			// (Swing work on the EDT).
+			final TestPluginPanel target = panel;
+			final String changedKey = event.getKey();
+			SwingUtilities.invokeLater(() -> target.configChanged(changedKey));
+		}
+
 		if (!TestConfig.GROUP.equals(event.getGroup()) || !"true".equals(event.getNewValue()))
 		{
 			return;
