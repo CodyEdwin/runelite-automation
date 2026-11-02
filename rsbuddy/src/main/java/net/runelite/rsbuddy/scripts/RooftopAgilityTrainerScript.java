@@ -35,6 +35,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
 import net.runelite.api.Client;
 import net.runelite.api.Experience;
 import net.runelite.api.Item;
@@ -97,7 +98,15 @@ public final class RooftopAgilityTrainerScript extends Script
 
 	private static final int MARK_PICKUP_DISTANCE = 12;
 	private static final int MARK_NEAR_DISTANCE = 3;
-	private static final int MARK_RETRY_TICKS = 5;
+	// Human pacing: spot the mark, pause as if noticing it, then walk and
+	// reach for it. Fixed tick values make the pickup look scripted, so every
+	// delay is a small random range.
+	private static final int MARK_REACTION_MIN_TICKS = 2;
+	private static final int MARK_REACTION_MAX_TICKS = 5;
+	private static final int MARK_DWELL_MIN_TICKS = 1;
+	private static final int MARK_DWELL_MAX_TICKS = 3;
+	private static final int MARK_RETRY_MIN_TICKS = 4;
+	private static final int MARK_RETRY_MAX_TICKS = 7;
 	private static final int MARK_ATTEMPT_LIMIT = 3;
 	private static final int MARK_IGNORE_TICKS = 100;
 	private static final int MARK_TARGET_TIMEOUT_TICKS = 30;
@@ -150,11 +159,25 @@ public final class RooftopAgilityTrainerScript extends Script
 	{
 		private final String name;
 		private final Obstacle[] obstacles;
+		/**
+		 * True when a new lap starts right next to the first obstacle, so the
+		 * script can click it like any other obstacle instead of walking to a
+		 * standing tile first. Canifis finishes at the foot of the start tree;
+		 * Varrock finishes across the square from the wall, which must be
+		 * walked to or the click lands beside the building.
+		 */
+		private final boolean restartClicksStart;
 
 		private Course(String name, Obstacle[] obstacles)
 		{
+			this(name, obstacles, false);
+		}
+
+		private Course(String name, Obstacle[] obstacles, boolean restartClicksStart)
+		{
 			this.name = name;
 			this.obstacles = obstacles;
+			this.restartClicksStart = restartClicksStart;
 		}
 	}
 
@@ -203,7 +226,7 @@ public final class RooftopAgilityTrainerScript extends Script
 			new WorldPoint(3503, 3476, 3), false, "Leap"),
 		new Obstacle(ObjectID.ROOFTOPS_CANIFIS_LEAPDOWN, "Gap", "Jump",
 			new WorldPoint(3510, 3483, 3), true, "Leap", "Jump-off")
-	});
+	}, true);
 
 	/**
 	 * The course currently in use. Set from the constructor argument (the
@@ -240,6 +263,10 @@ public final class RooftopAgilityTrainerScript extends Script
 	private int markTicks;
 	private int markAttemptTicks;
 	private int markAttempts;
+	private int markReactionTicks;
+	private int markReactionGoal;
+	private int markDwellTicks;
+	private int markDwellGoal;
 	private final Map<WorldPoint, Integer> ignoredMarks = new HashMap<>();
 
 	private boolean statsInitialized;
@@ -440,7 +467,7 @@ public final class RooftopAgilityTrainerScript extends Script
 			if (playerLocation != null
 				&& playerLocation.distanceTo2D(obstacle.location) > SEARCH_RADIUS)
 			{
-				if (index == 0)
+				if (index == 0 && !course.restartClicksStart)
 				{
 					walkToFirstWall(obstacle.location, playerLocation, null, obstacle);
 				}
@@ -474,12 +501,13 @@ public final class RooftopAgilityTrainerScript extends Script
 		// clicks pathway tiles and can send the player off the course. If the
 		// click does nothing, the failure path walks closer and retries.
 		//
-		// The first wall is the exception: the lap ends on the ground across
-		// the square, so walk all the way to it, confirm it is loaded, and
-		// only then climb. Clicking it from a few tiles away was landing beside
-		// the wall instead of on it.
+		// A course whose lap ends at the foot of the first obstacle (Canifis)
+		// can click it exactly like any other obstacle. Courses that end away
+		// from the first obstacle (Varrock) walk to it instead, because
+		// clicking the wall from across the square lands beside the building.
+		boolean clickStartDirectly = index == 0 && course.restartClicksStart;
 		int walkDistance;
-		if (index == 0)
+		if (index == 0 && !clickStartDirectly)
 		{
 			walkDistance = START_OBJECT_CLICK_DISTANCE;
 		}
@@ -492,7 +520,8 @@ public final class RooftopAgilityTrainerScript extends Script
 			walkDistance = MAX_DIRECT_CLICK_DISTANCE;
 		}
 		boolean clickFromHere = distance <= walkDistance
-			|| (index > 0 && failedClicks == 0 && context.getInput().isVisible(target));
+			|| ((index > 0 || clickStartDirectly) && failedClicks == 0
+				&& context.getInput().isVisible(target));
 
 		if (!clickFromHere)
 		{
@@ -502,7 +531,7 @@ public final class RooftopAgilityTrainerScript extends Script
 			// pick a tile inside whatever open building is geometrically
 			// nearest (the bank), which is what walked the character into the
 			// bank and then left the wall off screen.
-			if (index == 0 && targetLocation != null)
+			if (index == 0 && !clickStartDirectly && targetLocation != null)
 		{
 				walkToFirstWall(targetLocation, playerLocation, target, obstacle);
 				return;
@@ -1134,6 +1163,14 @@ public final class RooftopAgilityTrainerScript extends Script
 			markTicks = 0;
 			markAttemptTicks = 0;
 			markAttempts = 0;
+			markReactionTicks = 0;
+			markDwellTicks = 0;
+			// Pause for a moment before reacting, the way a player notices a
+			// mark instead of snapping onto it the instant it appears. The
+			// delay and the final reach are randomised so repeated pickups do
+			// not all take exactly the same number of ticks.
+			markReactionGoal = randomTicks(MARK_REACTION_MIN_TICKS, MARK_REACTION_MAX_TICKS);
+			markDwellGoal = randomTicks(MARK_DWELL_MIN_TICKS, MARK_DWELL_MAX_TICKS);
 		}
 
 		++markTicks;
@@ -1156,6 +1193,14 @@ public final class RooftopAgilityTrainerScript extends Script
 			return false;
 		}
 
+		// Brief, randomised reaction delay after first spotting the mark.
+		if (markReactionTicks < markReactionGoal)
+		{
+			++markReactionTicks;
+			setStatus("Spotting Mark of Grace");
+			return true;
+		}
+
 		int distance = playerLocation.distanceTo(markLocation);
 		if (distance > 1)
 		{
@@ -1171,9 +1216,19 @@ public final class RooftopAgilityTrainerScript extends Script
 			return false;
 		}
 
-		// Give the previous Take click a few ticks to walk over and pick the
-		// mark up before clicking it again.
-		if (markAttempts > 0 && markAttemptTicks < MARK_RETRY_TICKS)
+		// Let the character finish arriving for a tick or two before reaching
+		// for the mark, so the click is not snapped the moment it is in range.
+		if (markDwellTicks < markDwellGoal)
+		{
+			++markDwellTicks;
+			setStatus("Reaching for Mark of Grace");
+			return true;
+		}
+
+		// Give the previous Take click a randomised few ticks to walk over and
+		// pick the mark up before clicking it again.
+		if (markAttempts > 0
+			&& markAttemptTicks < randomTicks(MARK_RETRY_MIN_TICKS, MARK_RETRY_MAX_TICKS))
 		{
 			setStatus("Taking Mark of Grace");
 			return true;
@@ -1205,9 +1260,7 @@ public final class RooftopAgilityTrainerScript extends Script
 		if (hover == 2 && mouse != null)
 		{
 			context.getInput().click(mouse);
-			++markAttempts;
-			markAttemptTicks = 0;
-			setStatus("Taking Mark of Grace");
+			markTaken();
 			return true;
 		}
 
@@ -1218,9 +1271,7 @@ public final class RooftopAgilityTrainerScript extends Script
 			MenuEntry take = context.getInput().findMenuEntry("Take", ItemID.GRACE);
 			if (take != null && context.getInput().invokeMenu(take))
 			{
-				++markAttempts;
-				markAttemptTicks = 0;
-				setStatus("Taking Mark of Grace");
+				markTaken();
 				return true;
 			}
 		}
@@ -1234,13 +1285,45 @@ public final class RooftopAgilityTrainerScript extends Script
 			return true;
 		}
 
-		// The mark is not on screen at all. Run its exact Take option so the
-		// pickup is not lost.
-		context.getInput().invokeGroundItemTake(sceneX, sceneY, ItemID.GRACE, MARK_NAME);
+		// The mark is not on screen. Turn the camera toward it for a tick
+		// instead of firing a menu action out of view, which looks scripted.
+		if (context.getInput().isCameraBusy()
+			|| context.getInput().turnCameraToward(markLocation))
+		{
+			setStatus("Turning to Mark of Grace");
+			return true;
+		}
+
+		// Could not put the mark on screen after trying. Only then run its
+		// exact Take so the mark is not lost, and only after a few attempts.
+		if (markAttempts >= 1 || markAttemptTicks >= 5)
+		{
+			context.getInput().invokeGroundItemTake(sceneX, sceneY, ItemID.GRACE, MARK_NAME);
+			markTaken();
+		}
+		else
+		{
+			setStatus("Looking at Mark of Grace");
+		}
+		return true;
+	}
+
+	/**
+	 * Records that a Take was sent for the current mark and schedules the
+	 * next attempt after a short, randomised pause.
+	 */
+	private void markTaken()
+	{
 		++markAttempts;
 		markAttemptTicks = 0;
+		markDwellTicks = 0;
+		markDwellGoal = randomTicks(MARK_DWELL_MIN_TICKS, MARK_DWELL_MAX_TICKS);
 		setStatus("Taking Mark of Grace");
-		return true;
+	}
+
+	private static int randomTicks(int min, int max)
+	{
+		return min + ThreadLocalRandom.current().nextInt(max - min + 1);
 	}
 
 	private GroundLoot findMark(ScriptContext context, Player player)
@@ -1412,6 +1495,10 @@ public final class RooftopAgilityTrainerScript extends Script
 		markTicks = 0;
 		markAttemptTicks = 0;
 		markAttempts = 0;
+		markReactionTicks = 0;
+		markReactionGoal = 0;
+		markDwellTicks = 0;
+		markDwellGoal = 0;
 	}
 
 	private boolean isIgnoredMark(WorldPoint location)
