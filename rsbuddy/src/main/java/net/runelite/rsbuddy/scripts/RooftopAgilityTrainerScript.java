@@ -246,6 +246,10 @@ public final class RooftopAgilityTrainerScript extends Script
 	// every client frame, so the cursor follows the object continuously while
 	// the camera and player move instead of hopping once per game tick.
 	private volatile TileObject hoverTarget;
+
+	// Which course obstacle hoverTarget belongs to. Used to drop the old target
+	// immediately when the player arrives and the cursor should move on.
+	private volatile Obstacle hoveredObstacle;
 	private WorldPoint lastWalkLocation;
 	private boolean aligned;
 
@@ -336,7 +340,7 @@ public final class RooftopAgilityTrainerScript extends Script
 		startAgilityXp = 0;
 		lastMarkCount = 0;
 		marksCollected = 0;
-		hoverTarget = null;
+		clearHoverTarget();
 		getContext().getInput().follow(null);
 		setStatus("Ready for " + course.name);
 	}
@@ -344,6 +348,46 @@ public final class RooftopAgilityTrainerScript extends Script
 	@Override
 	protected void onClientTick()
 	{
+		ScriptContext context = getContext();
+		if (!context.isLoggedIn())
+		{
+			return;
+		}
+
+		Player player = context.getPlayer();
+		if (player == null)
+		{
+			return;
+		}
+
+		if (waiting)
+		{
+			// Decide the hover target per frame, not per game tick. The moment
+			// the player's animation ends on the far side, the next object is
+			// the one to aim at; waiting for the next 600 ms tick would let the
+			// cursor keep chasing the object just used and then swing back.
+			Obstacle wanted = waitingHoverObstacle(player);
+			if (wanted != hoveredObstacle)
+			{
+				TileObject next = findObstacle(context, wanted);
+				if (next == null)
+				{
+					// The next object is not loaded or drawn yet. Stop
+					// following the old one instead of drifting back to it.
+					if (hoverTarget != null)
+					{
+						hoverTarget = null;
+						hoveredObstacle = null;
+						context.getInput().follow(null);
+					}
+					return;
+				}
+
+				hoverTarget = next;
+				hoveredObstacle = wanted;
+			}
+		}
+
 		TileObject target = hoverTarget;
 		if (target == null)
 		{
@@ -357,15 +401,21 @@ public final class RooftopAgilityTrainerScript extends Script
 			// always easing toward the object's current screen position, so a
 			// moving camera produces one continuous glide rather than a burst
 			// of movement followed by a pause until the next game tick.
-			getContext().getInput().follow(aim);
+			context.getInput().follow(aim);
 		}
 	}
 
 	@Override
 	protected void onStop()
 	{
-		hoverTarget = null;
+		clearHoverTarget();
 		getContext().getInput().follow(null);
+	}
+
+	private void clearHoverTarget()
+	{
+		hoverTarget = null;
+		hoveredObstacle = null;
 	}
 
 	@Override
@@ -375,7 +425,7 @@ public final class RooftopAgilityTrainerScript extends Script
 
 		if (!context.isLoggedIn())
 		{
-			hoverTarget = null;
+			clearHoverTarget();
 			waiting = false;
 			setStatus("Waiting for login");
 			return;
@@ -393,7 +443,7 @@ public final class RooftopAgilityTrainerScript extends Script
 		Player player = context.getPlayer();
 		if (player == null)
 		{
-			hoverTarget = null;
+			clearHoverTarget();
 			setStatus("Waiting for player");
 			return;
 		}
@@ -413,10 +463,23 @@ public final class RooftopAgilityTrainerScript extends Script
 			// idling for another tick.
 			if (waiting)
 			{
-				// Keep the cursor on the obstacle being used so it follows the
-				// object through the animation instead of sitting where the
-				// last click left it.
-				hoverObstacle(context, course.obstacles[index]);
+				// Keep the cursor on the object being used while the player is
+				// still on it, but as soon as they arrive at the far side aim
+				// at the next object. Waiting for completion to be recorded
+				// first drags the cursor back to the old spot for a tick and
+				// then forward again.
+				Obstacle hover = waitingHoverObstacle(player);
+				if (hoverTarget != null && hoveredObstacle != hover)
+				{
+					// The cursor is still on a different obstacle. Drop it
+					// now, before the next target is found, or the follower
+					// would drag the cursor back to the old spot first.
+					hoverTarget = null;
+					hoveredObstacle = null;
+					context.getInput().follow(null);
+				}
+
+				hoverObstacle(context, hover);
 				return;
 			}
 		}
@@ -582,6 +645,7 @@ public final class RooftopAgilityTrainerScript extends Script
 		// Keep the cursor glued to this object every client frame from now on,
 		// including through the animation after the click.
 		hoverTarget = target;
+		hoveredObstacle = obstacle;
 
 		// No "wait for a still frame" pause. The cursor is re-aimed at the
 		// object every tick, so it follows the object as the camera and player
@@ -708,6 +772,7 @@ public final class RooftopAgilityTrainerScript extends Script
 
 		// onClientTick keeps following this object every frame.
 		hoverTarget = target;
+		hoveredObstacle = obstacle;
 
 		java.awt.Point aim = aimOf(target);
 		if (aim == null)
@@ -723,6 +788,34 @@ public final class RooftopAgilityTrainerScript extends Script
 			// with it instead of hopping once per game tick.
 			context.getInput().follow(aim);
 		}
+	}
+
+	/**
+	 * The object the cursor should rest on while an obstacle is in progress.
+	 * Normally that is the obstacle being used. Once the player has arrived on
+	 * the far side, it is the next obstacle instead: keeping the old target for
+	 * the tick before completion is recorded would make the cursor swing back
+	 * to the previous spot and then forward again.
+	 */
+	private Obstacle waitingHoverObstacle(Player player)
+	{
+		Obstacle current = course.obstacles[index];
+		if (isAnimating(player) || !sawMovement)
+		{
+			return current;
+		}
+
+		WorldPoint location = player.getWorldLocation();
+		boolean arrived = sawAnimation
+			|| (location != null
+				&& (isMovementOnlyComplete(current, location)
+					|| crossedObstacle(current, location)));
+		if (!arrived)
+		{
+			return current;
+		}
+
+		return course.obstacles[(index + 1) % course.obstacles.length];
 	}
 
 	/**
@@ -763,7 +856,7 @@ public final class RooftopAgilityTrainerScript extends Script
 	 */
 	private void walkToward(WorldPoint target, int stopDistance, String name, boolean useMinimap)
 	{
-		hoverTarget = null;
+		clearHoverTarget();
 		getContext().getInput().follow(null);
 		Player player = getContext().getPlayer();
 		WorldPoint location = player == null ? null : player.getWorldLocation();
@@ -799,7 +892,7 @@ public final class RooftopAgilityTrainerScript extends Script
 	 */
 	private void walkToFirstWall(WorldPoint wall, WorldPoint playerLocation, TileObject target, Obstacle obstacle)
 	{
-		hoverTarget = null;
+		clearHoverTarget();
 		getContext().getInput().follow(null);
 		WorldPoint standTile = firstWallStandTile(wall, playerLocation);
 		if (standTile == null)
@@ -987,7 +1080,7 @@ public final class RooftopAgilityTrainerScript extends Script
 
 	private void completeObstacle()
 	{
-		hoverTarget = null;
+		clearHoverTarget();
 		waiting = false;
 		failedClicks = 0;
 		missingTicks = 0;
@@ -1102,7 +1195,7 @@ public final class RooftopAgilityTrainerScript extends Script
 
 	private void recover(String reason)
 	{
-		hoverTarget = null;
+		clearHoverTarget();
 		getContext().getInput().follow(null);
 		waiting = false;
 		missingTicks = 0;
@@ -1142,7 +1235,7 @@ public final class RooftopAgilityTrainerScript extends Script
 	 */
 	private void alignToCourse(Player player)
 	{
-		hoverTarget = null;
+		clearHoverTarget();
 		WorldPoint location = player.getWorldLocation();
 		if (location == null || location.getPlane() == 0)
 		{
@@ -1228,7 +1321,7 @@ public final class RooftopAgilityTrainerScript extends Script
 		// from dragging it back to the obstacle every frame.
 		if (markTarget != null)
 		{
-			hoverTarget = null;
+			clearHoverTarget();
 		}
 
 		if (markTarget != null && !markStillPresent(context, markTarget))
@@ -1254,7 +1347,7 @@ public final class RooftopAgilityTrainerScript extends Script
 				return false;
 			}
 
-			hoverTarget = null;
+			clearHoverTarget();
 
 			markTicks = 0;
 			markAttemptTicks = 0;
