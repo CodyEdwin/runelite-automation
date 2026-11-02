@@ -319,8 +319,9 @@ Settings (RuneLite Configuration → **Test Plugin**):
   regular, oak, willow, maple, yew or magic logs. The logs to withdraw follow from it.
 - **Bow fletcher: amount** (default `0` = until the bank has no logs left): stop after this many
   bows. The inventory being fletched when the count is reached may still finish.
-- **Bow fletcher: bank at closest booth** (default on): open the closest bank booth or bank chest.
-  Off: the closest of a banker NPC, bank chest or booth.
+- **Bow fletcher: bank at closest booth** (default on): open the closest bank, whether a booth
+  (Grand Exchange booths included), bank chest or banker NPC (e.g. the GE Banker, id 1613). Off:
+  prefer a banker NPC, then a booth or chest.
 
 Settings are read on Start.
 
@@ -359,8 +360,9 @@ Settings (RuneLite Configuration → **Test Plugin**, read on Start):
   Diamond, Dragonstone, Onyx or Zenyte.
 - **Gem cutter: amount** (default `0` = until the bank has no uncut gems left). The inventory
   being cut when the count is reached may still finish.
-- **Gem cutter: bank at closest booth** (default on): open the closest bank booth or chest. Off:
-  the closest of a banker NPC, chest or booth.
+- **Gem cutter: bank at closest booth** (default on): open the closest bank, whether a booth
+  (Grand Exchange booths included), bank chest or banker NPC (e.g. the GE Banker, id 1613). Off:
+  prefer a banker NPC, then a booth or chest.
 
 In-game setup: the uncut gem's bank left click set to **Withdraw-All**, the chisel's left click set
 to **Use**, make-menu quantity **All**.
@@ -373,6 +375,12 @@ Idle 4 ticks with uncuts left (level-up) → chisel on gem again. When the uncut
 and repeats. Stops with a clear status when the amount is reached, the bank has no uncuts, the
 chisel is missing, a left click is not `Use`/`Withdraw-All`, or a step keeps failing. Logs are
 prefixed `[GemCutter]`.
+
+Bank detection (shared by Bow Fletcher and Gem Cutter, `target/BankFinder`) scans every object
+layer within 20 tiles with impostors resolved: any object with a **Bank** option (bank booth, Grand
+Exchange booth, counter, chest) or a bank chest with **Use**, plus bankers (id 1613, named Banker,
+or any NPC with **Bank**). It logs the candidates it picked from, and if nothing matches it logs the
+nearby bank-like objects, other objects and NPCs before stopping.
 
 ## Panel and commands
 

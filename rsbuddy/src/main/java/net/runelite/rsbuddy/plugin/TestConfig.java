@@ -326,7 +326,8 @@ public interface TestConfig extends Config
 	@ConfigItem(
 		keyName = "bowFletcherClosestBooth",
 		name = "Bow fletcher: bank at closest booth",
-		description = "Open the closest bank booth (or bank chest). Off: the closest of a banker, chest or booth.",
+		description = "Open the closest bank: booth, chest or banker NPC (Grand Exchange booths and bankers included)."
+			+ " Off: prefer a banker NPC, then a booth or chest.",
 		position = 24
 	)
 	default boolean bowFletcherClosestBooth()
@@ -363,7 +364,8 @@ public interface TestConfig extends Config
 	@ConfigItem(
 		keyName = "gemCutterClosestBooth",
 		name = "Gem cutter: bank at closest booth",
-		description = "Open the closest bank booth (or bank chest). Off: the closest of a banker, chest or booth.",
+		description = "Open the closest bank: booth, chest or banker NPC (Grand Exchange booths and bankers included)."
+			+ " Off: prefer a banker NPC, then a booth or chest.",
 		position = 27
 	)
 	default boolean gemCutterClosestBooth()
