@@ -333,4 +333,41 @@ public interface TestConfig extends Config
 	{
 		return true;
 	}
+
+	@ConfigItem(
+		keyName = "gemCutterGemType",
+		name = "Gem cutter: gem",
+		description = "Which uncut gem to cut (withdrawn from the bank with its Withdraw-All left click).",
+		position = 25
+	)
+	default GemCutterGemType gemCutterGemType()
+	{
+		return GemCutterGemType.SAPPHIRE;
+	}
+
+	@Range(
+		min = 0,
+		max = 1000000
+	)
+	@ConfigItem(
+		keyName = "gemCutterAmount",
+		name = "Gem cutter: amount",
+		description = "How many gems to cut, then stop. 0 = until the bank runs out of uncut gems.",
+		position = 26
+	)
+	default int gemCutterAmount()
+	{
+		return 0;
+	}
+
+	@ConfigItem(
+		keyName = "gemCutterClosestBooth",
+		name = "Gem cutter: bank at closest booth",
+		description = "Open the closest bank booth (or bank chest). Off: the closest of a banker, chest or booth.",
+		position = 27
+	)
+	default boolean gemCutterClosestBooth()
+	{
+		return true;
+	}
 }

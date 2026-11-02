@@ -347,6 +347,33 @@ missing, the knife/logs left click is not `Use`/`Withdraw-All`, or a step keeps 
 is tick-capped. Logs are prefixed `[BowFletcher]` (state changes, every click with the hovered
 top option, bank and make-menu steps).
 
+## Gem Cutter
+
+`GemCutterScript` appears in the panel as **Gem Cutter**. Built for the Grand Exchange bank booths
+(works at any bank). Keep a chisel in the **locked first inventory slot** and the uncut gems in the
+bank. It works like the Bow Fletcher.
+
+Settings (RuneLite Configuration → **Test Plugin**, read on Start):
+
+- **Gem cutter: gem** (default `Sapphire`): Opal, Jade, Red topaz, Sapphire, Emerald, Ruby,
+  Diamond, Dragonstone, Onyx or Zenyte.
+- **Gem cutter: amount** (default `0` = until the bank has no uncut gems left). The inventory
+  being cut when the count is reached may still finish.
+- **Gem cutter: bank at closest booth** (default on): open the closest bank booth or chest. Off:
+  the closest of a banker NPC, chest or booth.
+
+In-game setup: the uncut gem's bank left click set to **Withdraw-All**, the chisel's left click set
+to **Use**, make-menu quantity **All**.
+
+Loop (left clicks only, each after checking the hovered left-click option): open the bank,
+**Deposit inventory** (chisel stays), left-click the uncut gems, **Escape**, left-click the chisel
+then an uncut gem, pick the cut gem in the make menu (its number key first, then **Space** once
+confirmed), wait while cutting. A single uncut gem that cuts without the make menu is handled too.
+Idle 4 ticks with uncuts left (level-up) → chisel on gem again. When the uncuts are gone it banks
+and repeats. Stops with a clear status when the amount is reached, the bank has no uncuts, the
+chisel is missing, a left click is not `Use`/`Withdraw-All`, or a step keeps failing. Logs are
+prefixed `[GemCutter]`.
+
 ## Panel and commands
 
 The sidebar panel lists registered scripts and provides Start/Stop controls with live status and
