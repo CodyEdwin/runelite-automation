@@ -72,6 +72,7 @@ import net.runelite.rsbuddy.scripts.CatherbySharkFisherScript;
 import net.runelite.rsbuddy.scripts.CombatTrainerScript;
 import net.runelite.rsbuddy.scripts.FruitStallStealerScript;
 import net.runelite.rsbuddy.scripts.GemCrabKillerScript;
+import net.runelite.rsbuddy.scripts.GemCutterScript;
 import net.runelite.rsbuddy.scripts.GrandExchangeFlipperScript;
 import net.runelite.rsbuddy.scripts.HillGiantScript;
 import net.runelite.rsbuddy.scripts.ObjectInteractScript;
@@ -163,6 +164,10 @@ public class TestPlugin extends Plugin
 			config.gemCrabPotionMode().name(),
 			config.gemCrabBoostThreshold()));
 		scriptManager.register(new GrandExchangeFlipperScript());
+		scriptManager.register(new GemCutterScript(
+			config.gemCutterGemType().name(),
+			config.gemCutterAmount(),
+			config.gemCutterClosestBooth()));
 		scriptManager.register(new BowFletcherScript(
 			config.bowFletcherBowType().name(),
 			config.bowFletcherAmount(),
@@ -546,6 +551,14 @@ public class TestPlugin extends Plugin
 				config.bowFletcherBowType().name(),
 				config.bowFletcherAmount(),
 				config.bowFletcherClosestBooth());
+		}
+
+		if (GemCutterScript.class.getName().equals(className))
+		{
+			return ScriptLoader.load(className, classLoader,
+				config.gemCutterGemType().name(),
+				config.gemCutterAmount(),
+				config.gemCutterClosestBooth());
 		}
 
 		return ScriptLoader.load(className, classLoader);
