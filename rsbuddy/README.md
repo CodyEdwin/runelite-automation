@@ -341,8 +341,11 @@ Loop (every click is a left click, made only after the hovered left-click option
 5. In the make menu it finds the option for the chosen bow by its item/name (no hard-coded
    positions) and presses its number key (1 = first option). Once that option has been seen
    working, later batches press **Space**, which repeats the last-made option.
-6. While fletching (animation / log count going down) it waits. If it stands idle 4 ticks with
-   logs left (for example after a level-up), it uses the knife on the logs again.
+6. While fletching (animation / log count going down) it waits. A level-up is caught on the tick
+   it happens (Fletching level goes up or the level-up dialog opens); otherwise 2 ticks with no
+   animation and no log used counts as stopped (3 before the first log). It then uses the knife
+   on the logs again right away: each step (knife, logs, make menu) follows as soon as the mouse is
+   free plus a 60-140 ms pause, instead of waiting for the next game tick.
 7. When the logs are gone it banks and repeats.
 
 It stops with a clear status when the amount is reached, the bank has no logs left, the knife is
@@ -375,7 +378,9 @@ Loop (left clicks only, each after checking the hovered left-click option): open
 **Deposit inventory** (chisel stays), left-click the uncut gems, **Escape**, left-click the chisel
 then an uncut gem, pick the cut gem in the make menu (its number key first, then **Space** once
 confirmed), wait while cutting. A single uncut gem that cuts without the make menu is handled too.
-Idle 4 ticks with uncuts left (level-up) → chisel on gem again. When the uncuts are gone it banks
+A level-up (Crafting level up or the level-up dialog) is caught on the tick it happens, or 2
+ticks with no animation and no gem cut → chisel on gem again right away (same fast restart as the
+Bow Fletcher, shared `SkillInterruptWatcher`). When the uncuts are gone it banks
 and repeats. Stops with a clear status when the amount is reached, the bank has no uncuts, the
 chisel is missing, a left click is not `Use`/`Withdraw-All`, or a step keeps failing. Logs are
 prefixed `[GemCutter]`.
