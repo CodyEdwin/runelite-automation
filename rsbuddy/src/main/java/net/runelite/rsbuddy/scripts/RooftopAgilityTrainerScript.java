@@ -330,6 +330,10 @@ public final class RooftopAgilityTrainerScript extends Script
 		markTicks = 0;
 		markAttemptTicks = 0;
 		markAttempts = 0;
+		markReactionTicks = 0;
+		markReactionGoal = 0;
+		markDwellTicks = 0;
+		markDwellGoal = 0;
 		ignoredMarks.clear();
 		statsInitialized = false;
 		statsStartedAt = 0;
@@ -584,7 +588,7 @@ public final class RooftopAgilityTrainerScript extends Script
 		// Aim at the centre of the object's hull and click from there. A
 		// random point on a tall clickbox can sit beside the model, where the
 		// click walks instead of using the obstacle.
-		java.awt.Point aim = centerOf(target);
+		java.awt.Point aim = aimOf(target);
 		boolean sent;
 		if (aim == null || failedClicks >= MAX_CLICK_ATTEMPTS - 1)
 		{
@@ -599,22 +603,37 @@ public final class RooftopAgilityTrainerScript extends Script
 			}
 
 			java.awt.Point mouse = context.getInput().getMouseLocation();
-			boolean onTarget = mouse != null
-				&& mouse.distance(aim) <= AIM_TOLERANCE_PX
-				&& context.getInput().isMouseOver(target);
+			boolean atAim = mouse != null && mouse.distance(aim) <= AIM_TOLERANCE_PX;
+			// A few objects report neither a clickbox nor a tile polygon until
+			// their model is drawn. Trust the cursor position for those; the
+			// left-click menu check below still guards the actual click.
+			boolean unverifiable = target.getClickbox() == null
+				&& target.getCanvasTilePoly() == null;
+			boolean onTarget = atAim
+				&& (unverifiable || context.getInput().isMouseOver(target));
 
 			if (!onTarget)
 			{
-				aimTicks = 0;
-				if (context.getInput().moveTo(aim))
+				if (++aimTicks >= AIM_MENU_ATTEMPTS)
+				{
+					// The cursor is on the aim point but the client never
+					// accepts the hover (for example a clipped tall object).
+					// Use the exact option so the obstacle does not stall.
+					aimTicks = 0;
+					sent = context.getInput().invokeObjectAction(target, obstacle.actions);
+				}
+				else if (context.getInput().moveTo(aim))
 				{
 					setStatus("Hovering " + obstacle.name);
 					return;
 				}
-
-				// No part of the object is on screen, so clicking at the cursor
-				// would hit something else. Use the exact option instead.
-				sent = context.getInput().invokeObjectAction(target, obstacle.actions);
+				else
+				{
+					// No part of the object is on screen, so clicking at the
+					// cursor would hit something else. Use the exact option.
+					aimTicks = 0;
+					sent = context.getInput().invokeObjectAction(target, obstacle.actions);
+				}
 			}
 			else if (!isDefaultObjectAction(context, target, obstacle.actions))
 			{
@@ -1784,6 +1803,38 @@ public final class RooftopAgilityTrainerScript extends Script
 		return shape.contains(centerX, centerY)
 			? new java.awt.Point(centerX, centerY)
 			: null;
+	}
+
+	/**
+	 * @return a point the mouse can actually be moved to before clicking: the
+	 * centre of the clickbox when the model is drawn, otherwise the centre of
+	 * its tile polygon, otherwise the object's projected canvas position. This
+	 * keeps the cursor travelling to tall objects such as the Canifis start
+	 * tree, which sometimes report no clickbox on the first tick after landing.
+	 */
+	private static java.awt.Point aimOf(TileObject object)
+	{
+		java.awt.Point aim = centerOf(object);
+		if (aim != null)
+		{
+			return aim;
+		}
+
+		Polygon tilePoly = object.getCanvasTilePoly();
+		if (tilePoly != null && tilePoly.npoints > 0)
+		{
+			Rectangle bounds = tilePoly.getBounds();
+			if (bounds.width > 0 && bounds.height > 0)
+			{
+				return new java.awt.Point(
+					bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+			}
+		}
+
+		net.runelite.api.Point canvasLocation = object.getCanvasLocation();
+		return canvasLocation == null
+			? null
+			: new java.awt.Point(canvasLocation.getX(), canvasLocation.getY());
 	}
 
 	private static boolean isAnimating(Player player)
