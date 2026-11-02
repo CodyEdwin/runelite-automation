@@ -107,7 +107,13 @@ public final class RooftopAgilityTrainerScript extends Script
 	{
 		private final int id;
 		private final String name;
-		private final String action;
+		/**
+		 * Every menu option that starts this obstacle, most likely first. The
+		 * client's action names differ between courses (Jump vs Leap, Vault vs
+		 * Cross), so storing aliases keeps the click working without guessing
+		 * the exact wording for each new course.
+		 */
+		private final String[] actions;
 		private final WorldPoint location;
 		/**
 		 * True when the obstacle finishes by movement alone and plays no
@@ -124,9 +130,17 @@ public final class RooftopAgilityTrainerScript extends Script
 
 		private Obstacle(int id, String name, String action, WorldPoint location, boolean movementOnly)
 		{
+			this(id, name, action, location, movementOnly, new String[0]);
+		}
+
+		private Obstacle(int id, String name, String action, WorldPoint location, boolean movementOnly,
+			String... aliases)
+		{
 			this.id = id;
 			this.name = name;
-			this.action = action;
+			this.actions = new String[aliases.length + 1];
+			this.actions[0] = action;
+			System.arraycopy(aliases, 0, this.actions, 1, aliases.length);
 			this.location = location;
 			this.movementOnly = movementOnly;
 		}
@@ -169,22 +183,26 @@ public final class RooftopAgilityTrainerScript extends Script
 
 	private static final Course CANIFIS = new Course("Canifis", new Obstacle[]
 	{
-		new Obstacle(ObjectID.ROOFTOPS_CANIFIS_START_TREE, "Start tree", "Climb",
+		// Order follows the course, not the object id numbering: tall tree,
+		// gap, gap, gap (JUMP_5), gap (JUMP_3), pole-vault, gap (JUMP_4),
+		// final leap down. This is the same order RuneLite's own agility
+		// plugin tracks, and the order the player actually meets them.
+		new Obstacle(ObjectID.ROOFTOPS_CANIFIS_START_TREE, "Tall tree", "Climb",
 			new WorldPoint(3505, 3489, 0)),
 		new Obstacle(ObjectID.ROOFTOPS_CANIFIS_JUMP, "Gap", "Jump",
-			new WorldPoint(3505, 3498, 3), true),
+			new WorldPoint(3505, 3498, 3), false, "Leap"),
 		new Obstacle(ObjectID.ROOFTOPS_CANIFIS_JUMP_2, "Gap", "Jump",
-			new WorldPoint(3496, 3504, 3), true),
-		new Obstacle(ObjectID.ROOFTOPS_CANIFIS_JUMP_3, "Gap", "Jump",
-			new WorldPoint(3478, 3491, 3), true),
-		new Obstacle(ObjectID.ROOFTOPS_CANIFIS_JUMP_4, "Gap", "Jump",
-			new WorldPoint(3503, 3476, 3), true),
+			new WorldPoint(3496, 3504, 3), false, "Leap"),
 		new Obstacle(ObjectID.ROOFTOPS_CANIFIS_JUMP_5, "Gap", "Jump",
-			new WorldPoint(3485, 3499, 3), true),
-		new Obstacle(ObjectID.ROOFTOPS_CANIFIS_POLEVAULT, "Pole vault", "Cross",
-			new WorldPoint(3480, 3483, 3), true),
-		new Obstacle(ObjectID.ROOFTOPS_CANIFIS_LEAPDOWN, "Gap", "Leap",
-			new WorldPoint(3510, 3483, 3), true)
+			new WorldPoint(3485, 3499, 3), false, "Leap"),
+		new Obstacle(ObjectID.ROOFTOPS_CANIFIS_JUMP_3, "Gap", "Jump",
+			new WorldPoint(3478, 3491, 3), false, "Leap"),
+		new Obstacle(ObjectID.ROOFTOPS_CANIFIS_POLEVAULT, "Pole-vault", "Vault",
+			new WorldPoint(3480, 3483, 3), true, "Cross", "Jump", "Leap"),
+		new Obstacle(ObjectID.ROOFTOPS_CANIFIS_JUMP_4, "Gap", "Jump",
+			new WorldPoint(3503, 3476, 3), false, "Leap"),
+		new Obstacle(ObjectID.ROOFTOPS_CANIFIS_LEAPDOWN, "Gap", "Jump",
+			new WorldPoint(3510, 3483, 3), true, "Leap", "Jump-off")
 	});
 
 	/**
@@ -541,7 +559,7 @@ public final class RooftopAgilityTrainerScript extends Script
 		boolean sent;
 		if (aim == null || failedClicks >= MAX_CLICK_ATTEMPTS - 1)
 		{
-			sent = context.getInput().invokeObjectAction(target, obstacle.action);
+			sent = context.getInput().invokeObjectAction(target, obstacle.actions);
 		}
 		else
 		{
@@ -567,9 +585,9 @@ public final class RooftopAgilityTrainerScript extends Script
 
 				// No part of the object is on screen, so clicking at the cursor
 				// would hit something else. Use the exact option instead.
-				sent = context.getInput().invokeObjectAction(target, obstacle.action);
+				sent = context.getInput().invokeObjectAction(target, obstacle.actions);
 			}
-			else if (!isDefaultObjectAction(context, target, obstacle.action))
+			else if (!isDefaultObjectAction(context, target, obstacle.actions))
 			{
 				// The camera is still settling or another object slid under
 				// the cursor. Do not click blind; wait for the client to agree
@@ -577,7 +595,7 @@ public final class RooftopAgilityTrainerScript extends Script
 				if (++aimTicks >= AIM_MENU_ATTEMPTS)
 				{
 					aimTicks = 0;
-					sent = context.getInput().invokeObjectAction(target, obstacle.action);
+					sent = context.getInput().invokeObjectAction(target, obstacle.actions);
 				}
 				else
 				{
@@ -681,7 +699,7 @@ public final class RooftopAgilityTrainerScript extends Script
 			boolean inRange = playerLocation != null
 				&& playerLocation.distanceTo2D(wall) <= 3;
 			if (inRange && target != null
-				&& getContext().getInput().invokeObjectAction(target, obstacle.action))
+				&& getContext().getInput().invokeObjectAction(target, obstacle.actions))
 			{
 				beginWaiting(playerLocation);
 				setStatus("Clicked " + obstacle.name);
@@ -1583,7 +1601,7 @@ public final class RooftopAgilityTrainerScript extends Script
 	 * @return true if a left click right now would run the given option on
 	 * this exact object, according to the client's own hover menu
 	 */
-	private static boolean isDefaultObjectAction(ScriptContext context, TileObject target, String action)
+	private static boolean isDefaultObjectAction(ScriptContext context, TileObject target, String... actions)
 	{
 		MenuEntry top = context.getInput().getLeftClickEntry();
 		if (top == null || top.getType() == null || top.getOption() == null)
@@ -1597,8 +1615,7 @@ public final class RooftopAgilityTrainerScript extends Script
 			|| type == MenuAction.GAME_OBJECT_THIRD_OPTION
 			|| type == MenuAction.GAME_OBJECT_FOURTH_OPTION
 			|| type == MenuAction.GAME_OBJECT_FIFTH_OPTION;
-		if (!objectOption
-			|| !action.equalsIgnoreCase(GameInput.plainText(top.getOption()).trim()))
+		if (!objectOption || !matchesAnyAction(top.getOption(), actions))
 		{
 			return false;
 		}
@@ -1614,6 +1631,30 @@ public final class RooftopAgilityTrainerScript extends Script
 		String name = composition == null ? null : composition.getName();
 		return name != null && top.getTarget() != null
 			&& GameInput.plainText(top.getTarget()).equalsIgnoreCase(GameInput.plainText(name));
+	}
+
+	/**
+	 * @return true if the menu option matches any of the obstacle's action
+	 * aliases, so a course that labels a gap "Leap" instead of "Jump" (or a
+	 * pole vault "Cross" instead of "Vault") still clicks.
+	 */
+	private static boolean matchesAnyAction(String option, String... actions)
+	{
+		if (option == null || actions == null)
+		{
+			return false;
+		}
+
+		String plainOption = GameInput.plainText(option).trim();
+		for (String action : actions)
+		{
+			if (action != null && plainOption.equalsIgnoreCase(action.trim()))
+			{
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**
