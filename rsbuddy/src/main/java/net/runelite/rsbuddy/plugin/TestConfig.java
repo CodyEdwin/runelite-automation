@@ -29,6 +29,7 @@ import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
 import net.runelite.client.config.Range;
+import net.runelite.rsbuddy.plugin.RoofCourse;
 
 @ConfigGroup(TestConfig.GROUP)
 public interface TestConfig extends Config
@@ -371,5 +372,16 @@ public interface TestConfig extends Config
 	default boolean gemCutterClosestBooth()
 	{
 		return true;
+	}
+
+	@ConfigItem(
+		keyName = "rooftopCourse",
+		name = "Rooftop agility course",
+		description = "Which rooftop agility course the trainer script runs.",
+		position = 28
+	)
+	default RoofCourse rooftopCourse()
+	{
+		return RoofCourse.VARROCK;
 	}
 }

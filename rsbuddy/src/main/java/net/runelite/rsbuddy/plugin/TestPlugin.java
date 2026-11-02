@@ -577,6 +577,13 @@ public class TestPlugin extends Plugin
 				config.gemCutterClosestBooth());
 		}
 
+		if (RooftopAgilityTrainerScript.class.getName().equals(className))
+		{
+			// Reloaded scripts get their own copy of every class, so pass the
+			// course by name and let the script parse it.
+			return ScriptLoader.load(className, classLoader, config.rooftopCourse().name());
+		}
+
 		return ScriptLoader.load(className, classLoader);
 	}
 

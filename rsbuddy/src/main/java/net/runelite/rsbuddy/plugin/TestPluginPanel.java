@@ -55,6 +55,7 @@ import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.DynamicGridLayout;
 import net.runelite.client.ui.FontManager;
 import net.runelite.client.ui.PluginPanel;
+import net.runelite.rsbuddy.plugin.RoofCourse;
 import net.runelite.rsbuddy.script.Script;
 import net.runelite.rsbuddy.script.ScriptLoader;
 import net.runelite.rsbuddy.script.ScriptManager;
@@ -62,6 +63,7 @@ import net.runelite.rsbuddy.scripts.BowFletcherScript;
 import net.runelite.rsbuddy.scripts.FruitStallStealerScript;
 import net.runelite.rsbuddy.scripts.GemCutterScript;
 import net.runelite.rsbuddy.scripts.ObjectInteractScript;
+import net.runelite.rsbuddy.scripts.RooftopAgilityTrainerScript;
 
 /**
  * Sidebar panel used to pick and control RSBuddy scripts.
@@ -561,6 +563,15 @@ public final class TestPluginPanel extends PluginPanel
 
 			scriptSettingsHint.setText("<html>Chisel in locked slot 1. Used the next time the script starts."
 				+ " Same settings as Test Plugin config.</html>");
+			hasSettings = true;
+		}
+		else if (script != null && RooftopAgilityTrainerScript.class.getName().equals(script.getClass().getName()))
+		{
+			addComboSetting("Course", "Which rooftop agility course to run.",
+				RoofCourse.values(), "rooftopCourse", config::rooftopCourse);
+
+			scriptSettingsHint.setText("<html>Choose the course before pressing Start. The script reads it "
+				+ "when it begins, so changing it while running has no effect until the next start.</html>");
 			hasSettings = true;
 		}
 

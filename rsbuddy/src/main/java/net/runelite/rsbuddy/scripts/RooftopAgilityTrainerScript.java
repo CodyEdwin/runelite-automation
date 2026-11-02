@@ -53,12 +53,15 @@ import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.ItemID;
 import net.runelite.api.gameval.ObjectID;
 import net.runelite.rsbuddy.input.GameInput;
+import net.runelite.rsbuddy.plugin.RoofCourse;
 import net.runelite.rsbuddy.script.Script;
 import net.runelite.rsbuddy.script.ScriptContext;
 import net.runelite.rsbuddy.walk.Walker;
 
 /**
- * Runs the Varrock rooftop agility course.
+ * Runs a rooftop agility course. The course and its obstacles are chosen by
+ * the {@link RoofCourse} setting in Test Plugin config (Varrock by default;
+ * add more courses as {@link Course} instances to support other locations).
  * <p>
  * The course is a fixed sequence of obstacles. After an obstacle is clicked the
  * script waits until its animation has finished and the player has stopped
@@ -106,13 +109,26 @@ public final class RooftopAgilityTrainerScript extends Script
 		private final String name;
 		private final String action;
 		private final WorldPoint location;
+		/**
+		 * True when the obstacle finishes by movement alone and plays no
+		 * dependable player animation (tightropes, pole vaults, forced leaps).
+		 * The script treats it as complete once the player has moved far enough
+		 * past it, instead of waiting for an animation that never comes.
+		 */
+		private final boolean movementOnly;
 
 		private Obstacle(int id, String name, String action, WorldPoint location)
+		{
+			this(id, name, action, location, false);
+		}
+
+		private Obstacle(int id, String name, String action, WorldPoint location, boolean movementOnly)
 		{
 			this.id = id;
 			this.name = name;
 			this.action = action;
 			this.location = location;
+			this.movementOnly = movementOnly;
 		}
 	}
 
@@ -151,7 +167,32 @@ public final class RooftopAgilityTrainerScript extends Script
 		new Obstacle(ObjectID.ROOFTOPS_VARROCK_FINISH, "Edge", "Jump-off", new WorldPoint(3236, 3416, 3))
 	});
 
-	private static final Course COURSE = VARROCK;
+	private static final Course CANIFIS = new Course("Canifis", new Obstacle[]
+	{
+		new Obstacle(ObjectID.ROOFTOPS_CANIFIS_START_TREE, "Start tree", "Climb",
+			new WorldPoint(3505, 3489, 0)),
+		new Obstacle(ObjectID.ROOFTOPS_CANIFIS_JUMP, "Gap", "Jump",
+			new WorldPoint(3505, 3498, 3)),
+		new Obstacle(ObjectID.ROOFTOPS_CANIFIS_JUMP_2, "Gap", "Jump",
+			new WorldPoint(3496, 3504, 3)),
+		new Obstacle(ObjectID.ROOFTOPS_CANIFIS_JUMP_3, "Gap", "Jump",
+			new WorldPoint(3478, 3491, 3)),
+		new Obstacle(ObjectID.ROOFTOPS_CANIFIS_JUMP_4, "Gap", "Jump",
+			new WorldPoint(3503, 3476, 3)),
+		new Obstacle(ObjectID.ROOFTOPS_CANIFIS_JUMP_5, "Gap", "Jump",
+			new WorldPoint(3485, 3499, 3)),
+		new Obstacle(ObjectID.ROOFTOPS_CANIFIS_POLEVAULT, "Pole vault", "Cross",
+			new WorldPoint(3480, 3483, 3), true),
+		new Obstacle(ObjectID.ROOFTOPS_CANIFIS_LEAPDOWN, "Gap", "Leap",
+			new WorldPoint(3510, 3483, 3), true)
+	});
+
+	/**
+	 * The course currently in use. Set from the constructor argument (the
+	 * selected course from Test Plugin config), so the script can run any
+	 * course that has a {@link Course} defined for it.
+	 */
+	private Course course;
 
 	private Walker walker;
 	private int index;
@@ -191,7 +232,29 @@ public final class RooftopAgilityTrainerScript extends Script
 
 	public RooftopAgilityTrainerScript()
 	{
-		super("Rooftop Agility Trainer", "Runs the Varrock rooftop agility course and recovers from falls.");
+		this(RoofCourse.VARROCK.name());
+	}
+
+	/**
+	 * @param courseName the name of a {@link RoofCourse} constant (e.g. "VARROCK"
+	 *                   or "CANIFIS"). Passed by name so reloaded scripts, which
+	 *                   have their own copy of every class, can still receive it.
+	 */
+	public RooftopAgilityTrainerScript(String courseName)
+	{
+		super("Rooftop Agility Trainer", "Runs a rooftop agility course and recovers from falls.");
+
+		RoofCourse selected = RoofCourse.VARROCK;
+		try
+		{
+			selected = RoofCourse.valueOf(courseName);
+		}
+		catch (IllegalArgumentException ignored)
+		{
+			// Unknown course: fall back to Varrock.
+		}
+
+		course = selected == RoofCourse.CANIFIS ? CANIFIS : VARROCK;
 	}
 
 	@Override
@@ -228,7 +291,7 @@ public final class RooftopAgilityTrainerScript extends Script
 		startAgilityXp = 0;
 		lastMarkCount = 0;
 		marksCollected = 0;
-		setStatus("Ready for Varrock");
+		setStatus("Ready for " + course.name);
 	}
 
 	@Override
@@ -311,7 +374,7 @@ public final class RooftopAgilityTrainerScript extends Script
 			return;
 		}
 
-		Obstacle obstacle = COURSE.obstacles[index];
+		Obstacle obstacle = course.obstacles[index];
 		WorldPoint playerLocation = player.getWorldLocation();
 
 		// A new lap starts on the ground. If the lap counter reset while the
@@ -707,7 +770,7 @@ public final class RooftopAgilityTrainerScript extends Script
 
 		lastLocation = location;
 
-		Obstacle obstacle = COURSE.obstacles[index];
+		Obstacle obstacle = course.obstacles[index];
 		// Give the game a couple of ticks after the first climb's animation
 		// ends. That climb teleports the player up to the rooftop, and the
 		// plane change can arrive after the animation has already stopped;
@@ -802,10 +865,10 @@ public final class RooftopAgilityTrainerScript extends Script
 
 		++obstaclesCompleted;
 
-		if (index + 1 < COURSE.obstacles.length)
+		if (index + 1 < course.obstacles.length)
 		{
 			++index;
-			setStatus("Next: " + COURSE.obstacles[index].name);
+			setStatus("Next: " + course.obstacles[index].name);
 		}
 		else
 		{
@@ -833,6 +896,13 @@ public final class RooftopAgilityTrainerScript extends Script
 		}
 
 		int moved = waitStartLocation.distanceTo2D(location);
+
+		// Any course can mark an obstacle as completed by movement alone (no
+		// player animation). Once the player has moved far enough, it is done.
+		if (obstacle.movementOnly)
+		{
+			return moved >= MOVE_ONLY_MIN_DISTANCE;
+		}
 
 		if (obstacle.id == ObjectID.ROOFTOPS_VARROCK_CLOTHESLINE)
 		{
@@ -891,7 +961,7 @@ public final class RooftopAgilityTrainerScript extends Script
 			return false;
 		}
 
-		if (index + 1 >= COURSE.obstacles.length)
+		if (index + 1 >= course.obstacles.length)
 		{
 			return location.getPlane() != 0;
 		}
@@ -949,9 +1019,9 @@ public final class RooftopAgilityTrainerScript extends Script
 		int bestIndex = -1;
 		int bestDistance = Integer.MAX_VALUE;
 
-		for (int i = 0; i < COURSE.obstacles.length; i++)
+		for (int i = 0; i < course.obstacles.length; i++)
 		{
-			Obstacle obstacle = COURSE.obstacles[i];
+			Obstacle obstacle = course.obstacles[i];
 
 			// Only the ground-level start is off the rooftop. The remaining
 			// obstacles use planes 1 and 3 interchangeably, so compare them
@@ -972,7 +1042,7 @@ public final class RooftopAgilityTrainerScript extends Script
 		if (bestIndex >= 0)
 		{
 			index = bestIndex;
-			setStatus("Starting at " + COURSE.obstacles[index].name);
+			setStatus("Starting at " + course.obstacles[index].name);
 		}
 	}
 
@@ -1423,7 +1493,7 @@ public final class RooftopAgilityTrainerScript extends Script
 
 		List<String> lines = new ArrayList<>();
 		lines.add("");
-		lines.add(COURSE.name + " rooftop course");
+		lines.add(course.name + " rooftop course");
 		lines.add("Laps: " + formatNumber(laps) + " (" + formatPerHour(laps, elapsed) + "/hr)");
 		lines.add("Obstacles: " + formatNumber(obstaclesCompleted));
 		lines.add("Marks of Grace: " + formatNumber(marksCollected));
