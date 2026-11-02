@@ -178,6 +178,30 @@ public final class TargetLocator
 			.collect(Collectors.toList());
 	}
 
+	/**
+	 * Finds every tile object within the given 2D radius of a world position,
+	 * even when that position is recorded on another plane. Only objects on
+	 * the plane the player is currently on are loaded, so this is useful for
+	 * rooftop courses whose obstacle positions use varying planes.
+	 */
+	public List<TileObject> getTileObjectsNear(WorldPoint location, int radius)
+	{
+		if (location == null)
+		{
+			return Collections.emptyList();
+		}
+
+		int limit = Math.max(0, radius);
+		return tileObjects()
+			.filter(object ->
+			{
+				WorldPoint objectLocation = object.getWorldLocation();
+				return objectLocation != null
+					&& objectLocation.distanceTo2D(location) <= limit;
+			})
+			.collect(Collectors.toList());
+	}
+
 	public List<GameObject> getObjects(String name)
 	{
 		return objects().filter(object -> matchesName(object, name)).collect(Collectors.toList());

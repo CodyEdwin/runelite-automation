@@ -226,6 +226,43 @@ public final class Walker
 	}
 
 	/**
+	 * @return true if the player's plane has an open tile at that point
+	 */
+	public boolean isWalkable(WorldPoint point)
+	{
+		if (point == null)
+		{
+			return false;
+		}
+
+		WorldView worldView = client.getTopLevelWorldView();
+		if (worldView == null)
+		{
+			return false;
+		}
+
+		Scene scene = worldView.getScene();
+		CollisionData[] collisionMaps = worldView.getCollisionMaps();
+		int plane = worldView.getPlane();
+		if (scene == null || point.getPlane() != plane || collisionMaps == null
+			|| plane < 0 || plane >= collisionMaps.length || collisionMaps[plane] == null)
+		{
+			return false;
+		}
+
+		int[][] flags = collisionMaps[plane].getFlags();
+		if (flags == null || flags.length == 0)
+		{
+			return false;
+		}
+
+		int x = point.getX() - scene.getBaseX();
+		int y = point.getY() - scene.getBaseY();
+		return inBounds(x, y, flags.length, flags[0].length)
+			&& (flags[x][y] & CollisionDataFlag.BLOCK_MOVEMENT_FULL) == 0;
+	}
+
+	/**
 	 * Finds a walkable route from the player to the goal. When the goal cannot
 	 * be reached, the route ends at the reachable tile closest to it.
 	 *
