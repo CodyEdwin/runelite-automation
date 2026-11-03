@@ -104,6 +104,7 @@ public final class MotherlodeMinerScript extends Script
 	{
 		DEPOSIT,
 		WAIT_DEPOSIT,
+		MAKE_ROOM,
 		WITHDRAW,
 		LEAVE
 	}
@@ -812,6 +813,42 @@ public final class MotherlodeMinerScript extends Script
 				setStatus("Depositing ores");
 				return;
 			}
+			case MAKE_ROOM:
+			{
+				if (inventory.getEmptySlots() > 0)
+				{
+					bankStage = BankStage.WITHDRAW;
+					actionAttempts = 0;
+					cooldown = 1;
+					return;
+				}
+
+				Widget deposit = context.getTargets().findWidget(InterfaceID.Bankmain.DEPOSITINV).orElse(null);
+				if (deposit == null)
+				{
+					cooldown = 1;
+					setStatus("Waiting for bank");
+					return;
+				}
+
+				if (++actionAttempts > ACTION_ATTEMPTS)
+				{
+					hammerUnavailable = true;
+					bankStage = BankStage.LEAVE;
+					return;
+				}
+
+				if (input.click(deposit))
+				{
+					cooldown = CLICK_COOLDOWN;
+				}
+				else
+				{
+					cooldown = 1;
+				}
+				setStatus("Depositing ores to make room for the hammer");
+				return;
+			}
 			case WITHDRAW:
 			{
 				if (inventory.countItem(ItemID.HAMMER) > 0)
@@ -822,22 +859,16 @@ public final class MotherlodeMinerScript extends Script
 
 				if (inventory.getEmptySlots() == 0)
 				{
-					if (dropOnePayDirt(context))
-					{
-						cooldown = 1;
-					}
-					else if (++actionAttempts > ACTION_ATTEMPTS)
-					{
-						hammerUnavailable = true;
-						bankStage = BankStage.LEAVE;
-					}
+					// Already at the bank with a full inventory: deposit
+					// everything so there is a slot for the hammer instead
+					// of dropping items or bouncing back to the veins.
+					bankStage = BankStage.MAKE_ROOM;
+					actionAttempts = 0;
+					cooldown = 1;
 					setStatus("Making room for the hammer");
 					return;
 				}
 
-				// Move the mouse to the hammer's bank slot and click it, so the
-				// withdrawal is visible like a player's. Fall back to the slot
-				// action only when the item is not in the open tab.
 				// Withdraw by item id and bank slot. The old physical
 				// click used the first widget that reported the hammer id,
 				// which could be a stale or off-tab slot and click the
@@ -845,7 +876,14 @@ public final class MotherlodeMinerScript extends Script
 				boolean withdrew = input.withdrawBankItem(ItemID.HAMMER, "Withdraw-1");
 				if (withdrew)
 				{
-					++actionAttempts;
+					// The action was sent but the hammer may still not
+					// arrive (wrong tab/scroll state). Stop retrying instead
+					// of looping on the bank forever.
+					if (++actionAttempts > ACTION_ATTEMPTS * 2)
+					{
+						hammerUnavailable = true;
+						bankStage = BankStage.LEAVE;
+					}
 					cooldown = CLICK_COOLDOWN;
 				}
 				else if (++actionAttempts > ACTION_ATTEMPTS)
