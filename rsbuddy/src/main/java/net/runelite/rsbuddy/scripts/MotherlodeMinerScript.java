@@ -127,6 +127,7 @@ public final class MotherlodeMinerScript extends Script
 	private int searchWait;
 	private int wheelAttempts;
 	private int bankClicks;
+	private boolean chestHovered;
 	private boolean hammerUnavailable;
 	private boolean hammerHovered;
 
@@ -168,6 +169,7 @@ public final class MotherlodeMinerScript extends Script
 		searchWait = 0;
 		wheelAttempts = 0;
 		bankClicks = 0;
+		chestHovered = false;
 		hammerUnavailable = false;
 		hammerHovered = false;
 		mining = false;
@@ -703,6 +705,7 @@ public final class MotherlodeMinerScript extends Script
 			bankStage = null;
 			actionAttempts = 0;
 			bankClicks = 0;
+			chestHovered = false;
 			setStatus("Banking ores");
 			return;
 		}
@@ -805,19 +808,30 @@ public final class MotherlodeMinerScript extends Script
 			}
 
 			input.stopCamera();
+			if (!input.isVisible(chest))
+			{
+				input.turnCameraToward(chest.getWorldLocation());
+				setStatus("Turning camera to the bank chest");
+				return;
+			}
+
+			// Glide the cursor onto the chest first so opening the bank is
+			// visible, then fire the exact Use/Bank action once the pointer
+			// has arrived.
+			if (!chestHovered)
+			{
+				if (!input.isBusy() && input.hover(chest))
+				{
+					chestHovered = true;
+				}
+				setStatus("Moving mouse to the bank chest");
+				return;
+			}
+
 			boolean clicked;
 			if (bankClicks < 3)
 			{
 				++bankClicks;
-				if (!input.isVisible(chest))
-				{
-					input.turnCameraToward(chest.getWorldLocation());
-					setStatus("Turning camera to the bank chest");
-					return;
-				}
-
-				// Move the mouse onto the chest and click it like a player
-				// would, instead of running the action invisibly.
 				// Run the chest's exact Use/Bank action instead of a raw
 				// left click. A left click can land on another object that
 				// overlaps the chest's clickbox and walk or mine instead.

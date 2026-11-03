@@ -3816,8 +3816,8 @@ public final class GameInput
 
 		for (int i = 0; i < RANDOM_POINT_ATTEMPTS; i++)
 		{
-			int x = (int) Math.round(centerX + (random.nextDouble() * 2.0 - 1.0) * bounds.width * 0.36);
-			int y = (int) Math.round(centerY + (random.nextDouble() * 2.0 - 1.0) * bounds.height * 0.36);
+			int x = (int) Math.round(centerX + (random.nextDouble() * 2.0 - 1.0) * bounds.width * 0.15);
+			int y = (int) Math.round(centerY + (random.nextDouble() * 2.0 - 1.0) * bounds.height * 0.15);
 			if (shape.contains(x, y) && isInViewport(x, y) && !isCoveredByInterface(x, y))
 			{
 				return new Point(x, y);
@@ -3866,8 +3866,8 @@ public final class GameInput
 			return null;
 		}
 
-		int spreadX = Math.max(1, bounds.width / 6);
-		int spreadY = Math.max(1, bounds.height / 6);
+		int spreadX = Math.max(1, bounds.width / 8);
+		int spreadY = Math.max(1, bounds.height / 8);
 		int x = bounds.x + bounds.width / 2 + random.nextInt(spreadX * 2 + 1) - spreadX;
 		int y = bounds.y + bounds.height / 2 + random.nextInt(spreadY * 2 + 1) - spreadY;
 		return new Point(x, y);
@@ -3880,14 +3880,14 @@ public final class GameInput
 			return null;
 		}
 
-		int marginX = Math.min(5, bounds.width / 4);
-		int marginY = Math.min(5, bounds.height / 4);
-		int width = Math.max(1, bounds.width - marginX * 2);
-		int height = Math.max(1, bounds.height - marginY * 2);
-
-		return new Point(
-			bounds.x + marginX + random.nextInt(width),
-			bounds.y + marginY + random.nextInt(height));
+		// Keep every click near the middle of the widget. Picking uniformly
+		// from the inner bounds used to put clicks on the very edge of an
+		// item icon, which looks synthetic and occasionally misclicks.
+		int spreadX = Math.max(1, bounds.width / 8);
+		int spreadY = Math.max(1, bounds.height / 8);
+		int x = bounds.x + bounds.width / 2 + random.nextInt(spreadX * 2 + 1) - spreadX;
+		int y = bounds.y + bounds.height / 2 + random.nextInt(spreadY * 2 + 1) - spreadY;
+		return new Point(x, y);
 	}
 
 	/**
