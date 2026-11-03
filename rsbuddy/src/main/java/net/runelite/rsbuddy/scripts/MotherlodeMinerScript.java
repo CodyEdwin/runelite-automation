@@ -596,6 +596,7 @@ public final class MotherlodeMinerScript extends Script
 	{
 		payDirtDeposited = false;
 		searchClicks = 0;
+		bankPurpose = BankPurpose.DEPOSIT;
 		if (hasBankableItems(inventory))
 		{
 			state = State.WALK_TO_BANK;
@@ -639,6 +640,20 @@ public final class MotherlodeMinerScript extends Script
 		Inventory inventory = context.getInventory();
 		GameInput input = context.getInput();
 		Widget bank = context.getTargets().findWidget(InterfaceID.Bankmain.UNIVERSE).orElse(null);
+
+		// Never open the bank for a hammer with a full inventory: pay-dirt
+		// cannot be banked, so drop one here first and only then click the
+		// chest. A full inventory of ores is fine because those deposit.
+		if (bank == null && bankPurpose == BankPurpose.HAMMER
+			&& inventory.getEmptySlots() == 0 && inventory.countItem(ItemID.PAYDIRT) > 0)
+		{
+			if (!input.isBusy() && dropOnePayDirt(context))
+			{
+				cooldown = 1;
+			}
+			setStatus("Dropping pay-dirt to make room for the hammer");
+			return;
+		}
 
 		if (bankStage == BankStage.LEAVE)
 		{
