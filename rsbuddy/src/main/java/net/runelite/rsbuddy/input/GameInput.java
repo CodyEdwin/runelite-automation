@@ -1626,6 +1626,23 @@ public final class GameInput
 	}
 
 	/**
+	 * Physically clicks an item in the bank, moving the cursor onto its slot
+	 * and running the bank's left-click withdraw option like a player would.
+	 *
+	 * @return true if a movement/click was started
+	 */
+	public boolean clickBankItem(int itemId)
+	{
+		Widget item = findBankItemWidget(itemId);
+		if (item == null || item.isHidden())
+		{
+			return false;
+		}
+
+		return click(item);
+	}
+
+	/**
 	 * Withdraws an item from the bank by sending the bank slot's withdraw
 	 * action directly. No context menu is opened, so the cursor cannot land on
 	 * the wrong slot or option.
@@ -3342,61 +3359,81 @@ public final class GameInput
 		double dx = target.x - start.x;
 		double dy = target.y - start.y;
 		double distance = Math.hypot(dx, dy);
+		long delay = reactionDelayMs();
 
 		if (distance < 2.0)
 		{
-			steps.add(new MouseStep(MouseEvent.MOUSE_MOVED, target, MouseEvent.NOBUTTON, 0, 0, 0));
+			steps.add(new MouseStep(MouseEvent.MOUSE_MOVED, target, MouseEvent.NOBUTTON, 0, 0, delay));
+			return steps;
 		}
-		else
+
+		int moveSteps = Math.max(12, Math.min(50, (int) (distance / 11.0) + 9));
+		double length = Math.max(1.0, distance);
+		double perpX = -dy / length;
+		double perpY = dx / length;
+
+		// The hand does not travel in a straight line: longer movements get a
+		// larger Gaussian bend, plus a little control-point noise.
+		double maxBend = Math.min(70.0, Math.max(8.0, distance * 0.11));
+		double bend = Math.max(-maxBend, Math.min(maxBend, random.nextGaussian() * maxBend * 0.42));
+		double control1X = start.x + dx * 0.32 + perpX * bend + random.nextGaussian() * 1.2;
+		double control1Y = start.y + dy * 0.32 + perpY * bend + random.nextGaussian() * 1.2;
+		double control2X = start.x + dx * 0.68 + perpX * bend * 0.55 + random.nextGaussian() * 1.2;
+		double control2Y = start.y + dy * 0.68 + perpY * bend * 0.55 + random.nextGaussian() * 1.2;
+
+		// Fitts-like duration, with Gaussian variance between and within moves.
+		double totalMs = 150.0 + distance * 0.62;
+		double stepMean = Math.max(5.0, totalMs / moveSteps);
+		double jitterScale = Math.min(5.0, Math.max(0.8, distance * 0.012));
+		double overshoot = distance > 30.0 && random.nextInt(4) != 0
+			? Math.max(-3.0, Math.min(3.0, random.nextGaussian() * 1.4))
+			: 0.0;
+
+		for (int i = 1; i <= moveSteps; i++)
 		{
-			int moveSteps = Math.max(12, Math.min(50, (int) (distance / 11.0) + 9));
-			double length = Math.max(1.0, distance);
-			double perpX = -dy / length;
-			double perpY = dx / length;
+			double progress = (double) i / moveSteps;
 
-			// A mild curve makes straight-line teleporting look less robotic.
-			double bend = (random.nextDouble() * 2.0 - 1.0) * Math.min(70.0, distance * 0.11);
-			double control1X = start.x + dx * 0.32 + perpX * bend;
-			double control1Y = start.y + dy * 0.32 + perpY * bend;
-			double control2X = start.x + dx * 0.68 + perpX * bend * 0.55;
-			double control2Y = start.y + dy * 0.68 + perpY * bend * 0.55;
+			// Minimum-jerk velocity profile: slow start, fast middle, slow end,
+			// slightly skewed so peak speed comes before the midpoint.
+			double t = Math.pow(progress, 0.94);
+			double eased = t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
 
-			long delay = 0;
-			for (int i = 1; i <= moveSteps; i++)
+			double x = cubic(start.x, control1X, control2X, target.x, eased);
+			double y = cubic(start.y, control1Y, control2Y, target.y, eased);
+
+			if (i == moveSteps)
 			{
-				double progress = (double) i / moveSteps;
-				double eased = 1.0 - Math.pow(1.0 - progress, 2.2);
-
-				if (i < moveSteps && random.nextInt(6) == 0)
-				{
-					eased = Math.min(1.0, Math.max(0.0, eased + (random.nextDouble() - 0.5) * 0.035));
-				}
-
-				double x = cubic(start.x, control1X, control2X, target.x, eased);
-				double y = cubic(start.y, control1Y, control2Y, target.y, eased);
-
-				if (i < moveSteps)
-				{
-					double jitter = (1.0 - progress) * Math.min(5.0, Math.max(1.0, distance * 0.012));
-					x += (random.nextDouble() * 2.0 - 1.0) * jitter;
-					y += (random.nextDouble() * 2.0 - 1.0) * jitter;
-				}
-				else
-				{
-					x = target.x;
-					y = target.y;
-				}
-
-				delay += 12 + random.nextInt(10);
-				if (i < moveSteps && random.nextInt(12) == 0)
-				{
-					delay += 25 + random.nextInt(50);
-				}
-
-				steps.add(new MouseStep(MouseEvent.MOUSE_MOVED,
-					new Point((int) Math.round(x), (int) Math.round(y)),
-					MouseEvent.NOBUTTON, 0, 0, delay));
+				// Stop a pixel or two off target, then correct in the next step.
+				x = target.x + perpX * overshoot;
+				y = target.y + perpY * overshoot;
 			}
+			else
+			{
+				double remaining = 1.0 - progress;
+				double jitter = remaining * jitterScale;
+				double perpendicular = random.nextGaussian() * jitter;
+				double along = random.nextGaussian() * jitter * 0.3;
+				x += perpX * perpendicular + (dx / length) * along;
+				y += perpY * perpendicular + (dy / length) * along;
+			}
+
+			delay += Math.max(4,
+				Math.round(stepMean + random.nextGaussian() * stepMean * 0.22));
+			if (i < moveSteps && random.nextInt(11) == 0)
+			{
+				delay += Math.max(12, Math.round(55.0 + random.nextGaussian() * 20.0));
+			}
+
+			steps.add(new MouseStep(MouseEvent.MOUSE_MOVED,
+				new Point((int) Math.round(x), (int) Math.round(y)),
+				MouseEvent.NOBUTTON, 0, 0, delay));
+		}
+
+		if (overshoot != 0.0)
+		{
+			delay += Math.max(10, Math.round(28.0 + random.nextGaussian() * 9.0));
+			steps.add(new MouseStep(MouseEvent.MOUSE_MOVED,
+				target, MouseEvent.NOBUTTON, 0, 0, delay));
 		}
 
 		return steps;
@@ -3496,16 +3533,24 @@ public final class GameInput
 			return;
 		}
 
-		long pressDelay = steps.get(steps.size() - 1).delayMs + 30 + random.nextInt(70);
+		long pressDelay = steps.get(steps.size() - 1).delayMs
+			+ gaussianDelay(46.0, 15.0, 18, 110);
 		int downMask = button == MouseEvent.BUTTON3
 			? InputEvent.BUTTON3_DOWN_MASK
 			: InputEvent.BUTTON1_DOWN_MASK;
 
 		steps.add(new MouseStep(MouseEvent.MOUSE_PRESSED, target, button, 1, downMask, pressDelay));
-		long releaseDelay = pressDelay + 45 + random.nextInt(75);
+		long releaseDelay = pressDelay + gaussianDelay(62.0, 17.0, 30, 130);
 		steps.add(new MouseStep(MouseEvent.MOUSE_RELEASED, target, button, 1, 0, releaseDelay));
 		steps.add(new MouseStep(MouseEvent.MOUSE_CLICKED, target, button, 1, 0,
-			releaseDelay + 15 + random.nextInt(35)));
+			releaseDelay + gaussianDelay(20.0, 6.0, 6, 45)));
+	}
+
+	/** Gaussian human timing, clamped so a bad roll cannot stall the input. */
+	private long gaussianDelay(double mean, double deviation, long min, long max)
+	{
+		long value = Math.round(mean + random.nextGaussian() * deviation);
+		return Math.max(min, Math.min(max, value));
 	}
 
 	private static double cubic(double a, double b, double c, double d, double t)

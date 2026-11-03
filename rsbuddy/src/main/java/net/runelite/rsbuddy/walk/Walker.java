@@ -56,23 +56,16 @@ public final class Walker
 		{0, -1}, {-1, 0}, {-1, -1}, {-1, 1}
 	};
 
-	// How far along the path a single click should reach.
-	private static final int PATH_LOOKAHEAD = 10;
-
-	// When the player stops making progress, click closer to them so the client
-	// can path around whatever is blocking the route.
-	private static final int NEAR_LOOKAHEAD = 3;
-	private static final int STALL_TICKS = 3;
-
-	// Ticks between walk clicks while the player is still moving. Players keep
-	// clicking the next waypoint as they run instead of waiting to stop.
-	private static final int CLICK_INTERVAL_TICKS = 2;
+	// A minimap click is only repeated when the player is standing still and
+	// the previous click produced no movement (failed click or blocked path).
+	private static final int CLICK_RETRY_TICKS = 2;
 
 	private final Client client;
 	private final GameInput input;
 
 	private WorldPoint lastLocation;
-	private int stallTicks;
+	private WorldPoint clickedTarget;
+	private WorldPoint requestedTarget;
 	private int ticksSinceClick;
 
 	public Walker(Client client, GameInput input)
@@ -87,8 +80,9 @@ public final class Walker
 	public void reset()
 	{
 		lastLocation = null;
-		stallTicks = 0;
-		ticksSinceClick = CLICK_INTERVAL_TICKS;
+		clickedTarget = null;
+		requestedTarget = null;
+		ticksSinceClick = CLICK_RETRY_TICKS;
 	}
 
 	/**
@@ -133,29 +127,36 @@ public final class Walker
 
 		Player player = client.getLocalPlayer();
 		WorldPoint location = player == null ? null : player.getWorldLocation();
-		if (location == null || location.distanceTo(target) <= Math.max(0, stopDistance))
+		if (location == null)
+		{
+			return false;
+		}
+
+		if (location.distanceTo(target) <= Math.max(0, stopDistance))
 		{
 			reset();
 			return false;
 		}
 
-		// Count how long the player has been stuck in place. A moving player
-		// resets this every tick.
-		if (lastLocation != null && lastLocation.equals(location))
-		{
-			++stallTicks;
-		}
-		else
-		{
-			stallTicks = 0;
-		}
-
+		// The minimap is drawn around the player, so a click must only be
+		// computed while standing still: one accurate click, then wait out
+		// the whole walk instead of spamming the minimap every couple ticks.
+		boolean moving = isMoving(player)
+			|| (lastLocation != null && !lastLocation.equals(location));
 		lastLocation = location;
-
-		// Keep clicking the route ahead while the player is running instead of
-		// waiting for them to stop, but no faster than a player would.
-		if (++ticksSinceClick < CLICK_INTERVAL_TICKS)
+		if (moving)
 		{
+			ticksSinceClick = 0;
+			return false;
+		}
+
+		boolean sameTarget = requestedTarget != null
+			&& requestedTarget.distanceTo(target) <= 1;
+		requestedTarget = target;
+
+		if (sameTarget && clickedTarget != null && ticksSinceClick < CLICK_RETRY_TICKS)
+		{
+			++ticksSinceClick;
 			return false;
 		}
 
@@ -165,30 +166,43 @@ public final class Walker
 			return false;
 		}
 
-		int lookahead = stallTicks >= STALL_TICKS ? NEAR_LOOKAHEAD : PATH_LOOKAHEAD;
-		int index = Math.min(path.size() - 1, lookahead);
-		if (useMinimap && clickMinimap(path.get(index)))
-		{
-			ticksSinceClick = 0;
-			return true;
-		}
+		// Freeze the camera first, otherwise the minimap rotates while the
+		// mouse is still travelling and the click lands on the wrong tile.
+		input.stopCamera();
 
-		for (int i = index; i >= 1; i--)
+		if (useMinimap)
 		{
-			if (input.walkTo(path.get(i)))
+			// Click the farthest point of the route that is actually on the
+			// minimap. Normally that is the goal itself, so one click walks
+			// the full distance.
+			for (int i = path.size() - 1; i >= 1; i--)
 			{
-				ticksSinceClick = 0;
-				return true;
+				WorldPoint point = path.get(i);
+				if (clickMinimap(point))
+				{
+					clickedTarget = point;
+					ticksSinceClick = 0;
+					return true;
+				}
 			}
+			return false;
 		}
 
-		if (clickMinimap(path.get(index)))
+		WorldPoint destination = path.get(path.size() - 1);
+		if (input.walkTo(destination))
 		{
+			clickedTarget = destination;
 			ticksSinceClick = 0;
 			return true;
 		}
 
 		return false;
+	}
+
+	private static boolean isMoving(Player player)
+	{
+		return player != null
+			&& player.getPoseAnimation() != player.getIdlePoseAnimation();
 	}
 
 	/**

@@ -76,6 +76,7 @@ import net.runelite.rsbuddy.scripts.GemCrabKillerScript;
 import net.runelite.rsbuddy.scripts.GemCutterScript;
 import net.runelite.rsbuddy.scripts.GrandExchangeFlipperScript;
 import net.runelite.rsbuddy.scripts.HillGiantScript;
+import net.runelite.rsbuddy.scripts.MotherlodeMinerScript;
 import net.runelite.rsbuddy.scripts.ObjectInteractScript;
 import net.runelite.rsbuddy.scripts.RooftopAgilityTrainerScript;
 import net.runelite.rsbuddy.target.TargetLocator;
@@ -162,6 +163,7 @@ public class TestPlugin extends Plugin
 			config.fruitStallKeepStrangeFruit(),
 			config.fruitStallKeepJangerberries()));
 		scriptManager.register(new HillGiantScript());
+		scriptManager.register(new MotherlodeMinerScript());
 		scriptManager.register(new RooftopAgilityTrainerScript());
 		scriptManager.register(new GemCrabKillerScript(
 			config.gemCrabPotionMode().name(),
