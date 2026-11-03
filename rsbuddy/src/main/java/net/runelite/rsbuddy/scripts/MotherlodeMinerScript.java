@@ -128,6 +128,7 @@ public final class MotherlodeMinerScript extends Script
 	private int wheelAttempts;
 	private int bankClicks;
 	private boolean hammerUnavailable;
+	private boolean hammerHovered;
 
 	private boolean mining;
 	private boolean miningAnimationSeen;
@@ -168,6 +169,7 @@ public final class MotherlodeMinerScript extends Script
 		wheelAttempts = 0;
 		bankClicks = 0;
 		hammerUnavailable = false;
+		hammerHovered = false;
 		mining = false;
 		miningAnimationSeen = false;
 		lastMiningAnimationAt = 0;
@@ -847,6 +849,7 @@ public final class MotherlodeMinerScript extends Script
 				? BankStage.WITHDRAW
 				: BankStage.DEPOSIT;
 			actionAttempts = 0;
+			hammerHovered = false;
 		}
 
 		if (input.isBusy())
@@ -908,6 +911,7 @@ public final class MotherlodeMinerScript extends Script
 				{
 					bankStage = BankStage.WITHDRAW;
 					actionAttempts = 0;
+					hammerHovered = false;
 					cooldown = 1;
 					return;
 				}
@@ -972,6 +976,26 @@ public final class MotherlodeMinerScript extends Script
 					actionAttempts = 0;
 					cooldown = 1;
 					setStatus("Making room for the hammer");
+					return;
+				}
+
+				// Walk the mouse over to the hammer slot first so the
+				// withdrawal is visible, then send the deterministic action
+				// once the pointer has actually arrived.
+				Widget hammer = input.findBankItemWidget(ItemID.HAMMER);
+				if (hammer != null && !hammerHovered)
+				{
+					if (!input.isBusy() && input.hover(hammer))
+					{
+						hammerHovered = true;
+					}
+					setStatus("Moving mouse to the hammer");
+					return;
+				}
+
+				if (hammerHovered && input.isBusy())
+				{
+					setStatus("Moving mouse to the hammer");
 					return;
 				}
 
