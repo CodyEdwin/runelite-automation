@@ -823,18 +823,35 @@ public final class MotherlodeMinerScript extends Script
 					return;
 				}
 
+				if (++actionAttempts > ACTION_ATTEMPTS)
+				{
+					hammerUnavailable = true;
+					bankStage = BankStage.LEAVE;
+					return;
+				}
+
+				// Pay-dirt cannot be stored in the bank, so drop one to
+				// free a slot for the hammer.
+				if (inventory.countItem(ItemID.PAYDIRT) > 0)
+				{
+					if (dropOnePayDirt(context))
+					{
+						cooldown = CLICK_COOLDOWN;
+					}
+					else
+					{
+						cooldown = 1;
+					}
+					setStatus("Dropping pay-dirt to make room for the hammer");
+					return;
+				}
+
+				// No pay-dirt left: the inventory is full of bankable ores.
 				Widget deposit = context.getTargets().findWidget(InterfaceID.Bankmain.DEPOSITINV).orElse(null);
 				if (deposit == null)
 				{
 					cooldown = 1;
 					setStatus("Waiting for bank");
-					return;
-				}
-
-				if (++actionAttempts > ACTION_ATTEMPTS)
-				{
-					hammerUnavailable = true;
-					bankStage = BankStage.LEAVE;
 					return;
 				}
 
