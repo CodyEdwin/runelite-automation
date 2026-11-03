@@ -620,6 +620,21 @@ public final class MotherlodeMinerScript extends Script
 			return;
 		}
 
+		// Drop exactly one pay-dirt before heading to the bank for a hammer:
+		// pay-dirt cannot be banked, so this is the only way to free a slot.
+		Inventory inventory = context.getInventory();
+		if (bankPurpose == BankPurpose.HAMMER && inventory.getEmptySlots() == 0
+			&& inventory.countItem(ItemID.PAYDIRT) > 0)
+		{
+			GameInput input = context.getInput();
+			if (!input.isBusy() && dropOnePayDirt(context))
+			{
+				cooldown = 1;
+			}
+			setStatus("Dropping pay-dirt to make room for the hammer");
+			return;
+		}
+
 		TileObject chest = context.getTargets().findTileObject(BANK_CHEST_ID, OBJECT_REACH + 3).orElse(null);
 		if (chest != null && location.distanceTo(chest.getWorldLocation()) <= OBJECT_REACH)
 		{
