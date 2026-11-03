@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2018, Tomas Slusny <slusnucky@gmail.com>
+ * Copyright (c) 2019, Tomas Slusny <slusnucky@gmail.com>
+ * Copyright (c) 2021, Jonathan Rousseau <https://github.com/JoRouss>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -22,18 +23,22 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-package net.runelite.api.events;
+package net.runelite.client.plugins.party.data;
 
-import lombok.Value;
+import java.awt.Color;
+import lombok.Getter;
+import lombok.RequiredArgsConstructor;
+import lombok.Setter;
+import net.runelite.client.ui.overlay.components.PanelComponent;
+import net.runelite.client.ui.overlay.worldmap.WorldMapPoint;
 
-/**
- * An event where the client has joined or left a friends chat.
- */
-@Value
-public class FriendsChatChanged
+@Setter
+@Getter
+@RequiredArgsConstructor
+public class PartyMemberData
 {
-	/**
-	 * Whether or not the client is now in a friends chat.
-	 */
-	private boolean joined;
+	private final long memberId;
+	private final WorldMapPoint worldMapPoint;
+	private final PanelComponent panel = new PanelComponent();
+	private Color color = Color.WHITE;
 }

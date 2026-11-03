@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, Tomas Slusny <slusnucky@gmail.com>
+ * Copyright (c) 2026, Adam <Adam@sigterm.info>
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -22,29 +22,23 @@
  * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
  * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-package net.runelite.client.plugins.party.messages;
+package net.runelite.api.events;
 
-import lombok.ToString;
-import net.runelite.api.coords.WorldPoint;
-import net.runelite.client.party.messages.PartyMemberMessage;
+import lombok.Value;
 
-@ToString(onlyExplicitlyIncluded = true)
-public class LocationUpdate extends PartyMemberMessage
+/**
+ * An event fired when a full friends chat sync happens.
+ * This can happen from joining, or leaving, a friends chat, but also can happen
+ * any time the server resyncs the friend chat state. All previous state should be
+ * considered invalidated if this event fires.
+ * After this event fires, a {@link FriendsChatMemberJoined} will fire for each
+ * member if {@link FriendsChatSync#isSync()} is true.
+ */
+@Value
+public class FriendsChatSync
 {
-	private final int c;
-
-	public LocationUpdate(WorldPoint worldPoint)
-	{
-		c = (worldPoint.getPlane() << 28) | (worldPoint.getX() << 14) | (worldPoint.getY());
-	}
-
-	@ToString.Include
-	public WorldPoint getWorldPoint()
-	{
-		return new WorldPoint(
-			(c >> 14) & 0x3fff,
-			c & 0x3fff,
-			(c >> 28) & 3
-		);
-	}
+	/**
+	 * Is either a new join, or a sync for an existing channel.
+	 */
+	boolean sync;
 }
