@@ -84,6 +84,9 @@ public final class MotherlodeMinerScript extends Script
 	private static final int SEARCH_WAIT_TICKS = 3;
 	private static final int MAX_SEARCH_CLICKS = 12;
 	private static final long MINE_START_TIMEOUT_MS = 3000L;
+	private static final long MINE_ANIMATION_GAP_MS = 1500L;
+	private static final long CAMERA_NUDGE_MIN_MS = 30000L;
+	private static final long CAMERA_NUDGE_MAX_MS = 60000L;
 	private static final long WASH_TIMEOUT_MS = 15000L;
 
 	private enum State
@@ -128,6 +131,10 @@ public final class MotherlodeMinerScript extends Script
 
 	private boolean mining;
 	private boolean miningAnimationSeen;
+	private long lastMiningAnimationAt;
+	private long nextCameraNudgeAt;
+	private boolean cameraNudgeLeft;
+	private final java.util.Random random = new java.util.Random();
 	private TileObject currentVein;
 	private int miningLevel = -1;
 	private long lastMineClickAt;
@@ -163,6 +170,9 @@ public final class MotherlodeMinerScript extends Script
 		hammerUnavailable = false;
 		mining = false;
 		miningAnimationSeen = false;
+		lastMiningAnimationAt = 0;
+		nextCameraNudgeAt = System.currentTimeMillis() + CAMERA_NUDGE_MIN_MS + (long) random.nextInt((int) (CAMERA_NUDGE_MAX_MS - CAMERA_NUDGE_MIN_MS) + 1);
+		cameraNudgeLeft = random.nextBoolean();
 		currentVein = null;
 		miningLevel = -1;
 		lastMineClickAt = 0;
@@ -223,6 +233,11 @@ public final class MotherlodeMinerScript extends Script
 			return;
 		}
 
+		if (state == State.MINE && maybeNudgeCamera(context))
+		{
+			return;
+		}
+
 		switch (state)
 		{
 			case MINE:
@@ -258,9 +273,42 @@ public final class MotherlodeMinerScript extends Script
 		}
 	}
 
-	private void mine(ScriptContext context)
+	/**
+	 * Small left/right camera nudge every 30-60 seconds, but only while
+	 * actually mining. Keeps the view moving like a player and wakes up a
+	 * stalled mining animation.
+	 *
+	 * @return true if a nudge was started and the state machine should skip
+	 * this tick
+	 */
+	private boolean maybeNudgeCamera(ScriptContext context)
 	{
-		Inventory inventory = context.getInventory();
+		long now = System.currentTimeMillis();
+		if (now < nextCameraNudgeAt || !mining || state != State.MINE)
+		{
+			return false;
+		}
+
+		GameInput input = context.getInput();
+		if (input.isBusy() || input.isCameraBusy())
+		{
+			return false;
+		}
+
+		cameraNudgeLeft = !cameraNudgeLeft;
+		if (!input.nudgeCamera(cameraNudgeLeft, 220 + random.nextInt(300)))
+		{
+			return false;
+		}
+
+		nextCameraNudgeAt = now + CAMERA_NUDGE_MIN_MS
+			+ random.nextInt((int) (CAMERA_NUDGE_MAX_MS - CAMERA_NUDGE_MIN_MS) + 1);
+		setStatus("Adjusting the camera while mining");
+		return true;
+	}
+
+	private void mine(ScriptContext context)
+	{		Inventory inventory = context.getInventory();
 		TileObject brokenStrut = findBrokenStrut(context);
 		if (inventory.isFull()
 			|| (brokenStrut != null && inventory.getEmptySlots() <= 1))
@@ -291,21 +339,26 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		Player player = context.getPlayer();
+		long now = System.currentTimeMillis();
 		if (mining)
 		{
 			if (player != null && player.getAnimation() != -1)
 			{
 				miningAnimationSeen = true;
+				lastMiningAnimationAt = now;
 				setStatus("Mining pay-dirt");
 				return;
 			}
 
 			// Mining continues from a single click. The animation can briefly
-			// disappear between ores, so only click again once the vein is gone
-			// or the click never started an animation.
+			// disappear between ores, so only click again once it has been
+			// gone for a while, the vein is gone, or the click never started
+			// an animation. Without the gap check a depleted vein that still
+			// reports the same id would stall the script forever.
+			boolean animationRecent = miningAnimationSeen
+				&& now - lastMiningAnimationAt < MINE_ANIMATION_GAP_MS;
 			if (veinStillExists(context, currentVein)
-				&& (miningAnimationSeen
-					|| System.currentTimeMillis() - lastMineClickAt < MINE_START_TIMEOUT_MS))
+				&& (animationRecent || now - lastMineClickAt < MINE_START_TIMEOUT_MS))
 			{
 				setStatus("Mining pay-dirt");
 				return;
@@ -364,6 +417,12 @@ public final class MotherlodeMinerScript extends Script
 		{
 			input.turnCameraToward(vein.getWorldLocation());
 			setStatus("Turning camera to a vein");
+			return;
+		}
+
+		if (input.isCameraBusy())
+		{
+			setStatus("Adjusting the camera");
 			return;
 		}
 
