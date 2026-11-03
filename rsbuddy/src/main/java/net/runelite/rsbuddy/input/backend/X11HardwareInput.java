@@ -462,9 +462,21 @@ final class X11HardwareInput implements HardwareInput
 		}
 	}
 
-	interface Xtst extends Library
+	public interface Xtst extends Library
 	{
-		Xtst INSTANCE = Native.load("Xtst", Xtst.class);
+		Xtst INSTANCE = load();
+
+		static Xtst load()
+		{
+			try
+			{
+				return Native.load("Xtst", Xtst.class);
+			}
+			catch (Throwable ex)
+			{
+				return Native.load("libXtst.so.6", Xtst.class);
+			}
+		}
 
 		int XTestFakeKeyEvent(X11.Display display, int keycode, int press, long delay);
 
