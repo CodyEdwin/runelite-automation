@@ -34,6 +34,8 @@ import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseWheelEvent;
+import java.awt.geom.AffineTransform;
+import java.awt.geom.Point2D;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -57,6 +59,8 @@ import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.widgets.Widget;
+import net.runelite.rsbuddy.input.backend.HardwareInput;
+import net.runelite.rsbuddy.input.backend.HardwareInputFactory;
 
 /**
  * Sends mouse and keyboard input to the game canvas and invokes menu actions.
@@ -97,6 +101,7 @@ public final class GameInput
 
 	private final Client client;
 	private final Random random = new Random();
+	private final HardwareInput hardwareInput;
 
 	private Point lastMousePoint;
 	private Timer movementTimer;
@@ -135,6 +140,36 @@ public final class GameInput
 	public GameInput(Client client)
 	{
 		this.client = client;
+		this.hardwareInput = HardwareInputFactory.create();
+		if (hardwareInput != null)
+		{
+			log.info("Mouse and keyboard input: {}", hardwareInput.getName());
+		}
+		else
+		{
+			log.info("Mouse and keyboard input: in-process AWT events");
+		}
+	}
+
+	/**
+	 * @return true when pointer and keys go through the operating system
+	 * instead of synthetic AWT events
+	 */
+	public boolean isHardwareInput()
+	{
+		return hardwareInput != null;
+	}
+
+	/**
+	 * Releases every key and button held by the hardware backend and closes
+	 * it. Called when the plugin shuts down.
+	 */
+	public void shutdown()
+	{
+		if (hardwareInput != null)
+		{
+			hardwareInput.close();
+		}
 	}
 
 	/**
@@ -986,8 +1021,18 @@ public final class GameInput
 			return;
 		}
 
-		canvas.dispatchEvent(new MouseWheelEvent(canvas, MouseEvent.MOUSE_WHEEL,
-			System.currentTimeMillis(), 0, x, y, 0, false, MouseWheelEvent.WHEEL_UNIT_SCROLL, 3, 1));
+		if (hardwareInput != null)
+		{
+			Point screen = toScreenPoint(canvas, new Point(x, y));
+			hardwareInput.movePointer(screen.x, screen.y);
+			hardwareInput.scroll(1);
+			hardwareInput.flush();
+		}
+		else
+		{
+			canvas.dispatchEvent(new MouseWheelEvent(canvas, MouseEvent.MOUSE_WHEEL,
+				System.currentTimeMillis(), 0, x, y, 0, false, MouseWheelEvent.WHEEL_UNIT_SCROLL, 3, 1));
+		}
 
 		Timer timer = new Timer(80 + random.nextInt(70), event -> zoomStep(canvas, x, y, remaining - 1));
 		timer.setRepeats(false);
@@ -1166,6 +1211,13 @@ public final class GameInput
 		{
 			canvas.requestFocusInWindow();
 
+			if (hardwareInput != null)
+			{
+				dispatchKey(canvas, KeyEvent.KEY_PRESSED, keyCode);
+				dispatchKey(canvas, KeyEvent.KEY_RELEASED, keyCode);
+				return;
+			}
+
 			long when = System.currentTimeMillis();
 			dispatchKey(canvas, KeyEvent.KEY_PRESSED, keyCode);
 
@@ -1228,8 +1280,23 @@ public final class GameInput
 		}
 	}
 
-	private static void dispatchKey(Canvas canvas, int id, int keyCode)
+	private void dispatchKey(Canvas canvas, int id, int keyCode)
 	{
+		if (hardwareInput != null)
+		{
+			if (id == KeyEvent.KEY_PRESSED)
+			{
+				hardwareInput.pressKey(keyCode);
+			}
+			else if (id == KeyEvent.KEY_RELEASED)
+			{
+				hardwareInput.releaseKey(keyCode);
+			}
+
+			hardwareInput.flush();
+			return;
+		}
+
 		char keyChar = keyCode == KeyEvent.VK_SPACE ? ' ' : KeyEvent.CHAR_UNDEFINED;
 		canvas.dispatchEvent(new KeyEvent(canvas, id, System.currentTimeMillis(),
 			0, keyCode, keyChar));
@@ -1276,8 +1343,16 @@ public final class GameInput
 				}
 
 				char character = characters[index[0]++];
-				canvas.dispatchEvent(new KeyEvent(canvas, KeyEvent.KEY_TYPED,
-					System.currentTimeMillis(), 0, KeyEvent.VK_UNDEFINED, character));
+				if (hardwareInput != null)
+				{
+					hardwareInput.typeCharacter(character);
+					hardwareInput.flush();
+				}
+				else
+				{
+					canvas.dispatchEvent(new KeyEvent(canvas, KeyEvent.KEY_TYPED,
+						System.currentTimeMillis(), 0, KeyEvent.VK_UNDEFINED, character));
+				}
 				timer.setDelay(55 + random.nextInt(45));
 			});
 			timer.setInitialDelay(0);
@@ -1301,6 +1376,14 @@ public final class GameInput
 		SwingUtilities.invokeLater(() ->
 		{
 			canvas.requestFocusInWindow();
+
+			if (hardwareInput != null)
+			{
+				dispatchKey(canvas, KeyEvent.KEY_PRESSED, KeyEvent.VK_ENTER);
+				dispatchKey(canvas, KeyEvent.KEY_RELEASED, KeyEvent.VK_ENTER);
+				return;
+			}
+
 			long when = System.currentTimeMillis();
 			canvas.dispatchEvent(new KeyEvent(canvas, KeyEvent.KEY_PRESSED, when, 0,
 				KeyEvent.VK_ENTER, '\n'));
@@ -2064,6 +2147,10 @@ public final class GameInput
 	{
 		stopCamera();
 		stopMovement();
+		if (hardwareInput != null)
+		{
+			hardwareInput.releaseAll();
+		}
 		busy = false;
 		fastClicking = false;
 		pileActive = false;
@@ -3263,6 +3350,19 @@ public final class GameInput
 		pileActive = false;
 
 		Point start = lastMousePoint;
+		if (hardwareInput != null)
+		{
+			// Start from where the real cursor actually is, so the first
+			// movement does not jump from a stale position.
+			Point screen = hardwareInput.getPointerLocation();
+			Point actual = screen == null ? null : toCanvasPointFromScreen(canvas, screen);
+			if (actual != null && canvas.contains(actual))
+			{
+				start = actual;
+				lastMousePoint = actual;
+			}
+		}
+
 		if (start == null || !canvas.contains(start))
 		{
 			Dimension size = canvas.getSize();
@@ -3570,9 +3670,92 @@ public final class GameInput
 
 	private void dispatch(Canvas canvas, int id, Point point, int button, int clickCount, int modifiers)
 	{
+		if (hardwareInput != null)
+		{
+			Point screen = toScreenPoint(canvas, point);
+			switch (id)
+			{
+				case MouseEvent.MOUSE_MOVED:
+					hardwareInput.movePointer(screen.x, screen.y);
+					break;
+				case MouseEvent.MOUSE_PRESSED:
+					hardwareInput.movePointer(screen.x, screen.y);
+					hardwareInput.mouseButton(button, true);
+					break;
+				case MouseEvent.MOUSE_RELEASED:
+					hardwareInput.mouseButton(button, false);
+					break;
+				case MouseEvent.MOUSE_CLICKED:
+					// The X server generates the click from the press and
+					// release above, so there is nothing left to send.
+					break;
+				default:
+					break;
+			}
+
+			hardwareInput.flush();
+			return;
+		}
+
 		MouseEvent event = new MouseEvent(canvas, id, System.currentTimeMillis(), modifiers,
 			point.x, point.y, clickCount, false, button);
 		canvas.dispatchEvent(event);
+	}
+
+	/**
+	 * Converts a game canvas point to absolute screen pixels, which is what
+	 * the OS input backends need.
+	 */
+	private Point toScreenPoint(Canvas canvas, Point canvasPoint)
+	{
+		if (hardwareInput == null || canvas == null || canvasPoint == null)
+		{
+			return canvasPoint;
+		}
+
+		try
+		{
+			java.awt.Point origin = canvas.getLocationOnScreen();
+			java.awt.GraphicsConfiguration configuration = canvas.getGraphicsConfiguration();
+			AffineTransform transform = configuration == null
+				? new AffineTransform()
+				: configuration.getDefaultTransform();
+			Point2D device = transform.transform(
+				new Point2D.Double(origin.x + canvasPoint.x, origin.y + canvasPoint.y), null);
+			return new Point((int) Math.round(device.getX()), (int) Math.round(device.getY()));
+		}
+		catch (RuntimeException ex)
+		{
+			return canvasPoint;
+		}
+	}
+
+	/**
+	 * Converts absolute screen pixels back to game canvas coordinates.
+	 */
+	private Point toCanvasPointFromScreen(Canvas canvas, Point screenPoint)
+	{
+		if (canvas == null || screenPoint == null)
+		{
+			return null;
+		}
+
+		try
+		{
+			java.awt.Point origin = canvas.getLocationOnScreen();
+			java.awt.GraphicsConfiguration configuration = canvas.getGraphicsConfiguration();
+			AffineTransform transform = configuration == null
+				? new AffineTransform()
+				: configuration.getDefaultTransform();
+			Point2D user = transform.inverseTransform(
+				new Point2D.Double(screenPoint.x, screenPoint.y), null);
+			return new Point((int) Math.round(user.getX() - origin.x),
+				(int) Math.round(user.getY() - origin.y));
+		}
+		catch (Exception ex)
+		{
+			return screenPoint;
+		}
 	}
 
 	private Point toCanvasPoint(Point gamePoint)

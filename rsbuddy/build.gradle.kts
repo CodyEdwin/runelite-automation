@@ -10,6 +10,9 @@ dependencies {
     compileOnly(libs.javax.inject)
     compileOnly(libs.slf4j.api)
     compileOnly(libs.findbugs)
+    // JNA ships with the RuneLite client and is used for X11/XTest hardware input.
+    compileOnly(libs.jna.core)
+    compileOnly(libs.jna.platform)
 
     testImplementation(libs.junit)
 }

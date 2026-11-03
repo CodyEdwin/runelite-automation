@@ -230,6 +230,11 @@ public class TestPlugin extends Plugin
 		overlayManager.remove(xpLoggerOverlay);
 		overlayManager.remove(mouseOverlay);
 		mouseManager.unregisterMouseListener(mouseOverlay);
+		if (input != null)
+		{
+			input.reset();
+			input.shutdown();
+		}
 		input = null;
 		log.info("RSBuddy stopped");
 	}
