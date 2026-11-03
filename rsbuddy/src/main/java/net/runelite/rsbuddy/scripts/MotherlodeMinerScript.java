@@ -659,7 +659,7 @@ public final class MotherlodeMinerScript extends Script
 		// Never open the bank for a hammer with a full inventory: pay-dirt
 		// cannot be banked, so drop one here first and only then click the
 		// chest. A full inventory of ores is fine because those deposit.
-		if (bank == null && bankPurpose == BankPurpose.HAMMER
+		if (bank == null && bankStage == null && bankPurpose == BankPurpose.HAMMER
 			&& inventory.getEmptySlots() == 0 && inventory.countItem(ItemID.PAYDIRT) > 0)
 		{
 			if (!input.isBusy() && dropOnePayDirt(context))
