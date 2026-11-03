@@ -726,7 +726,10 @@ public final class MotherlodeMinerScript extends Script
 
 				// Move the mouse onto the chest and click it like a player
 				// would, instead of running the action invisibly.
-				clicked = input.click(chest);
+				// Run the chest's exact Use/Bank action instead of a raw
+				// left click. A left click can land on another object that
+				// overlaps the chest's clickbox and walk or mine instead.
+				clicked = input.invokeObjectAction(chest, "Use", "Bank");
 			}
 			else
 			{
@@ -835,8 +838,11 @@ public final class MotherlodeMinerScript extends Script
 				// Move the mouse to the hammer's bank slot and click it, so the
 				// withdrawal is visible like a player's. Fall back to the slot
 				// action only when the item is not in the open tab.
-				boolean withdrew = input.clickBankItem(ItemID.HAMMER)
-					|| input.withdrawBankItem(ItemID.HAMMER, "Withdraw-1");
+				// Withdraw by item id and bank slot. The old physical
+				// click used the first widget that reported the hammer id,
+				// which could be a stale or off-tab slot and click the
+				// wrong item.
+				boolean withdrew = input.withdrawBankItem(ItemID.HAMMER, "Withdraw-1");
 				if (withdrew)
 				{
 					++actionAttempts;
