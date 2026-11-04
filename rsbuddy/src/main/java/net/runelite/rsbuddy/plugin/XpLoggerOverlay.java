@@ -109,7 +109,7 @@ public class XpLoggerOverlay extends Overlay
 		{
 			session.actions++;
 			session.actionXp += xp - session.statXp;
-			fx.pulse(skill.getName());
+			fx.pulse(skill.getName(), xp - session.statXp);
 		}
 		session.statXp = xp;
 	}

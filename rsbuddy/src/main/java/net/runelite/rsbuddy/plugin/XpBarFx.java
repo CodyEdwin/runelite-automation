@@ -28,6 +28,8 @@ import java.awt.AlphaComposite;
 import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Composite;
+import java.awt.Font;
+import java.awt.FontMetrics;
 import java.awt.GradientPaint;
 import java.awt.Graphics2D;
 import java.awt.MultipleGradientPaint;
@@ -40,6 +42,7 @@ import java.awt.geom.Ellipse2D;
 import java.awt.geom.Line2D;
 import java.awt.geom.RoundRectangle2D;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -69,11 +72,89 @@ public final class XpBarFx
 	private static final long SWEEP_NANOS = 380_000_000L;
 	private static final long FORGET_NANOS = 30_000_000_000L;
 
-	/** Fiery orange, used when a bar has no colour of its own. */
-	public static final Color DEFAULT_COLOR = new Color(255, 122, 24);
 
-	private static final Color TRACK = new Color(20, 15, 10, 230);
-	private static final Color TRACK_BORDER = new Color(92, 73, 49, 255);
+	private static final Color TRACK = new Color(8, 10, 18, 238);
+	private static final Color TRACK_BORDER = new Color(70, 82, 115, 210);
+	private static final Color TRACK_SHADOW = new Color(0, 0, 0, 170);
+	private static final Color TRACK_SHADOW_END = new Color(0, 0, 0, 0);
+	private static final Color TRACK_SHINE = new Color(255, 255, 255, 28);
+	private static final Color GLASS_TOP = new Color(255, 255, 255, 80);
+	private static final Color GLASS_END = new Color(255, 255, 255, 0);
+	private static final Color OUTLINE = new Color(6, 8, 16);
+	private static final int MAX_LABELS = 8;
+	private static final float LABEL_LIFE = 1.05f;
+
+	/** A bar's hand-tuned neon gradient: left end, right end, and the accent used by sparks, embers, glow and text. */
+	static final class Palette
+	{
+		final Color left;
+		final Color right;
+		final Color accent;
+		final Color hot;
+
+		Palette(int l, int r)
+		{
+			this.left = new Color(l);
+			this.right = new Color(r);
+			this.accent = mix(mix(left, right, 0.5f), Color.WHITE, 0.25f);
+			this.hot = mix(accent, Color.WHITE, 0.55f);
+		}
+	}
+
+	/** Default when a bar matches no skill: electric cyan to violet. */
+	static final Palette DEFAULT_PALETTE = new Palette(0x00E6FF, 0xAA3CFF);
+	private static final Map<String, Palette> PALETTES = new HashMap<>();
+
+	static
+	{
+		PALETTES.put("attack", new Palette(0xDC143C, 0xFF00AA));
+		PALETTES.put("strength", new Palette(0x78FF28, 0x00C878));
+		PALETTES.put("defence", new Palette(0x2878FF, 0x5A28FF));
+		PALETTES.put("ranged", new Palette(0x00C8AA, 0xAAFF3C));
+		PALETTES.put("prayer", new Palette(0xC8FAFF, 0x50C8FF));
+		PALETTES.put("magic", new Palette(0xA03CFF, 0x288CFF));
+		PALETTES.put("runecraft", new Palette(0xFFC828, 0xFF3CB4));
+		PALETTES.put("hitpoints", new Palette(0xFF2878, 0xFF143C));
+		PALETTES.put("crafting", new Palette(0xBE5AFF, 0xFF6ED2));
+		PALETTES.put("mining", new Palette(0x00E6FF, 0x285AFF));
+		PALETTES.put("smithing", new Palette(0x5A8CC8, 0x00F0FF));
+		PALETTES.put("fishing", new Palette(0x00FFDC, 0x0078FF));
+		PALETTES.put("cooking", new Palette(0xFF3CC8, 0x8C28FF));
+		PALETTES.put("firemaking", new Palette(0xFF8C00, 0xFF008C));
+		PALETTES.put("woodcutting", new Palette(0x96FF32, 0x00C8A0));
+		PALETTES.put("agility", new Palette(0x1E5AFF, 0x00E6FF));
+		PALETTES.put("herblore", new Palette(0x00DC6E, 0xB4FF3C));
+		PALETTES.put("thieving", new Palette(0xC83CFF, 0x5A00C8));
+		PALETTES.put("fletching", new Palette(0x00B4A0, 0x3CFFFF));
+		PALETTES.put("slayer", new Palette(0xDC003C, 0x8200FF));
+		PALETTES.put("farming", new Palette(0xC8FF00, 0x00BE5A));
+		PALETTES.put("construction", new Palette(0xFFD278, 0x00D2FF));
+		PALETTES.put("hunter", new Palette(0xAADC28, 0x00AAAA));
+		PALETTES.put("sailing", new Palette(0x00A0FF, 0x00FFC8));
+	}
+
+	/** @return the palette for a bar key: a skill name, or a label starting with one; else {@link #DEFAULT_PALETTE} */
+	static Palette paletteFor(String key)
+	{
+		if (key == null)
+		{
+			return DEFAULT_PALETTE;
+		}
+		String lower = key.toLowerCase(Locale.ROOT).trim();
+		Palette exact = PALETTES.get(lower);
+		if (exact != null)
+		{
+			return exact;
+		}
+		for (Map.Entry<String, Palette> entry : PALETTES.entrySet())
+		{
+			if (lower.startsWith(entry.getKey()))
+			{
+				return entry.getValue();
+			}
+		}
+		return DEFAULT_PALETTE;
+	}
 	private static final Color CLEAR = new Color(255, 255, 255, 0);
 	/** Pre-built composites for 0..1 alpha in 1/32 steps so the particle loops never allocate. */
 	private static final AlphaComposite[] ALPHA = new AlphaComposite[33];
@@ -109,12 +190,31 @@ public final class XpBarFx
 		boolean sweepRequested;
 		boolean sweepQueued;
 		int pendingBurst;
+		/** XP carried by the running sweep and by the one queued behind it. */
+		long sweepXp;
+		long queuedXp;
+		final Palette palette;
+
+		// Flying "+N xp" labels, pooled.
+		final float[] lx = new float[MAX_LABELS];
+		final float[] ly = new float[MAX_LABELS];
+		final float[] lvx = new float[MAX_LABELS];
+		final float[] lvy = new float[MAX_LABELS];
+		final float[] lage = new float[MAX_LABELS];
+		final String[] ltext = new String[MAX_LABELS];
+		int labels;
+
+		Bar(String key)
+		{
+			this.palette = paletteFor(key);
+		}
 	}
 
 	private final Map<String, Bar> bars = new HashMap<>();
 	private final RoundRectangle2D.Float round = new RoundRectangle2D.Float();
 	private final Line2D.Float line = new Line2D.Float();
 	private BasicStroke sparkStroke;
+	private Font labelFont;
 	private final Ellipse2D.Float dot = new Ellipse2D.Float();
 	private final int[] polyX = new int[4];
 	private final int[] polyY = new int[4];
@@ -131,7 +231,27 @@ public final class XpBarFx
 	 */
 	public void pulse(String key)
 	{
-		Bar bar = bars.computeIfAbsent(key, k -> new Bar());
+		pulse(key, 0);
+	}
+
+	/**
+	 * Same as {@link #pulse(String)}, and when the sweep arrives a "+N xp"
+	 * label flies off the end of the bar. Drops that come in during a sweep
+	 * are summed into the next sweep's label.
+	 *
+	 * @param xp the drop's XP (0 for no label)
+	 */
+	public void pulse(String key, long xp)
+	{
+		Bar bar = bars.computeIfAbsent(key, Bar::new);
+		if (bar.sweepAt != 0)
+		{
+			bar.queuedXp += xp;
+		}
+		else
+		{
+			bar.sweepXp += xp;
+		}
 		// The sheen sweeps to the end of the fill first; the flash, glow
 		// flare and spark burst fire when it arrives (see draw). A drop
 		// during a sweep queues one more sweep instead of restarting it.
@@ -161,7 +281,7 @@ public final class XpBarFx
 	 * @param w         full track width
 	 * @param h         bar thickness
 	 * @param progress  0..1 fill
-	 * @param color     bar colour (skill colour), or null for fiery orange
+	 * @param color     ignored: the colours come from the bar's palette ({@link #paletteFor}); kept for callers
 	 * @param now       {@link System#nanoTime()} for this frame
 	 * @param animate   false draws a plain gradient bar with no effects
 	 * @param intensity spark amount, 0 (none) .. 2 (double); 1 is the default
@@ -169,12 +289,14 @@ public final class XpBarFx
 	public void draw(Graphics2D g, String key, int x, int y, int w, int h, double progress, Color color,
 		long now, boolean animate, double intensity)
 	{
-		Bar bar = bars.computeIfAbsent(key, k -> new Bar());
+		Bar bar = bars.computeIfAbsent(key, Bar::new);
 		float dt = bar.lastNanos == 0 ? 0f : Math.min(0.05f, (now - bar.lastNanos) / 1e9f);
 		bar.lastNanos = now;
 
-		Color base = color == null ? DEFAULT_COLOR : color;
-		Color hot = mix(base, Color.WHITE, 0.6f);
+		// The bar's own neon palette; the caller's colour is no longer used.
+		Palette palette = bar.palette;
+		Color base = palette.accent;
+		Color hot = palette.hot;
 		Object oldAa = g.getRenderingHint(RenderingHints.KEY_ANTIALIASING);
 		Composite oldComposite = g.getComposite();
 		Paint oldPaint = g.getPaint();
@@ -184,8 +306,16 @@ public final class XpBarFx
 
 		float arc = Math.min(h, 14);
 		round.setRoundRect(x, y, w, h, arc, arc);
+		// Dark glassy track with an inner shadow along the top and a faint shine at the bottom.
 		g.setColor(TRACK);
 		g.fill(round);
+		Shape trackClip = g.getClip();
+		g.clip(round);
+		g.setPaint(new GradientPaint(x, y, TRACK_SHADOW, x, y + h * 0.55f, TRACK_SHADOW_END));
+		g.fillRect(x, y, w, h);
+		g.setColor(TRACK_SHINE);
+		g.fillRect(x, y + h - Math.max(1, h / 8), w, Math.max(1, h / 8));
+		g.setClip(trackClip);
 
 		float fill = (float) (w * Math.max(0, Math.min(1, progress)));
 		double t = now / 1e9;
@@ -194,9 +324,11 @@ public final class XpBarFx
 			round.setRoundRect(x, y, fill, h, arc, arc);
 			g.clip(round);
 
-			// Gradient body: dark at the bottom, hot at the top.
-			g.setPaint(new GradientPaint(x, y, hot, x, y + h, base.darker()));
+			// Neon gradient body, left to right across the full track, with a glassy top highlight.
+			g.setPaint(new GradientPaint(x, y, palette.left, x + w, y, palette.right));
 			g.fill(round);
+			g.setPaint(new GradientPaint(x, y, GLASS_TOP, x, y + h * 0.5f, GLASS_END));
+			g.fillRect(x, y, (int) Math.ceil(fill), (int) Math.ceil(h * 0.5f));
 
 			if (animate)
 			{
@@ -214,6 +346,12 @@ public final class XpBarFx
 						// Arrived at the end: flash, glow flare and spark burst.
 						bar.pulseAt = now;
 						bar.pendingBurst += 26;
+						if (bar.sweepXp > 0)
+						{
+							spawnLabel(bar, x + fill, y + h / 2f, "+" + String.format(Locale.ROOT, "%,d", bar.sweepXp) + " xp");
+						}
+						bar.sweepXp = bar.queuedXp;
+						bar.queuedXp = 0;
 						bar.sweepAt = bar.sweepQueued ? now : 0;
 						bar.sweepQueued = false;
 					}
@@ -256,6 +394,10 @@ public final class XpBarFx
 				drawEdgeGlow(g, x + fill, y + h / 2f, h, t, base, hot, glow);
 			}
 			drawSparks(g, bar, base, hot, Math.max(1f, h / 10f));
+		}
+		if (bar.labels > 0)
+		{
+			drawLabels(g, bar, dt, h);
 		}
 
 		g.setStroke(oldStroke);
@@ -391,6 +533,84 @@ public final class XpBarFx
 			g.draw(line);
 		}
 		g.setComposite(AlphaComposite.SrcOver);
+	}
+
+	private static void spawnLabel(Bar bar, float ex, float ey, String text)
+	{
+		if (bar.labels == MAX_LABELS)
+		{
+			return;
+		}
+		int i = bar.labels++;
+		bar.lx[i] = ex;
+		bar.ly[i] = ey;
+		bar.lvx[i] = 55f + 25f * ThreadLocalRandom.current().nextFloat();
+		bar.lvy[i] = -95f;
+		bar.lage[i] = 0f;
+		bar.ltext[i] = text;
+	}
+
+	/**
+	 * Flies each label up and out from the end of the bar on a slight arc,
+	 * growing a little then shrinking, and fading out. RuneLite clips overlays
+	 * to the whole canvas, not their own bounds, so labels can leave the overlay.
+	 */
+	private void drawLabels(Graphics2D g, Bar bar, float dt, int h)
+	{
+		Font previous = g.getFont();
+		int size = Math.max(16, Math.round(h * 1.35f));
+		if (labelFont == null || labelFont.getSize() != size)
+		{
+			labelFont = previous.deriveFont(Font.BOLD, (float) size);
+		}
+		g.setFont(labelFont);
+		FontMetrics metrics = g.getFontMetrics();
+		for (int i = 0; i < bar.labels; )
+		{
+			bar.lage[i] += dt;
+			float k = bar.lage[i] / LABEL_LIFE;
+			if (k >= 1f)
+			{
+				int last = --bar.labels;
+				bar.lx[i] = bar.lx[last];
+				bar.ly[i] = bar.ly[last];
+				bar.lvx[i] = bar.lvx[last];
+				bar.lvy[i] = bar.lvy[last];
+				bar.lage[i] = bar.lage[last];
+				bar.ltext[i] = bar.ltext[last];
+				bar.ltext[last] = null;
+				continue;
+			}
+			bar.lvy[i] += 70f * dt;
+			bar.lx[i] += bar.lvx[i] * dt;
+			bar.ly[i] += bar.lvy[i] * dt;
+			float scale = 0.85f + 0.45f * (float) Math.sin(Math.PI * Math.min(1f, k * 1.4f)) - 0.15f * k;
+			float alpha = k < 0.55f ? 1f : 1f - (k - 0.55f) / 0.45f;
+			String text = bar.ltext[i];
+			float tx = -metrics.stringWidth(text) / 2f;
+			float ty = metrics.getAscent() / 2f - 1;
+			g.translate(bar.lx[i], bar.ly[i]);
+			g.scale(scale, scale);
+			g.setComposite(alpha(alpha));
+			g.setColor(OUTLINE);
+			for (int dx = -1; dx <= 1; dx++)
+			{
+				for (int dy = -1; dy <= 1; dy++)
+				{
+					if (dx != 0 || dy != 0)
+					{
+						g.drawString(text, tx + dx * 1.5f, ty + dy * 1.5f);
+					}
+				}
+			}
+			g.setColor(bar.palette.hot);
+			g.drawString(text, tx, ty);
+			g.scale(1 / scale, 1 / scale);
+			g.translate(-bar.lx[i], -bar.ly[i]);
+			i++;
+		}
+		g.setComposite(AlphaComposite.SrcOver);
+		g.setFont(previous);
 	}
 
 	private void forgetStale(long now)
