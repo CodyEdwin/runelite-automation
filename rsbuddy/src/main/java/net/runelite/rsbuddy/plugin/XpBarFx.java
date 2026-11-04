@@ -65,6 +65,8 @@ public final class XpBarFx
 	private static final int EMBERS = 14;
 	private static final float GRAVITY = 260f;
 	private static final long PULSE_NANOS = 650_000_000L;
+	/** How long the white sheen takes to run from the left edge to the end of the fill. */
+	private static final long SWEEP_NANOS = 380_000_000L;
 	private static final long FORGET_NANOS = 30_000_000_000L;
 
 	/** Fiery orange, used when a bar has no colour of its own. */
@@ -101,6 +103,11 @@ public final class XpBarFx
 		int alive;
 		long lastNanos;
 		long pulseAt;
+		/** Start of the running sheen sweep, 0 when none. */
+		long sweepAt;
+		/** A drop arrived (or arrived again mid-sweep) and needs a sweep. */
+		boolean sweepRequested;
+		boolean sweepQueued;
 		int pendingBurst;
 	}
 
@@ -117,15 +124,25 @@ public final class XpBarFx
 	private final Color[] sheenColors = {CLEAR, new Color(255, 255, 255, 110), CLEAR};
 
 	/**
-	 * Flashes the bar and fires a burst of sparks (call on an XP drop).
+	 * Starts an XP-drop sweep: the white sheen runs to the end of the fill, then
+	 * the flash, glow flare and spark burst fire there.
 	 *
 	 * @param key the same key passed to {@link #draw}
 	 */
 	public void pulse(String key)
 	{
 		Bar bar = bars.computeIfAbsent(key, k -> new Bar());
-		bar.pulseAt = System.nanoTime();
-		bar.pendingBurst += 26;
+		// The sheen sweeps to the end of the fill first; the flash, glow
+		// flare and spark burst fire when it arrives (see draw). A drop
+		// during a sweep queues one more sweep instead of restarting it.
+		if (bar.sweepAt != 0)
+		{
+			bar.sweepQueued = true;
+		}
+		else
+		{
+			bar.sweepRequested = true;
+		}
 	}
 
 	/** Drops all bar state (overlay hidden or logged out). */
@@ -184,7 +201,28 @@ public final class XpBarFx
 			if (animate)
 			{
 				drawStripes(g, x, y, fill, h, t, hot);
-				drawSheen(g, x, y, w, h, t);
+				if (bar.sweepRequested)
+				{
+					bar.sweepRequested = false;
+					bar.sweepAt = now;
+				}
+				if (bar.sweepAt != 0)
+				{
+					float k = (now - bar.sweepAt) / (float) SWEEP_NANOS;
+					if (k >= 1f)
+					{
+						// Arrived at the end: flash, glow flare and spark burst.
+						bar.pulseAt = now;
+						bar.pendingBurst += 26;
+						bar.sweepAt = bar.sweepQueued ? now : 0;
+						bar.sweepQueued = false;
+					}
+					else
+					{
+						float eased = 1f - (1f - k) * (1f - k) * (1f - k);
+						drawSheen(g, x, y, h, x + eased * fill);
+					}
+				}
 				drawEmbers(g, x, y, fill, h, t, hot);
 			}
 
@@ -192,7 +230,7 @@ public final class XpBarFx
 			if (animate && bar.pulseAt != 0 && sincePulse < PULSE_NANOS)
 			{
 				float a = 1f - sincePulse / (float) PULSE_NANOS;
-				g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.55f * a * a));
+				g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.4f * a * a));
 				g.setColor(Color.WHITE);
 				g.fill(round);
 				g.setComposite(oldComposite);
@@ -244,11 +282,11 @@ public final class XpBarFx
 		g.setComposite(AlphaComposite.SrcOver);
 	}
 
-	private void drawSheen(Graphics2D g, int x, int y, int w, int h, double t)
+	/** Draws the white sheen with its bright front at {@code head}. */
+	private void drawSheen(Graphics2D g, int x, int y, int h, float head)
 	{
-		double phase = (t % 1.9) / 1.9;
 		float width = Math.max(30, h * 2.5f);
-		float sx = (float) (x - width + (w + width * 2) * phase);
+		float sx = head - width / 2f;
 		g.setPaint(new java.awt.LinearGradientPaint(sx, y, sx + width, y + h * 0.4f, sheenStops, sheenColors,
 			MultipleGradientPaint.CycleMethod.NO_CYCLE));
 		g.fillRect((int) sx, y, (int) width + 1, h);
