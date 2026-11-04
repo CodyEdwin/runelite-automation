@@ -230,6 +230,10 @@ public final class MotherlodeMinerScript extends Script
 	private final boolean upstairs;
 	private final boolean dragonSpec;
 	private long lastActionAt;
+	private Point aimTarget;
+	private boolean coverMiss;
+	/** Object being hovered for a verified click; its centre is followed each frame. */
+	private TileObject verifyObject;
 	private final java.util.Set<String> menuDumped = new java.util.HashSet<>();
 	private long fastReadyAt;
 	private String lastAction = "start";
@@ -475,6 +479,24 @@ public final class MotherlodeMinerScript extends Script
 				return;
 			}
 			boolean trigger;
+			if (verifyHovered && verifyObject != null)
+			{
+				Shape area = input.objectHull(verifyObject);
+				Point mouse = input.getMouseLocation();
+				if (area != null && mouse != null && !area.contains(mouse))
+				{
+					// The scene shifted after the move (camera settling):
+					// glide the end of the path onto the live centre rather
+					// than a second hop.
+					Point centre = input.objectCenter(verifyObject);
+					if (centre != null)
+					{
+						input.follow(centre);
+						fastReadyAt = 0;
+						return;
+					}
+				}
+			}
 			if (verifyHovered)
 			{
 				long now = System.currentTimeMillis();
@@ -1403,10 +1425,16 @@ public final class MotherlodeMinerScript extends Script
 			// First aim at the dead centre; after a miss try another point
 			// inside the clickable model (the centre can sit on a part that
 			// another object covers).
-			boolean moved = verifyMisses == 0 ? input.hoverCenter(object) : input.hover(object);
+			// One move to the centre of the clickable area (the same shape
+			// the check uses). A miss on the option only (something covers
+			// the centre) tries another point inside it on the next aim.
+			aimTarget = coverMiss ? null : input.objectCenter(object);
+			boolean moved = aimTarget != null ? input.moveTo(aimTarget) : input.hover(object);
+			coverMiss = false;
 			if (moved)
 			{
 				verifyHovered = true;
+				verifyObject = object;
 			}
 			else
 			{
@@ -1423,6 +1451,8 @@ public final class MotherlodeMinerScript extends Script
 			return false;
 		}
 		verifyHovered = false;
+		verifyObject = null;
+		input.follow(null);
 
 		MenuEntry entry = input.getLeftClickEntry();
 		String option = entry == null ? "" : GameInput.plainText(entry.getOption()).toLowerCase(Locale.ROOT);
@@ -1431,9 +1461,14 @@ public final class MotherlodeMinerScript extends Script
 		Point center = input.objectCenter(object);
 		Shape hull = input.objectHull(object);
 		boolean onHull = mouse != null && hull != null && hull.contains(mouse);
-		// While running the centre slides, so being on the hull is enough.
-		boolean centred = mouse != null && center != null
-			&& (mouse.distance(center) <= CENTER_TOLERANCE_PX || isMoving(context) || verifyMisses > 0);
+		// On the clickable area with the right option is enough; a strict
+		// distance-to-centre rule only caused a second visible hop when the
+		// scene shifted a frame after arrival.
+		boolean centred = onHull;
+		log.info("[MotherlodeMiner] aim: target {} -> arrived {}, centre now {}, re-aim={}", key == null ? "" : key
+			+ " " + (aimTarget == null ? "-" : aimTarget.x + "," + aimTarget.y),
+			mouse == null ? "-" : mouse.x + "," + mouse.y, center == null ? "-" : center.x + "," + center.y,
+			onHull ? "no" : "yes");
 		boolean optionOk = target.contains(targetWord);
 		boolean prefixOk = false;
 		for (String prefix : optionPrefixes)
@@ -1455,6 +1490,7 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		++verifyMisses;
+		coverMiss = onHull;
 		if (menuDumped.add(key))
 		{
 			// Once per start and target: the full menu ordering, to check
@@ -1657,17 +1693,25 @@ public final class MotherlodeMinerScript extends Script
 			}
 			log.info("[MotherlodeMiner] banked, sack empty -> back to mining");
 
+			// Sack empty: leave the open bank straight for the ladder / veins
+			// (minimap walk; the bank closes itself). Previously the ladder
+			// counted as on screen behind the bank, and the verified click
+			// refuses while the bank is open, so it sat in the bank.
+			log.info("[MotherlodeMiner] last deposit done, sack empty -> walking to the {} with the bank open",
+				upstairs ? "ladder" : "veins");
 			if (upstairs)
 			{
 				upstairsLoads = 0;
 				climbAttempts = 0;
 				state = State.CLIMB_UP;
 				setStatus("Walking back to the ladder");
+				climbUp(context);
 			}
 			else
 			{
 				state = State.WALK_TO_VEIN;
 				setStatus("Walking back to the veins");
+				walkToVein(context);
 			}
 			return;
 		}
@@ -2583,7 +2627,10 @@ public final class MotherlodeMinerScript extends Script
 	 */
 	private static boolean clickableOnScreen(ScriptContext context, TileObject object)
 	{
-		return object != null && context.getInput().objectCenter(object) != null;
+		// With the bank open the game view is covered: walk by minimap
+		// instead (the bank closes itself once the walk starts).
+		return object != null && context.getInput().objectCenter(object) != null
+			&& !context.getTargets().findWidget(InterfaceID.Bankmain.UNIVERSE).isPresent();
 	}
 
 	private static WorldPoint onPlayerPlane(ScriptContext context, WorldPoint point)
