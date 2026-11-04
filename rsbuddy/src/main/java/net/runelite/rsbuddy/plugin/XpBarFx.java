@@ -245,11 +245,16 @@ public final class XpBarFx
 
 		if (animate && fill >= 1f)
 		{
-			// Subtle glow when idle, flaring up with the XP-drop flash.
+			updateSparks(bar, x + fill, y, h, dt, intensity);
+			// Glow only while the spark burst is flying: full when it fires,
+			// fading with the flash and the live sparks, zero otherwise.
 			long since = now - bar.pulseAt;
 			float flare = bar.pulseAt != 0 && since < PULSE_NANOS ? 1f - since / (float) PULSE_NANOS : 0f;
-			drawEdgeGlow(g, x + fill, y + h / 2f, h, t, base, hot, 0.45f + 0.55f * flare);
-			updateSparks(bar, x + fill, y, h, dt, intensity);
+			float glow = Math.min(1f, Math.max(flare, bar.alive / 26f));
+			if (glow > 0.01f)
+			{
+				drawEdgeGlow(g, x + fill, y + h / 2f, h, t, base, hot, glow);
+			}
 			drawSparks(g, bar, base, hot, Math.max(1f, h / 10f));
 		}
 
