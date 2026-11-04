@@ -24,16 +24,25 @@
  */
 package net.runelite.rsbuddy.scripts;
 
+import java.awt.Point;
 import java.awt.event.KeyEvent;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Locale;
 import net.runelite.api.Item;
+import net.runelite.api.MenuEntry;
+import net.runelite.api.ObjectComposition;
+import net.runelite.api.Perspective;
 import net.runelite.api.Player;
 import net.runelite.api.Skill;
 import net.runelite.api.TileObject;
+import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.AnimationID;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.ItemID;
 import net.runelite.api.gameval.ObjectID;
+import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.rsbuddy.input.GameInput;
 import net.runelite.rsbuddy.inventory.Inventory;
@@ -71,15 +80,56 @@ public final class MotherlodeMinerScript extends Script
 	private static final WorldPoint STRUT_WEST = new WorldPoint(3742, 5663, 0);
 	private static final WorldPoint STRUT_EAST = new WorldPoint(3742, 5669, 0);
 
+	private static final WorldPoint UPSTAIRS_VEIN_AREA = new WorldPoint(3760, 5673, 1);
+	private static final WorldPoint UPSTAIRS_HOPPER_AREA = new WorldPoint(3755, 5677, 1);
+	private static final WorldPoint LADDER_UP_AREA = new WorldPoint(3755, 5673, 0);
+	private static final WorldPoint LADDER_DOWN_AREA = new WorldPoint(3755, 5674, 1);
+	private static final WorldPoint CRATE_AREA = new WorldPoint(3752, 5674, 0);
+	private static final WorldPoint[] UPSTAIRS_VEIN_TILES = {
+		new WorldPoint(3761, 5674, 1),
+		new WorldPoint(3762, 5673, 1),
+		new WorldPoint(3759, 5674, 1),
+		new WorldPoint(3760, 5674, 1),
+		new WorldPoint(3762, 5672, 1),
+		new WorldPoint(3762, 5671, 1),
+		new WorldPoint(3762, 5670, 1),
+		new WorldPoint(3758, 5675, 1)
+	};
+	private static final int[] LADDER_UP_IDS = {
+		ObjectID.MOTHERLODE_LADDER_BOTTOM,
+		ObjectID.MOTHERLODE_LADDER_BOTTOM_ACTIVE,
+		ObjectID.MOTHERLODE_LADDER_BOTTOM_INACTIVE
+	};
+	private static final int[] LADDER_DOWN_IDS = {
+		ObjectID.MOTHERLODE_LADDER_TOP,
+		ObjectID.MOTHERLODE_LADDER_TOP_ACTIVE,
+		ObjectID.MOTHERLODE_LADDER_TOP_INACTIVE
+	};
+	private static final String[] CLIMB_UP_ACTIONS = {"Climb-up", "Climb up", "Climb"};
+	private static final String[] CLIMB_DOWN_ACTIONS = {"Climb-down", "Climb down", "Climb"};
+	private static final int CRATE_ID = 357;
+	// Same values the RuneLite Motherlode plugin uses for the sack HUD.
+	private static final int SACK_SIZE = 108;
+	private static final int SACK_LARGE_SIZE = 189;
+	// The upper floor is a bridge inside the cave. Its tiles sit around
+	// -470 to -700, while the lower floor is around -120 to -210. The
+	// ladder-top tile itself is -488, so -490 from the upstream plugin
+	// would misread the landing tile as downstairs.
+	private static final int UPPER_FLOOR_HEIGHT = -460;
+	private static final int LADDER_SEARCH_RADIUS = 4;
+	private static final int CLIMB_WAIT_TICKS = 5;
+
 	private static final int STRUT_BROKEN_ID = ObjectID.MOTHERLODE_WHEEL_STRUT_BROKEN;
 	private static final int STRUT_RADIUS = 2;
 	private static final int STRUT_REACH = 4;
 
 	private static final int VEIN_RADIUS = 8;
 	private static final int WALK_STOP_DISTANCE = 2;
+	// Stand beside the hopper instead of a couple of tiles away.
+	private static final int HOPPER_STOP_DISTANCE = 1;
 	private static final int OBJECT_REACH = 5;
 	private static final int VEIN_WALK_DISTANCE = 4;
-	private static final int CLICK_COOLDOWN = 2;
+	private static final int CLICK_COOLDOWN = 1;
 	private static final int ACTION_ATTEMPTS = 8;
 	private static final int SEARCH_WAIT_TICKS = 3;
 	private static final int MAX_SEARCH_CLICKS = 12;
@@ -88,6 +138,9 @@ public final class MotherlodeMinerScript extends Script
 	private static final long CAMERA_NUDGE_MIN_MS = 30000L;
 	private static final long CAMERA_NUDGE_MAX_MS = 60000L;
 	private static final long WASH_TIMEOUT_MS = 15000L;
+	// Give the server a moment to remove the deposited pay-dirt from the
+	// inventory before the same load is clicked into the hopper twice.
+	private static final long DEPOSIT_SETTLE_MS = 1200L;
 
 	private enum State
 	{
@@ -100,6 +153,9 @@ public final class MotherlodeMinerScript extends Script
 		BANK,
 		WALK_TO_VEIN,
 		FIX_WHEEL,
+		CLIMB_UP,
+		CLIMB_DOWN,
+		SEARCH_CRATE,
 		HALTED
 	}
 
@@ -130,6 +186,20 @@ public final class MotherlodeMinerScript extends Script
 	private boolean chestHovered;
 	private boolean hammerUnavailable;
 	private boolean hammerHovered;
+	private boolean repairAfterDescent;
+	private boolean collectingSack;
+	private int crateAttempts;
+	private int climbAttempts;
+	private int climbWaitTicks;
+	private int upstairsLoads;
+	private int sackBase;
+	private boolean sackBaseInit;
+	private int depositedSinceEmpty;
+	private int lastLiveSack;
+	private int lastPayDirtCount;
+	private int sackContents;
+	private int sackCapacity = SACK_SIZE;
+	private final boolean upstairs;
 
 	private boolean mining;
 	private boolean miningAnimationSeen;
@@ -142,6 +212,7 @@ public final class MotherlodeMinerScript extends Script
 	private long lastMineClickAt;
 
 	private boolean depositClickSent;
+	private boolean sackKnownEmpty;
 	private boolean payDirtDeposited;
 	private long depositClickedAt;
 	private long washXpAtDeposit;
@@ -153,14 +224,24 @@ public final class MotherlodeMinerScript extends Script
 
 	public MotherlodeMinerScript()
 	{
+		this(false);
+	}
+
+	public MotherlodeMinerScript(boolean upstairs)
+	{
 		super("Motherlode Miner",
 			"Mines pay-dirt, deposits it at the hopper, searches the sack, and banks the ores.");
+		this.upstairs = upstairs;
 	}
 
 	@Override
 	protected void onStart()
 	{
-		state = State.MINE;
+		// Do not read the player or varbits here: onStart runs on the panel
+		// thread, and the client only allows those calls from the client
+		// thread. CLIMB_UP resolves to MINE on the first game tick when the
+		// player is already upstairs.
+		state = upstairs ? State.CLIMB_UP : State.MINE;
 		bankStage = null;
 		bankPurpose = BankPurpose.DEPOSIT;
 		walker = null;
@@ -172,6 +253,19 @@ public final class MotherlodeMinerScript extends Script
 		chestHovered = false;
 		hammerUnavailable = false;
 		hammerHovered = false;
+		repairAfterDescent = false;
+		collectingSack = false;
+		crateAttempts = 0;
+		climbAttempts = 0;
+		climbWaitTicks = 0;
+		upstairsLoads = 0;
+		sackBase = 0;
+		sackBaseInit = false;
+		depositedSinceEmpty = 0;
+		lastLiveSack = 0;
+		lastPayDirtCount = 0;
+		sackContents = 0;
+		sackCapacity = SACK_SIZE;
 		mining = false;
 		miningAnimationSeen = false;
 		lastMiningAnimationAt = 0;
@@ -181,6 +275,7 @@ public final class MotherlodeMinerScript extends Script
 		miningLevel = -1;
 		lastMineClickAt = 0;
 		depositClickSent = false;
+		sackKnownEmpty = false;
 		payDirtDeposited = false;
 		depositClickedAt = 0;
 		washXpAtDeposit = 0;
@@ -202,6 +297,31 @@ public final class MotherlodeMinerScript extends Script
 			setStatus("Waiting for login");
 			return;
 		}
+
+		// The same varbits the RuneLite Motherlode plugin uses for its HUD.
+		// Reading the live value means pay-dirt left in the sack from an
+		// earlier session is counted instead of assumed to be zero.
+		int liveSack = context.getClient().getVarbitValue(VarbitID.MOTHERLODE_SACK_TRANSMIT);
+		if (liveSack > lastLiveSack)
+		{
+			// Fresh pay-dirt reached the sack, so it is no longer empty.
+			sackKnownEmpty = false;
+		}
+		lastLiveSack = liveSack;
+		sackCapacity = context.getClient().getVarbitValue(VarbitID.MOTHERLODE_BIGGERSACK) == 1
+			? SACK_LARGE_SIZE : SACK_SIZE;
+		if (!sackBaseInit)
+		{
+			sackBase = liveSack;
+			sackBaseInit = true;
+		}
+		// The sack counter only moves once pay-dirt has washed, so deposits
+		// still sitting in the hopper are invisible to it. Track them from
+		// the sack value seen when it was last emptied, otherwise the script
+		// keeps mining into a sack that is already full.
+		sackContents = isUpstairs(context)
+			? Math.min(sackCapacity, Math.max(liveSack, sackBase + depositedSinceEmpty))
+			: liveSack;
 
 		if (walker == null)
 		{
@@ -237,6 +357,21 @@ public final class MotherlodeMinerScript extends Script
 			return;
 		}
 
+		// Recover if a previous misread left an upper-floor state active
+		// while the player is still downstairs. Never mine the upper veins
+		// through the floor; climb the ladder first.
+		if (upstairs && needsUpperFloor(state) && !isUpstairs(context))
+		{
+			state = State.CLIMB_UP;
+			walker.reset();
+			climbAttempts = 0;
+			climbWaitTicks = 0;
+			mining = false;
+			miningAnimationSeen = false;
+			currentVein = null;
+			setStatus("Climbing up the ladder");
+		}
+
 		if (state == State.MINE && maybeNudgeCamera(context))
 		{
 			return;
@@ -270,6 +405,15 @@ public final class MotherlodeMinerScript extends Script
 				break;
 			case FIX_WHEEL:
 				fixWheel(context);
+				break;
+			case CLIMB_UP:
+				climbUp(context);
+				break;
+			case CLIMB_DOWN:
+				climbDown(context);
+				break;
+			case SEARCH_CRATE:
+				searchCrate(context);
 				break;
 			case HALTED:
 			default:
@@ -312,34 +456,76 @@ public final class MotherlodeMinerScript extends Script
 	}
 
 	private void mine(ScriptContext context)
-	{		Inventory inventory = context.getInventory();
-		TileObject brokenStrut = findBrokenStrut(context);
-		if (inventory.isFull()
-			|| (brokenStrut != null && inventory.getEmptySlots() <= 1))
+	{
+		Inventory inventory = context.getInventory();
+		if (upstairs)
 		{
-			if (brokenStrut != null)
+			int capacity = inventory.countItem(ItemID.PAYDIRT) + inventory.getEmptySlots();
+			// Only mine as much pay-dirt as the sack can still take, so a load
+			// never has to be split once the hopper is close to full.
+			int sackSpace = Math.max(0, sackCapacity - sackContents);
+			int target = Math.min(capacity, sackSpace);
+			if (inventory.isFull() || inventory.countItem(ItemID.PAYDIRT) >= target)
 			{
-				// Stop one slot early so the bank hammer fits without
-				// dropping any pay-dirt.
-				state = State.FIX_WHEEL;
+				// The upper hopper is within reach of every upper vein and
+				// always on screen, so deposit from where the player is
+				// standing instead of walking over to it first.
+				state = State.HOPPER;
 				walker.reset();
 				actionAttempts = 0;
-				wheelAttempts = 0;
+				depositClickSent = false;
 				mining = false;
 				miningAnimationSeen = false;
 				currentVein = null;
-				setStatus("Fixing the water wheels");
+				setStatus("Depositing pay-dirt");
 				return;
 			}
 
-			state = State.WALK_TO_HOPPER;
-			walker.reset();
-			actionAttempts = 0;
-			mining = false;
-			miningAnimationSeen = false;
-			currentVein = null;
-			setStatus("Walking to the hopper");
-			return;
+			// Keep depositing until the sack itself is full. Only then is a
+			// trip downstairs needed; a full inventory alone is not a reason
+			// to leave the upper level.
+			if (sackContents >= sackCapacity && !sackKnownEmpty)
+			{
+				state = State.CLIMB_DOWN;
+				climbAttempts = 0;
+				walker.reset();
+				mining = false;
+				miningAnimationSeen = false;
+				currentVein = null;
+				setStatus("Climbing down to empty the sack");
+				return;
+			}
+		}
+		else
+		{
+			TileObject brokenStrut = findBrokenStrut(context);
+			if (inventory.isFull()
+				|| (brokenStrut != null && inventory.getEmptySlots() <= 1))
+			{
+				if (brokenStrut != null)
+				{
+					// Stop one slot early so the bank hammer fits without
+					// dropping any pay-dirt.
+					state = State.FIX_WHEEL;
+					walker.reset();
+					actionAttempts = 0;
+					wheelAttempts = 0;
+					mining = false;
+					miningAnimationSeen = false;
+					currentVein = null;
+					setStatus("Fixing the water wheels");
+					return;
+				}
+
+				state = State.WALK_TO_HOPPER;
+				walker.reset();
+				actionAttempts = 0;
+				mining = false;
+				miningAnimationSeen = false;
+				currentVein = null;
+				setStatus("Walking to the hopper");
+				return;
+			}
 		}
 
 		Player player = context.getPlayer();
@@ -380,13 +566,16 @@ public final class MotherlodeMinerScript extends Script
 			return;
 		}
 
-		TileObject vein = findVein(context);
+		TileObject vein = upstairs ? findUpstairsVein(context) : findVein(context);
 		if (vein == null)
 		{
 			WorldPoint location = context.getPlayerLocation();
-			if (location != null && location.distanceTo(VEIN_AREA) > VEIN_WALK_DISTANCE)
+			WorldPoint area = upstairs
+				? onPlayerPlane(context, UPSTAIRS_VEIN_AREA)
+				: VEIN_AREA;
+			if (location != null && location.distanceTo(area) > VEIN_WALK_DISTANCE)
 			{
-				walker.walkTo(VEIN_AREA, true, WALK_STOP_DISTANCE);
+				walker.walkTo(area, true, WALK_STOP_DISTANCE);
 				setStatus("Walking to the veins");
 			}
 			else
@@ -397,7 +586,7 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		WorldPoint location = context.getPlayerLocation();
-		if (location != null && location.distanceTo(vein.getWorldLocation()) > VEIN_WALK_DISTANCE)
+		if (location != null && location.distanceTo2D(vein.getWorldLocation()) > VEIN_WALK_DISTANCE)
 		{
 			walker.walkTo(vein.getWorldLocation(), true, WALK_STOP_DISTANCE);
 			setStatus("Walking to a vein");
@@ -455,31 +644,119 @@ public final class MotherlodeMinerScript extends Script
 			return;
 		}
 
-		TileObject hopper = context.getTargets().findTileObject(HOPPER_ID, OBJECT_REACH + 2).orElse(null);
-		if (hopper != null && location.distanceTo(hopper.getWorldLocation()) <= WALK_STOP_DISTANCE)
+		WorldPoint area = upstairs
+			? onPlayerPlane(context, UPSTAIRS_HOPPER_AREA)
+			: HOPPER_AREA;
+		TileObject hopper = findObjectAt(context, HOPPER_ID, area, OBJECT_REACH + 2);
+		if (hopper != null)
 		{
-			state = State.HOPPER;
-			actionAttempts = 0;
-			depositClickSent = false;
-			setStatus("Depositing pay-dirt");
+			WorldPoint hopperLocation = hopper.getWorldLocation();
+			if (location.distanceTo2D(hopperLocation) <= HOPPER_STOP_DISTANCE)
+			{
+				state = State.HOPPER;
+				actionAttempts = 0;
+				depositClickSent = false;
+				setStatus("Depositing pay-dirt");
+				return;
+			}
+
+			// Walk to the hopper itself, not just the general area, so the
+			// player ends up beside it instead of stopping a few tiles short.
+			// The hopper tile is solid, so the path ends on the closest
+			// walkable tile next to it.
+			walker.walkTo(hopperLocation, true, HOPPER_STOP_DISTANCE);
+			setStatus("Walking to the hopper");
 			return;
 		}
 
-		walker.walkTo(HOPPER_AREA, true, WALK_STOP_DISTANCE);
+		walker.walkTo(area, true, HOPPER_STOP_DISTANCE);
 		setStatus("Walking to the hopper");
 	}
 
 	private void hopper(ScriptContext context)
 	{
 		Inventory inventory = context.getInventory();
+
+		// The sack is full: the hopper cannot take any more pay-dirt. Go
+		// downstairs and empty it, then come back up. This is the only
+		// reason to leave the upper level.
+		int carriedPayDirt = inventory.countItem(ItemID.PAYDIRT);
+		if (carriedPayDirt > 0 && sackContents >= sackCapacity && !sackKnownEmpty)
+		{
+			depositClickSent = false;
+			payDirtDeposited = false;
+			actionAttempts = 0;
+			searchClicks = 0;
+			walker.reset();
+			if (inventory.getEmptySlots() == 0)
+			{
+				// The sack has to be emptied, but the inventory is full of
+				// pay-dirt, so free one slot first (the search needs a place
+				// to put the ores).
+				if (dropOnePayDirt(context))
+				{
+					cooldown = CLICK_COOLDOWN;
+				}
+				setStatus("Dropping pay-dirt to empty the sack");
+			}
+			else if (upstairs)
+			{
+				state = State.CLIMB_DOWN;
+				climbAttempts = 0;
+				setStatus("Climbing down to empty the sack");
+			}
+			else
+			{
+				state = State.WALK_TO_SACK;
+				setStatus("Walking to the sack");
+			}
+			return;
+		}
+
 		if (inventory.countItem(ItemID.PAYDIRT) == 0)
 		{
+			if (depositClickSent)
+			{
+				depositedSinceEmpty += Math.max(0, lastPayDirtCount);
+				// Pay-dirt actually went into the hopper, so the sack is no
+				// longer empty.
+				sackKnownEmpty = false;
+			}
 			payDirtDeposited = depositClickSent;
-			state = State.WALK_TO_SACK;
 			walker.reset();
 			actionAttempts = 0;
 			searchClicks = 0;
-			setStatus("Walking to the sack");
+			if (upstairs)
+			{
+				++upstairsLoads;
+				if (sackContents >= sackCapacity)
+				{
+					// That deposit filled the sack. Go down and empty it
+					// instead of walking back to the veins first.
+					state = State.CLIMB_DOWN;
+					climbAttempts = 0;
+					setStatus("Climbing down to empty the sack");
+				}
+				else
+				{
+					state = State.WALK_TO_VEIN;
+					setStatus("Walking back to the veins");
+				}
+			}
+			else
+			{
+				state = State.WALK_TO_SACK;
+				setStatus("Walking to the sack");
+			}
+			return;
+		}
+
+		lastPayDirtCount = inventory.countItem(ItemID.PAYDIRT);
+
+		if (depositClickSent
+			&& System.currentTimeMillis() - depositClickedAt < DEPOSIT_SETTLE_MS)
+		{
+			setStatus("Depositing pay-dirt");
 			return;
 		}
 
@@ -488,19 +765,44 @@ public final class MotherlodeMinerScript extends Script
 			// The sack is probably too full to accept more pay-dirt. Go and
 			// empty it, then try the hopper again on a later trip.
 			payDirtDeposited = false;
-			state = State.WALK_TO_SACK;
 			walker.reset();
 			actionAttempts = 0;
 			searchClicks = 0;
-			setStatus("Walking to the sack");
+			if (upstairs)
+			{
+				// Only reached when clicking from the veins did not deposit
+				// anything, so close the gap instead of leaving the level.
+				state = State.WALK_TO_HOPPER;
+				setStatus("Walking closer to the hopper");
+			}
+			else
+			{
+				state = State.WALK_TO_SACK;
+				setStatus("Walking to the sack");
+			}
 			return;
 		}
 
-		TileObject hopper = context.getTargets().findTileObject(HOPPER_ID, OBJECT_REACH + 2).orElse(null);
+		WorldPoint location = context.getPlayerLocation();
+		WorldPoint area = upstairs
+			? onPlayerPlane(context, UPSTAIRS_HOPPER_AREA)
+			: HOPPER_AREA;
+		TileObject hopper = findObjectAt(context, HOPPER_ID, area, OBJECT_REACH + 2);
 		if (hopper == null)
 		{
 			state = State.WALK_TO_HOPPER;
 			setStatus("Looking for the hopper");
+			return;
+		}
+
+		// Upstairs the hopper is clicked from the veins; walking next to it
+		// first only wastes time. Downstairs, close the last few tiles.
+		WorldPoint hopperLocation = hopper.getWorldLocation();
+		if (!upstairs && location != null && hopperLocation != null
+			&& location.distanceTo2D(hopperLocation) > HOPPER_STOP_DISTANCE)
+		{
+			state = State.WALK_TO_HOPPER;
+			setStatus("Walking closer to the hopper");
 			return;
 		}
 
@@ -525,13 +827,13 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		input.stopCamera();
-		washXpAtDeposit = context.getClient().getSkillExperience(Skill.MINING);
-		depositClickedAt = System.currentTimeMillis();
 		++actionAttempts;
 
 		if (input.interact(hopper, "Deposit") || input.click(hopper))
 		{
 			depositClickSent = true;
+			washXpAtDeposit = context.getClient().getSkillExperience(Skill.MINING);
+			depositClickedAt = System.currentTimeMillis();
 			cooldown = CLICK_COOLDOWN;
 			setStatus("Depositing pay-dirt");
 		}
@@ -543,6 +845,14 @@ public final class MotherlodeMinerScript extends Script
 
 	private void walkToSack(ScriptContext context)
 	{
+		if (sackKnownEmpty)
+		{
+			// The sack was already emptied on this trip; do not walk back to
+			// it and search it again.
+			finishSackTrip(context, context.getInventory());
+			return;
+		}
+
 		WorldPoint location = context.getPlayerLocation();
 		if (location == null)
 		{
@@ -550,7 +860,7 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		TileObject sack = findSack(context);
-		if ((sack != null && location.distanceTo(sack.getWorldLocation()) <= WALK_STOP_DISTANCE)
+		if ((sack != null && location.distanceTo2D(sack.getWorldLocation()) <= WALK_STOP_DISTANCE)
 			|| location.distanceTo(SACK_AREA) <= WALK_STOP_DISTANCE)
 		{
 			state = State.SACK;
@@ -571,6 +881,12 @@ public final class MotherlodeMinerScript extends Script
 	{
 		Inventory inventory = context.getInventory();
 
+		if (sackKnownEmpty && searchClicks == 0)
+		{
+			finishSackTrip(context, inventory);
+			return;
+		}
+
 		if (searchWait > 0)
 		{
 			if (--searchWait > 0)
@@ -580,11 +896,37 @@ public final class MotherlodeMinerScript extends Script
 
 			if (countInventoryItems(inventory) > itemsBeforeSearch)
 			{
+				// Ores arrived. Take the rest of the sack too while there is
+				// room left: banking after every single click only means
+				// another trip down the ladder for the same sack.
+				if (sackContents > 0 && inventory.getEmptySlots() > 0)
+				{
+					searchMisses = 0;
+					searchClicks = 0;
+					cooldown = 1;
+					setStatus("Emptying the sack");
+					return;
+				}
+
+				if (sackContents <= 0)
+				{
+					sackKnownEmpty = true;
+				}
 				finishSackTrip(context, inventory);
 				return;
 			}
 
 			++searchMisses;
+			if (searchMisses >= 2)
+			{
+				// Two clicks in a row produced nothing, so the sack is out of
+				// ore. Bank what came out and go back up to mine instead of
+				// searching the empty sack over and over.
+				sackKnownEmpty = true;
+				collectingSack = false;
+				finishSackTrip(context, inventory);
+				return;
+			}
 		}
 
 		boolean xpGained = context.getClient().getSkillExperience(Skill.MINING) > washXpAtDeposit;
@@ -596,7 +938,26 @@ public final class MotherlodeMinerScript extends Script
 			return;
 		}
 
-		if (inventory.getEmptySlots() == 0 || searchClicks >= MAX_SEARCH_CLICKS)
+		if (inventory.getEmptySlots() == 0)
+		{
+			// A full pay-dirt inventory cannot hold the ores from the sack.
+			// Free one slot and try again; otherwise the trip would end
+			// without emptying the sack and immediately walk back here.
+			if (inventory.countItem(ItemID.PAYDIRT) > 0)
+			{
+				if (dropOnePayDirt(context))
+				{
+					cooldown = CLICK_COOLDOWN;
+				}
+				setStatus("Dropping pay-dirt to make room for ores");
+				return;
+			}
+
+			finishSackTrip(context, inventory);
+			return;
+		}
+
+		if (searchClicks >= MAX_SEARCH_CLICKS)
 		{
 			finishSackTrip(context, inventory);
 			return;
@@ -659,6 +1020,11 @@ public final class MotherlodeMinerScript extends Script
 	{
 		payDirtDeposited = false;
 		searchClicks = 0;
+		// The sack is emptied (or left with only what is still in it), so
+		// the local deposit count starts again from the live value.
+		sackBase = lastLiveSack;
+		depositedSinceEmpty = 0;
+		lastPayDirtCount = 0;
 		bankPurpose = BankPurpose.DEPOSIT;
 		if (hasBankableItems(inventory))
 		{
@@ -669,9 +1035,12 @@ public final class MotherlodeMinerScript extends Script
 		}
 		else
 		{
-			state = State.WALK_TO_VEIN;
+			state = upstairs ? State.CLIMB_UP : State.WALK_TO_VEIN;
 			walker.reset();
-			setStatus("Walking back to the veins");
+			upstairsLoads = 0;
+			collectingSack = false;
+			climbAttempts = 0;
+			setStatus(upstairs ? "Walking back to the ladder" : "Walking back to the veins");
 		}
 	}
 
@@ -699,7 +1068,7 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		TileObject chest = context.getTargets().findTileObject(BANK_CHEST_ID, OBJECT_REACH + 3).orElse(null);
-		if (chest != null && location.distanceTo(chest.getWorldLocation()) <= OBJECT_REACH)
+		if (chest != null && location.distanceTo2D(chest.getWorldLocation()) <= OBJECT_REACH)
 		{
 			state = State.BANK;
 			bankStage = null;
@@ -769,8 +1138,25 @@ public final class MotherlodeMinerScript extends Script
 				return;
 			}
 
-			state = State.WALK_TO_VEIN;
-			setStatus("Walking back to the veins");
+			if (collectingSack)
+			{
+				state = State.WALK_TO_SACK;
+				setStatus("Walking back to the sack");
+				return;
+			}
+
+			if (upstairs)
+			{
+				upstairsLoads = 0;
+				climbAttempts = 0;
+				state = State.CLIMB_UP;
+				setStatus("Walking back to the ladder");
+			}
+			else
+			{
+				state = State.WALK_TO_VEIN;
+				setStatus("Walking back to the veins");
+			}
 			return;
 		}
 
@@ -800,7 +1186,7 @@ public final class MotherlodeMinerScript extends Script
 			}
 
 			WorldPoint location = context.getPlayerLocation();
-			if (location != null && location.distanceTo(chest.getWorldLocation()) > OBJECT_REACH)
+			if (location != null && location.distanceTo2D(chest.getWorldLocation()) > OBJECT_REACH)
 			{
 				walker.walkTo(chest.getWorldLocation(), true, WALK_STOP_DISTANCE);
 				setStatus("Walking to the bank chest");
@@ -815,9 +1201,9 @@ public final class MotherlodeMinerScript extends Script
 				return;
 			}
 
-			// Glide the cursor onto the chest first so opening the bank is
-			// visible, then fire the exact Use/Bank action once the pointer
-			// has arrived.
+			// Glide the cursor onto the chest first, confirm the cursor is
+			// actually over the chest, then left click in place. This keeps the
+			// opening visible without a click landing on a nearby object.
 			if (!chestHovered)
 			{
 				if (!input.isBusy() && input.hover(chest))
@@ -828,21 +1214,27 @@ public final class MotherlodeMinerScript extends Script
 				return;
 			}
 
+			MenuEntry entry = input.getLeftClickEntry();
+			String option = entry == null
+				? "" : GameInput.plainText(entry.getOption()).toLowerCase(Locale.ROOT);
+			String target = entry == null
+				? "" : GameInput.plainText(entry.getTarget()).toLowerCase(Locale.ROOT);
+			boolean onChest = target.contains("bank chest")
+				&& (option.contains("use") || option.contains("bank"));
+
 			boolean clicked;
-			if (bankClicks < 3)
+			if (onChest)
 			{
-				++bankClicks;
-				// Run the chest's exact Use/Bank action instead of a raw
-				// left click. A left click can land on another object that
-				// overlaps the chest's clickbox and walk or mine instead.
-				clicked = input.invokeObjectAction(chest, "Use", "Bank");
+				Point mouse = input.getMouseLocation();
+				clicked = mouse != null && input.click(mouse);
+				chestHovered = false;
 			}
 			else
 			{
-				// Physical clicks keep missing; use the chest's menu action
+				// The cursor did not land on the chest; use its exact action
 				// so a bad camera angle cannot stall the trip.
-				clicked = input.interact(chest, "Use", "Bank")
-					|| input.invokeObjectAction(chest, "Use", "Bank");
+				chestHovered = false;
+				clicked = input.invokeObjectAction(chest, "Use", "Bank");
 			}
 
 			if (clicked)
@@ -1099,7 +1491,7 @@ public final class MotherlodeMinerScript extends Script
 			return;
 		}
 
-		if (location.distanceTo(strut.getWorldLocation()) > STRUT_REACH)
+		if (location.distanceTo2D(strut.getWorldLocation()) > STRUT_REACH)
 		{
 			walker.walkTo(strut.getWorldLocation(), true, WALK_STOP_DISTANCE);
 			setStatus("Walking to the broken water wheel");
@@ -1159,6 +1551,14 @@ public final class MotherlodeMinerScript extends Script
 		wheelAttempts = 0;
 		bankPurpose = BankPurpose.DEPOSIT;
 
+		if (repairAfterDescent)
+		{
+			repairAfterDescent = false;
+			state = State.WALK_TO_SACK;
+			setStatus("Walking to the sack");
+			return;
+		}
+
 		if (inventory.countItem(ItemID.PAYDIRT) > 0)
 		{
 			state = State.WALK_TO_HOPPER;
@@ -1214,12 +1614,12 @@ public final class MotherlodeMinerScript extends Script
 				}
 
 				WorldPoint objectLocation = object.getWorldLocation();
-				if (objectLocation == null || objectLocation.getPlane() != location.getPlane())
+				if (objectLocation == null)
 				{
 					continue;
 				}
 
-				int distance = objectLocation.distanceTo(location);
+				int distance = objectLocation.distanceTo2D(location);
 				if (distance < bestDistance)
 				{
 					bestDistance = distance;
@@ -1238,15 +1638,531 @@ public final class MotherlodeMinerScript extends Script
 			return;
 		}
 
-		if (location.distanceTo(VEIN_AREA) <= VEIN_WALK_DISTANCE || findVein(context) != null)
+		WorldPoint area = upstairs
+			? onPlayerPlane(context, UPSTAIRS_VEIN_AREA)
+			: VEIN_AREA;
+		TileObject vein = upstairs ? findUpstairsVein(context) : findVein(context);
+		if (location.distanceTo(area) <= VEIN_WALK_DISTANCE || vein != null)
 		{
 			state = State.MINE;
 			setStatus("Mining pay-dirt");
 			return;
 		}
 
-		walker.walkTo(VEIN_AREA, true, WALK_STOP_DISTANCE);
+		walker.walkTo(area, true, WALK_STOP_DISTANCE);
 		setStatus("Walking back to the veins");
+	}
+
+	private void climbUp(ScriptContext context)
+	{
+		WorldPoint location = context.getPlayerLocation();
+		if (location == null)
+		{
+			return;
+		}
+
+		if (isUpstairs(context))
+		{
+			walker.reset();
+			climbAttempts = 0;
+			climbWaitTicks = 0;
+			state = State.MINE;
+			setStatus("Mining pay-dirt");
+			return;
+		}
+
+		if (climbWaitTicks > 0)
+		{
+			--climbWaitTicks;
+			if (isUpstairs(context))
+			{
+				walker.reset();
+				climbAttempts = 0;
+				climbWaitTicks = 0;
+				state = State.MINE;
+				setStatus("Mining pay-dirt");
+				return;
+			}
+
+			if (isMoving(context))
+			{
+				climbWaitTicks = Math.max(climbWaitTicks, 2);
+			}
+			setStatus("Climbing up");
+			return;
+		}
+
+		TileObject ladder = findLadder(context, LADDER_UP_AREA, true);
+		if (ladder == null)
+		{
+			walker.walkTo(onPlayerPlane(context, LADDER_UP_AREA), true, WALK_STOP_DISTANCE);
+			setStatus("Walking to the ladder");
+			return;
+		}
+
+		WorldPoint ladderLocation = ladder.getWorldLocation();
+		if (location.distanceTo2D(ladderLocation) > WALK_STOP_DISTANCE)
+		{
+			walker.walkTo(onPlayerPlane(context, ladderLocation), true, WALK_STOP_DISTANCE);
+			setStatus("Walking to the ladder");
+			return;
+		}
+
+		GameInput input = context.getInput();
+		if (input.isBusy() || isMoving(context))
+		{
+			setStatus("Waiting to climb");
+			return;
+		}
+
+		++climbAttempts;
+		if (clickLadder(context, ladder, true))
+		{
+			walker.reset();
+			climbWaitTicks = CLIMB_WAIT_TICKS;
+			cooldown = 2;
+			setStatus("Climbing up");
+		}
+		else
+		{
+			cooldown = 1;
+		}
+	}
+
+	private void climbDown(ScriptContext context)
+	{
+		WorldPoint location = context.getPlayerLocation();
+		if (location == null)
+		{
+			return;
+		}
+
+		if (!isUpstairs(context))
+		{
+			climbWaitTicks = 0;
+			beginAfterDescent(context);
+			return;
+		}
+
+		if (climbWaitTicks > 0)
+		{
+			--climbWaitTicks;
+			if (!isUpstairs(context))
+			{
+				climbWaitTicks = 0;
+				beginAfterDescent(context);
+				return;
+			}
+
+			if (isMoving(context))
+			{
+				climbWaitTicks = Math.max(climbWaitTicks, 2);
+			}
+			setStatus("Climbing down");
+			return;
+		}
+
+		TileObject ladder = findLadder(context, LADDER_DOWN_AREA, false);
+		if (ladder == null)
+		{
+			walker.walkTo(onPlayerPlane(context, LADDER_DOWN_AREA), true, WALK_STOP_DISTANCE);
+			setStatus("Walking to the ladder");
+			return;
+		}
+
+		WorldPoint ladderLocation = ladder.getWorldLocation();
+		if (location.distanceTo2D(ladderLocation) > WALK_STOP_DISTANCE)
+		{
+			walker.walkTo(onPlayerPlane(context, ladderLocation), true, WALK_STOP_DISTANCE);
+			setStatus("Walking to the ladder");
+			return;
+		}
+
+		GameInput input = context.getInput();
+		if (input.isBusy() || isMoving(context))
+		{
+			setStatus("Waiting to climb down");
+			return;
+		}
+
+		++climbAttempts;
+		if (clickLadder(context, ladder, false))
+		{
+			walker.reset();
+			climbWaitTicks = CLIMB_WAIT_TICKS;
+			cooldown = 2;
+			setStatus("Climbing down");
+		}
+		else
+		{
+			cooldown = 1;
+		}
+	}
+
+	/**
+	 * Clicks a ladder, falling back to its exact menu option when the model
+	 * is not on screen. A ladder is often stood on (or behind the player's
+	 * own tile), in which case there is no clickbox to click and turning the
+	 * camera can never help - the direct option still works.
+	 */
+	private boolean clickLadder(ScriptContext context, TileObject ladder, boolean up)
+	{
+		GameInput input = context.getInput();
+		String[] actions = up ? CLIMB_UP_ACTIONS : CLIMB_DOWN_ACTIONS;
+
+		if (!input.isVisible(ladder))
+		{
+			if (climbAttempts <= 2 && input.turnCameraToward(ladder.getWorldLocation()))
+			{
+				setStatus("Turning camera to the ladder");
+				return false;
+			}
+
+			input.stopCamera();
+		}
+		else
+		{
+			input.stopCamera();
+		}
+
+		// Send the exact Climb option first. The ladder is a wall object
+		// whose clickbox is often hidden by the tile the player stands on,
+		// so a physical click can miss even when the ladder is on screen.
+		if (input.invokeObjectAction(ladder, actions))
+		{
+			return true;
+		}
+
+		return input.interact(ladder, actions)
+			|| input.click(ladder);
+	}
+
+	private static TileObject findLadder(ScriptContext context, WorldPoint area, boolean up)
+	{
+		int[] ids = up ? LADDER_UP_IDS : LADDER_DOWN_IDS;
+		String[] actions = up ? CLIMB_UP_ACTIONS : CLIMB_DOWN_ACTIONS;
+		WorldPoint location = context.getPlayerLocation();
+		TileObject best = null;
+		int bestDistance = Integer.MAX_VALUE;
+		TileObject fallback = null;
+		int fallbackDistance = Integer.MAX_VALUE;
+
+		for (TileObject object : context.getTargets().getTileObjectsNear(area, LADDER_SEARCH_RADIUS))
+		{
+			if (!containsId(ids, object.getId()))
+			{
+				continue;
+			}
+
+			WorldPoint objectLocation = object.getWorldLocation();
+			if (objectLocation == null)
+			{
+				continue;
+			}
+
+			int distance = location == null
+				? objectLocation.distanceTo2D(area)
+				: objectLocation.distanceTo2D(location);
+			if (hasAction(context, object, actions))
+			{
+				if (distance < bestDistance)
+				{
+					bestDistance = distance;
+					best = object;
+				}
+			}
+			else if (distance < fallbackDistance)
+			{
+				fallbackDistance = distance;
+				fallback = object;
+			}
+		}
+
+		return best != null ? best : fallback;
+	}
+
+	private static boolean containsId(int[] ids, int id)
+	{
+		for (int candidate : ids)
+		{
+			if (candidate == id)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static boolean hasAction(ScriptContext context, TileObject object, String... actions)
+	{
+		ObjectComposition composition = context.getClient().getObjectDefinition(object.getId());
+		if (composition == null || composition.getActions() == null)
+		{
+			return false;
+		}
+
+		for (String available : composition.getActions())
+		{
+			if (available == null)
+			{
+				continue;
+			}
+
+			String clean = GameInput.plainText(available).trim();
+			for (String action : actions)
+			{
+				if (clean.equalsIgnoreCase(action))
+				{
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The upper floor is a raised bridge inside the same cave, so its object
+	 * plane is not always the same as the plane the player reports (the
+	 * client can keep reporting plane 0 while standing on the bridge). The
+	 * upstream Motherlode plugin identifies the floor by the bridge tile
+	 * height instead, which is what this uses.
+	 * <p>
+	 * Only the player's own tile is measured. Sampling neighbouring tiles
+	 * made the lower floor count as upstairs whenever the player stood near
+	 * the ladder or the crate, which is directly under the edge of the
+	 * upper floor. That made the script mine the upper veins without ever
+	 * climbing the ladder.
+	 */
+	private static boolean isUpstairs(ScriptContext context)
+	{
+		Player player = context.getPlayer();
+		if (player == null)
+		{
+			return false;
+		}
+
+		WorldPoint location = player.getWorldLocation();
+		if (location != null && location.getPlane() > 0)
+		{
+			return true;
+		}
+
+		LocalPoint local = player.getLocalLocation();
+		if (local == null)
+		{
+			return false;
+		}
+
+		return Perspective.getTileHeight(context.getClient(), local, 0) < UPPER_FLOOR_HEIGHT;
+	}
+
+	private static boolean needsUpperFloor(State state)
+	{
+		return state == State.MINE
+			|| state == State.WALK_TO_VEIN
+			|| state == State.WALK_TO_HOPPER
+			|| state == State.HOPPER;
+	}
+
+	private void beginAfterDescent(ScriptContext context)
+	{
+		walker.reset();
+		actionAttempts = 0;
+		crateAttempts = 0;
+		wheelAttempts = 0;
+		hammerUnavailable = false;
+		repairAfterDescent = true;
+		collectingSack = true;
+
+		if (findBrokenStrut(context) == null)
+		{
+			repairAfterDescent = false;
+			state = State.WALK_TO_SACK;
+			setStatus("Walking to the sack");
+			return;
+		}
+
+		if (context.getInventory().countItem(ItemID.HAMMER) > 0)
+		{
+			state = State.FIX_WHEEL;
+			setStatus("Fixing the water wheels");
+		}
+		else
+		{
+			state = State.SEARCH_CRATE;
+			setStatus("Searching the crate for a hammer");
+		}
+	}
+
+	private void searchCrate(ScriptContext context)
+	{
+		Inventory inventory = context.getInventory();
+		if (inventory.countItem(ItemID.HAMMER) > 0)
+		{
+			state = State.FIX_WHEEL;
+			wheelAttempts = 0;
+			repairAfterDescent = true;
+			setStatus("Fixing the water wheels");
+			return;
+		}
+
+		// Searching the crate with no free slot only produces the chatbox
+		// "Your inventory is full." message and never a hammer. Free a slot
+		// first (or bank if the inventory is full of ores) instead of
+		// clicking the crate until the attempt counter gives up.
+		if (inventory.getEmptySlots() == 0)
+		{
+			if (inventory.countItem(ItemID.PAYDIRT) > 0)
+			{
+				if (dropOnePayDirt(context))
+				{
+					cooldown = CLICK_COOLDOWN;
+				}
+				setStatus("Dropping pay-dirt to make room for a hammer");
+				return;
+			}
+
+			bankPurpose = BankPurpose.DEPOSIT;
+			state = State.WALK_TO_BANK;
+			walker.reset();
+			actionAttempts = 0;
+			setStatus("Walking to the bank");
+			return;
+		}
+
+		if (crateAttempts > ACTION_ATTEMPTS * 2)
+		{
+			repairAfterDescent = false;
+			state = State.WALK_TO_SACK;
+			walker.reset();
+			actionAttempts = 0;
+			setStatus("Walking to the sack");
+			return;
+		}
+
+		WorldPoint location = context.getPlayerLocation();
+		if (location == null)
+		{
+			return;
+		}
+
+		TileObject crate = findObjectAt(context, CRATE_ID, CRATE_AREA, 2);
+		if (crate == null)
+		{
+			walker.walkTo(onPlayerPlane(context, CRATE_AREA), true, WALK_STOP_DISTANCE);
+			setStatus("Walking to the crate");
+			return;
+		}
+
+		if (location.distanceTo2D(crate.getWorldLocation()) > WALK_STOP_DISTANCE)
+		{
+			walker.walkTo(crate.getWorldLocation(), true, WALK_STOP_DISTANCE);
+			setStatus("Walking to the crate");
+			return;
+		}
+
+		GameInput input = context.getInput();
+		if (input.isBusy() || isMoving(context))
+		{
+			setStatus("Waiting to search the crate");
+			return;
+		}
+
+		if (!input.isVisible(crate))
+		{
+			input.turnCameraToward(crate.getWorldLocation());
+			setStatus("Turning camera to the crate");
+			return;
+		}
+
+		input.stopCamera();
+		++crateAttempts;
+		if (input.interact(crate, "Search") || input.click(crate))
+		{
+			cooldown = 2;
+			setStatus("Searching the crate for a hammer");
+		}
+		else
+		{
+			cooldown = 1;
+		}
+	}
+
+	private static WorldPoint onPlayerPlane(ScriptContext context, WorldPoint point)
+	{
+		WorldPoint location = context.getPlayerLocation();
+		return location == null
+			? point
+			: new WorldPoint(point.getX(), point.getY(), location.getPlane());
+	}
+
+	private static TileObject findObjectAt(ScriptContext context, int objectId,
+		WorldPoint area, int radius)
+	{
+		WorldPoint location = context.getPlayerLocation();
+		TileObject best = null;
+		int bestDistance = Integer.MAX_VALUE;
+		for (TileObject object : context.getTargets().getTileObjectsNear(area, radius))
+		{
+			if (object.getId() != objectId || object.getWorldLocation() == null)
+			{
+				continue;
+			}
+
+			int distance = location == null
+				? object.getWorldLocation().distanceTo2D(area)
+				: object.getWorldLocation().distanceTo2D(location);
+			if (distance == Integer.MAX_VALUE)
+			{
+				continue;
+			}
+
+			if (distance < bestDistance)
+			{
+				bestDistance = distance;
+				best = object;
+			}
+		}
+		return best;
+	}
+
+	private TileObject findUpstairsVein(ScriptContext context)
+	{
+		Player player = context.getPlayer();
+		WorldPoint location = player == null ? null : player.getWorldLocation();
+		if (location == null)
+		{
+			return null;
+		}
+
+		TileObject best = null;
+		int bestDistance = Integer.MAX_VALUE;
+		for (WorldPoint tile : UPSTAIRS_VEIN_TILES)
+		{
+			for (TileObject object : context.getTargets().getTileObjectsNear(tile, 0))
+			{
+				if (!isVein(object.getId()))
+				{
+					continue;
+				}
+
+				WorldPoint objectLocation = object.getWorldLocation();
+				if (objectLocation == null
+					|| objectLocation.getX() != tile.getX()
+					|| objectLocation.getY() != tile.getY())
+				{
+					continue;
+				}
+
+				int distance = objectLocation.distanceTo2D(location);
+				if (distance < bestDistance)
+				{
+					bestDistance = distance;
+					best = object;
+				}
+			}
+		}
+		return best;
 	}
 
 	/**
@@ -1295,7 +2211,10 @@ public final class MotherlodeMinerScript extends Script
 		WorldPoint location = vein.getWorldLocation();
 		for (TileObject object : context.getTargets().getTileObjectsNear(location, 1))
 		{
-			if (object.getId() == vein.getId() && location.equals(object.getWorldLocation()))
+			WorldPoint objectLocation = object.getWorldLocation();
+			if (object.getId() == vein.getId() && objectLocation != null
+				&& objectLocation.getX() == location.getX()
+				&& objectLocation.getY() == location.getY())
 			{
 				return true;
 			}
@@ -1322,12 +2241,12 @@ public final class MotherlodeMinerScript extends Script
 			}
 
 			WorldPoint objectLocation = object.getWorldLocation();
-			if (objectLocation == null || objectLocation.getPlane() != location.getPlane())
+			if (objectLocation == null)
 			{
 				continue;
 			}
 
-			int distance = objectLocation.distanceTo(location);
+			int distance = objectLocation.distanceTo2D(location);
 			if (distance < bestDistance)
 			{
 				bestDistance = distance;
@@ -1379,5 +2298,20 @@ public final class MotherlodeMinerScript extends Script
 	private static boolean hasBankableItems(Inventory inventory)
 	{
 		return countInventoryItems(inventory) > 0;
+	}
+
+	@Override
+	public List<String> getOverlayLines()
+	{
+		ScriptContext context = getContext();
+		Inventory inventory = context.getInventory();
+		boolean wheelsDown = state == State.FIX_WHEEL || state == State.SEARCH_CRATE;
+		return Arrays.asList(
+			"Mode: " + (upstairs ? "Upstairs" : "Downstairs")
+				+ " | State: " + (state == null ? "-" : state.name()),
+			"Load: " + (upstairs ? String.valueOf(upstairsLoads + 1) : "-")
+				+ " | Pay-dirt: " + inventory.countItem(ItemID.PAYDIRT),
+			"Hopper: " + sackContents + " / " + sackCapacity,
+			"Wheels: " + (wheelsDown ? "Repairing" : "Working"));
 	}
 }

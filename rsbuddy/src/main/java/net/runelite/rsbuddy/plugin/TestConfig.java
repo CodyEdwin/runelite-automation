@@ -384,4 +384,15 @@ public interface TestConfig extends Config
 	{
 		return RoofCourse.VARROCK;
 	}
+
+	@ConfigItem(
+		keyName = "motherlodeUpstairs",
+		name = "Motherlode: upstairs",
+		description = "Mine the upstairs veins and use the upstairs hopper, four loads per trip.",
+		position = 29
+	)
+	default boolean motherlodeUpstairs()
+	{
+		return false;
+	}
 }

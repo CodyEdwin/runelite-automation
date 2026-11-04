@@ -163,7 +163,7 @@ public class TestPlugin extends Plugin
 			config.fruitStallKeepStrangeFruit(),
 			config.fruitStallKeepJangerberries()));
 		scriptManager.register(new HillGiantScript());
-		scriptManager.register(new MotherlodeMinerScript());
+		scriptManager.register(new MotherlodeMinerScript(config.motherlodeUpstairs()));
 		scriptManager.register(new RooftopAgilityTrainerScript());
 		scriptManager.register(new GemCrabKillerScript(
 			config.gemCrabPotionMode().name(),
@@ -582,6 +582,11 @@ public class TestPlugin extends Plugin
 				config.gemCutterGemType().name(),
 				config.gemCutterAmount(),
 				config.gemCutterClosestBooth());
+		}
+
+		if (MotherlodeMinerScript.class.getName().equals(className))
+		{
+			return ScriptLoader.load(className, classLoader, config.motherlodeUpstairs());
 		}
 
 		if (RooftopAgilityTrainerScript.class.getName().equals(className))

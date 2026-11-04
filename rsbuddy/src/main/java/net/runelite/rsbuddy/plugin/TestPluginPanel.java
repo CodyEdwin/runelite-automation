@@ -62,6 +62,7 @@ import net.runelite.rsbuddy.script.ScriptManager;
 import net.runelite.rsbuddy.scripts.BowFletcherScript;
 import net.runelite.rsbuddy.scripts.FruitStallStealerScript;
 import net.runelite.rsbuddy.scripts.GemCutterScript;
+import net.runelite.rsbuddy.scripts.MotherlodeMinerScript;
 import net.runelite.rsbuddy.scripts.ObjectInteractScript;
 import net.runelite.rsbuddy.scripts.RooftopAgilityTrainerScript;
 
@@ -563,6 +564,16 @@ public final class TestPluginPanel extends PluginPanel
 
 			scriptSettingsHint.setText("<html>Chisel in locked slot 1. Used the next time the script starts."
 				+ " Same settings as Test Plugin config.</html>");
+			hasSettings = true;
+		}
+		else if (script != null && MotherlodeMinerScript.class.getName().equals(script.getClass().getName()))
+		{
+			addCheckSetting("Upstairs mining",
+				"Mine the upstairs veins and use the upstairs hopper, four loads per trip.",
+				"motherlodeUpstairs", config::motherlodeUpstairs);
+
+			scriptSettingsHint.setText("<html>Used the next time the script starts. The script reads this "
+				+ "when it begins, so changing it while running has no effect until the next start.</html>");
 			hasSettings = true;
 		}
 		else if (script != null && RooftopAgilityTrainerScript.class.getName().equals(script.getClass().getName()))
