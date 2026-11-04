@@ -1186,9 +1186,12 @@ public final class MotherlodeMinerScript extends Script
 
 		TileObject sack = findSack(context);
 		boolean bankOpen = context.getTargets().findWidget(InterfaceID.Bankmain.UNIVERSE).isPresent();
-		boolean nearAndVisible = sack != null && !bankOpen
+		// Standing still with the sack clickable on screen: click it
+		// directly (the click walks there). While a minimap walk is running
+		// the mouse stays idle until the player arrives.
+		boolean nearAndVisible = sack != null && !bankOpen && !isMoving(context)
 			&& location.distanceTo2D(sack.getWorldLocation()) <= SACK_PREHOVER_DISTANCE
-			&& context.getInput().isVisible(sack);
+			&& clickableOnScreen(context, sack);
 		if (nearAndVisible || (sack != null && location.distanceTo2D(sack.getWorldLocation()) <= WALK_STOP_DISTANCE)
 			|| location.distanceTo(SACK_AREA) <= WALK_STOP_DISTANCE)
 		{
@@ -1200,8 +1203,6 @@ public final class MotherlodeMinerScript extends Script
 			itemsBeforeSearch = 0;
 			verifyKey = null;
 			setStatus("Searching the sack");
-			// Aim at the sack while still running and click as soon as the
-			// hover verifies.
 			sack(context);
 			return;
 		}
@@ -1382,6 +1383,19 @@ public final class MotherlodeMinerScript extends Script
 		if (!"bank chest".equals(key) && context.getTargets().findWidget(InterfaceID.Bankmain.UNIVERSE).isPresent())
 		{
 			// The bank closes once the walk starts; do not click through it.
+			return false;
+		}
+		boolean waitForArrival = ("sack".equals(key) || "bank chest".equals(key)) && isMoving(context);
+		if (waitForArrival)
+		{
+			// Never chase the sack or chest with the mouse while walking:
+			// leave it idle and hover once the player has stopped.
+			if (verifyHovered)
+			{
+				log.info("[MotherlodeMiner] {}: player started moving, dropping the hover until arrival", key);
+			}
+			verifyHovered = false;
+			setStatus("Walking to the " + key);
 			return false;
 		}
 		if (!verifyHovered)
