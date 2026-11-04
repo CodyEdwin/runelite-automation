@@ -26,12 +26,8 @@ package net.runelite.rsbuddy.plugin;
 
 import com.google.inject.Provides;
 import java.awt.image.BufferedImage;
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.IOException;
-import java.io.InputStreamReader;
 import java.net.MalformedURLException;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -63,6 +59,7 @@ import net.runelite.rsbuddy.inventory.Inventory;
 import net.runelite.rsbuddy.script.ReloadingClassLoader;
 import net.runelite.rsbuddy.script.Script;
 import net.runelite.rsbuddy.script.ScriptContext;
+import net.runelite.rsbuddy.script.ScriptCompiler;
 import net.runelite.rsbuddy.script.ScriptLoader;
 import net.runelite.rsbuddy.script.ScriptManager;
 import net.runelite.rsbuddy.scripts.AnimatedSuitKillerScript;
@@ -488,18 +485,36 @@ public class TestPlugin extends Plugin
 			return script;
 		}
 
-		// When the client is running from the source tree, rebuild the module
-		// first so the reload always picks up the latest edits.
-		File projectDirectory = resolveProjectDirectory();
-		if (projectDirectory != null)
+		// Never run Gradle here: it cannot rebuild while the client holds the
+		// build output. Compile the script sources in-process into a fresh
+		// temp directory instead and load them with a child-first loader.
+		File sourceRoot = resolveScriptSourceDirectory();
+		File classesRoot;
+		if (sourceRoot != null)
 		{
-			rebuildScripts(projectDirectory);
+			log.info("[Reload] compiling scripts from {}", sourceRoot);
+			long started = System.currentTimeMillis();
+			try
+			{
+				classesRoot = ScriptCompiler.compile(sourceRoot, getClass().getClassLoader(),
+					getClass(), Script.class, Client.class, ConfigManager.class, Logger.class);
+			}
+			catch (IllegalStateException ex)
+			{
+				log.warn(ex.getMessage());
+				throw ex;
+			}
+			log.info("[Reload] compiled scripts in {}ms into {}", System.currentTimeMillis() - started, classesRoot);
 		}
-
-		File classesRoot = resolveScriptClassesDirectory();
+		else
+		{
+			classesRoot = resolveScriptClassesDirectory();
+			log.info("[Reload] script sources not found, loading prebuilt classes from {}", classesRoot);
+		}
 		if (classesRoot == null || !classesRoot.isDirectory())
 		{
-			throw new IllegalStateException("Compiled script classes not found. Build the rsbuddy module first.");
+			throw new IllegalStateException("[Reload] script sources not found. Set 'Script source directory'"
+				+ " in the panel to your rsbuddy/src/main/java folder.");
 		}
 
 		String className = script.getClass().getName();
@@ -525,7 +540,7 @@ public class TestPlugin extends Plugin
 		}
 
 		scriptManager.replace(script, replacement);
-		log.info("Reloaded script {} from {}", className, classesRoot);
+		log.info("[Reload] reloaded {} from {}", className, classesRoot);
 		return replacement;
 	}
 
@@ -600,90 +615,80 @@ public class TestPlugin extends Plugin
 		return ScriptLoader.load(className, classLoader);
 	}
 
-	private File resolveProjectDirectory()
+	/**
+	 * Finds the src/main/java root that holds the script sources: the panel
+	 * setting, then -Drsbuddy.scriptSources, then the working directory and
+	 * its parents, then next to the plugin's build output.
+	 */
+	private File resolveScriptSourceDirectory()
 	{
-		File workingDirectory = new File(System.getProperty("user.dir", "."));
-		for (File directory = workingDirectory; directory != null; directory = directory.getParentFile())
+		List<File> candidates = new ArrayList<>();
+		String configured = config.scriptSourceDirectory();
+		if (configured != null && !configured.trim().isEmpty())
 		{
-			if (new File(directory, "gradlew").isFile()
-				&& new File(directory, "rsbuddy/build.gradle.kts").isFile())
+			File dir = resolveAgainstWorkingDirectory(configured.trim());
+			if (isScriptSourceDirectory(dir))
 			{
-				return directory;
+				return dir;
 			}
+			// Accept the repo root or the rsbuddy module too.
+			candidates.add(new File(dir, "rsbuddy/src/main/java"));
+			candidates.add(new File(dir, "src/main/java"));
+			for (File c : candidates)
+			{
+				if (isScriptSourceDirectory(c))
+				{
+					return c;
+				}
+			}
+			throw new IllegalStateException("[Reload] 'Script source directory' " + dir
+				+ " has no " + ScriptCompiler.SCRIPTS_PATH + " folder");
 		}
 
-		return null;
-	}
-
-	private void rebuildScripts(File projectDirectory)
-	{
-		File wrapper = new File(projectDirectory, "gradlew");
-		if (!wrapper.isFile())
+		String property = System.getProperty("rsbuddy.scriptSources");
+		if (property != null && !property.trim().isEmpty())
 		{
-			return;
+			candidates.add(resolveAgainstWorkingDirectory(property.trim()));
 		}
 
-		List<String> command = new ArrayList<>();
-		if (wrapper.canExecute())
+		for (File directory = new File(System.getProperty("user.dir", ".")).getAbsoluteFile();
+			directory != null; directory = directory.getParentFile())
 		{
-			command.add(wrapper.getAbsolutePath());
+			candidates.add(new File(directory, "rsbuddy/src/main/java"));
+			candidates.add(new File(directory, "src/main/java"));
 		}
-		else
-		{
-			command.add("sh");
-			command.add(wrapper.getAbsolutePath());
-		}
-		command.add(":rsbuddy:classes");
-		command.add("--console=plain");
-
-		ProcessBuilder builder = new ProcessBuilder(command);
-		builder.directory(projectDirectory);
-		builder.redirectErrorStream(true);
 
 		try
 		{
-			Process process = builder.start();
-			StringBuilder output = new StringBuilder();
-			try (BufferedReader reader = new BufferedReader(
-				new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8)))
+			File codeSource = new File(getClass().getProtectionDomain().getCodeSource().getLocation().toURI());
+			// build/libs/rsbuddy.jar or build/classes/java/main -> module root
+			for (File d = codeSource; d != null; d = d.getParentFile())
 			{
-				String line;
-				while ((line = reader.readLine()) != null)
+				if ("build".equals(d.getName()) && d.getParentFile() != null)
 				{
-					output.append(line).append('\n');
+					candidates.add(new File(d.getParentFile(), "src/main/java"));
+					break;
 				}
 			}
+		}
+		catch (Exception ex)
+		{
+			log.debug("Unable to inspect plugin code source", ex);
+		}
 
-			int exitCode = process.waitFor();
-			if (exitCode != 0)
+		for (File c : candidates)
+		{
+			if (isScriptSourceDirectory(c))
 			{
-				log.warn("Script rebuild failed:\n{}", output);
-				throw new IllegalStateException("Build failed: " + lastLines(output.toString(), 4));
+				return c;
 			}
-
-			log.info("Rebuilt scripts in {}", projectDirectory);
 		}
-		catch (IOException ex)
-		{
-			throw new IllegalStateException("Unable to run Gradle: " + ex.getMessage(), ex);
-		}
-		catch (InterruptedException ex)
-		{
-			Thread.currentThread().interrupt();
-			throw new IllegalStateException("Build interrupted", ex);
-		}
+		return null;
 	}
 
-	private static String lastLines(String output, int count)
+	private static boolean isScriptSourceDirectory(File root)
 	{
-		if (output == null || output.trim().isEmpty())
-		{
-			return "(no output)";
-		}
-
-		String[] lines = output.trim().split("\\R");
-		int start = Math.max(0, lines.length - count);
-		return String.join(" | ", java.util.Arrays.copyOfRange(lines, start, lines.length));
+		return root != null && new File(root, ScriptCompiler.SCRIPTS_PATH).isDirectory();
 	}
 
 	private File resolveScriptClassesDirectory()
