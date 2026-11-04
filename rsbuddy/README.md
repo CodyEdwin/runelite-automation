@@ -418,6 +418,12 @@ pay-dirt, deposits it in the hopper, empties the sack and banks the ores.
   pickaxe special`), then waits for the energy to drop; up to 6 tries per charge. Needs a dragon
   pickaxe (11920, 12797, 23677, 25376) wielded; if it is only in the inventory or missing, it logs
   once and skips.
+- **Speed:** no wait-after-click ticks and no waiting to fully stop: each step runs the moment
+  its trigger is met (ores out of the sack -> walk to the bank the same tick; bank open -> deposit;
+  inventory empty -> minimap click toward the sack with no Escape, the bank closes itself). A
+  per-frame hook fires verified clicks 80-200 ms after the mouse arrives. Within 8 tiles of a
+  visible sack it aims at and clicks the sack while still running. Each action logs
+  `[MotherlodeMiner] +Nms <action> (after <previous>)`.
 - **Camera:** no random camera nudges; it only turns when a target is off screen.
 - **Physical clicks only:** Motherlode Miner, Bow Fletcher and Gem Cutter run with
   `GameInput.setPhysicalOnly(true)`: every helper that would run a menu action directly
