@@ -68,13 +68,13 @@ public class XpLoggerOverlay extends Overlay
 	private static final Color MUTED = new Color(178, 178, 178);
 	private static final Color GAIN = new Color(139, 195, 74);
 	private static final Color RATE = new Color(255, 213, 79);
-	private static final Color TRACK = new Color(28, 22, 16, 220);
-	private static final Color TRACK_BORDER = new Color(92, 73, 49, 255);
 
 	private final Client client;
 	private final RSBuddyConfig config;
 	private final Map<Skill, SkillSession> sessions = new EnumMap<>(Skill.class);
 
+	private final XpBarFx fx = new XpBarFx();
+	private ShiftDragHandler dragHandler;
 	private boolean initialized;
 	private long sessionStartedAt;
 
@@ -86,6 +86,43 @@ public class XpLoggerOverlay extends Overlay
 
 		setPosition(OverlayPosition.BOTTOM_RIGHT);
 		setLayer(OverlayLayer.ABOVE_WIDGETS);
+	}
+
+	/** Lets the Shift-drag handler draw its hover outline on this overlay. */
+	void setDragHandler(ShiftDragHandler dragHandler)
+	{
+		this.dragHandler = dragHandler;
+	}
+
+	/**
+	 * Counts one action per XP drop (StatChanged delta) for the running
+	 * average behind "Actions to level", and flashes the bar.
+	 */
+	void onStatChanged(Skill skill, int xp)
+	{
+		SkillSession session = sessions.get(skill);
+		if (!initialized || session == null)
+		{
+			return;
+		}
+		if (session.statXp >= 0 && xp > session.statXp)
+		{
+			session.actions++;
+			session.actionXp += xp - session.statXp;
+			fx.pulse(skill.getName());
+		}
+		session.statXp = xp;
+	}
+
+	/** @return actions left to the next level from the session's mean XP per drop, or -1 before the first drop */
+	static long actionsToLevel(long remaining, long actionXp, int actions)
+	{
+		if (actions <= 0 || actionXp <= 0)
+		{
+			return -1;
+		}
+		double mean = actionXp / (double) actions;
+		return (long) Math.ceil(remaining / mean);
 	}
 
 	@Override
@@ -127,17 +164,31 @@ public class XpLoggerOverlay extends Overlay
 		graphics.setFont(FontManager.getRunescapeBoldFont());
 		FontMetrics title = graphics.getFontMetrics();
 
-		int rowHeight = small.getHeight() * 2 + TEXT_GAP + BAR_GAP + BAR_HEIGHT;
+		double scale = config.xpBarThickness() / 100.0;
+		int barHeight = Math.max(3, (int) Math.round(BAR_HEIGHT * scale));
+		double gapScale = 1 + (scale - 1) * 0.5;
+		int barGap = (int) Math.round(BAR_GAP * gapScale);
+		int rowGap = (int) Math.round(ROW_GAP * gapScale);
+		boolean animate = config.xpBarAnimations();
+		double intensity = config.xpSparkIntensity() / 100.0;
+		long nanos = System.nanoTime();
+		int rowHeight = small.getHeight() * 3 + TEXT_GAP * 2 + barGap + barHeight;
 		int bodyHeight = rows.isEmpty()
 			? small.getHeight()
-			: Math.min(rows.size(), MAX_ROWS) * (rowHeight + ROW_GAP)
-				+ (hiddenRows > 0 ? small.getHeight() + TEXT_GAP : 0) - ROW_GAP;
+			: Math.min(rows.size(), MAX_ROWS) * (rowHeight + rowGap)
+				+ (hiddenRows > 0 ? small.getHeight() + TEXT_GAP : 0) - rowGap;
 		int height = PADDING * 2 + title.getHeight() + HEADER_GAP + bodyHeight;
 
 		graphics.setColor(BACKGROUND);
 		graphics.fillRoundRect(0, 0, WIDTH, height, 6, 6);
 		graphics.setColor(BORDER);
 		graphics.drawRoundRect(0, 0, WIDTH - 1, height - 1, 6, 6);
+		if (dragHandler != null && dragHandler.isHighlighted(this))
+		{
+			// Shift held over the overlay: show it can be dragged.
+			graphics.setColor(new Color(255, 170, 60, 200));
+			graphics.drawRoundRect(1, 1, WIDTH - 3, height - 3, 6, 6);
+		}
 
 		graphics.setFont(FontManager.getRunescapeBoldFont());
 		graphics.setColor(TITLE);
@@ -206,26 +257,39 @@ public class XpLoggerOverlay extends Overlay
 			}
 			graphics.drawString(nextText, WIDTH - PADDING - small.stringWidth(nextText), lineY);
 
-			y += small.getHeight() * 2 + TEXT_GAP + BAR_GAP;
+			lineY += small.getHeight() + TEXT_GAP;
 
-			int barWidth = WIDTH - PADDING * 2;
-			graphics.setColor(TRACK);
-			graphics.fillRoundRect(PADDING, y, barWidth, BAR_HEIGHT, BAR_HEIGHT, BAR_HEIGHT);
-			graphics.setColor(TRACK_BORDER);
-			graphics.drawRoundRect(PADDING, y, barWidth, BAR_HEIGHT, BAR_HEIGHT, BAR_HEIGHT);
-
-			double progress = levelProgress(skill, level, xp);
-			int fillWidth = (int) Math.round(barWidth * progress);
-			if (fillWidth > 0)
+			long actionsLeft = actionsToLevel(remaining, sessionRow.actionXp, sessionRow.actions);
+			String actionsText = level >= Experience.MAX_REAL_LEVEL
+				? "Actions to level: MAX"
+				: "Actions to level: " + (actionsLeft < 0 ? "--" : formatNumber(actionsLeft));
+			graphics.setColor(TEXT);
+			graphics.drawString(actionsText, PADDING, lineY);
+			if (sessionRow.actions > 0)
 			{
-				Color base = skillColor(skill);
-				graphics.setColor(base);
-				graphics.fillRoundRect(PADDING, y, fillWidth, BAR_HEIGHT, BAR_HEIGHT, BAR_HEIGHT);
-				graphics.setColor(new Color(base.getRed(), base.getGreen(), base.getBlue(), 130));
-				graphics.drawRoundRect(PADDING, y, fillWidth, BAR_HEIGHT, BAR_HEIGHT, BAR_HEIGHT);
+				String avg = "avg " + formatNumber(Math.round(sessionRow.actionXp / (double) sessionRow.actions)) + " xp";
+				graphics.setColor(MUTED);
+				graphics.drawString(avg, WIDTH - PADDING - small.stringWidth(avg), lineY);
 			}
 
-			y += BAR_HEIGHT + ROW_GAP;
+			y += small.getHeight() * 3 + TEXT_GAP * 2 + barGap;
+
+			int barWidth = WIDTH - PADDING * 2;
+			double progress = levelProgress(skill, level, xp);
+			fx.draw(graphics, skill.getName(), PADDING, y, barWidth, barHeight, progress, skillColor(skill),
+				nanos, animate, intensity);
+			if (barHeight >= 11)
+			{
+				String percent = String.format(Locale.ROOT, "%.1f%%", progress * 100.0);
+				int px = PADDING + (barWidth - small.stringWidth(percent)) / 2;
+				int py = y + (barHeight + small.getAscent()) / 2 - 1;
+				graphics.setColor(new Color(0, 0, 0, 170));
+				graphics.drawString(percent, px + 1, py + 1);
+				graphics.setColor(Color.WHITE);
+				graphics.drawString(percent, px, py);
+			}
+
+			y += barHeight + rowGap;
 		}
 
 		if (hiddenRows > 0)
@@ -243,7 +307,9 @@ public class XpLoggerOverlay extends Overlay
 		sessions.clear();
 		for (Skill skill : Skill.values())
 		{
-			sessions.put(skill, new SkillSession(skill, client.getSkillExperience(skill)));
+			SkillSession created = new SkillSession(skill, client.getSkillExperience(skill));
+			created.statXp = created.lastXp;
+			sessions.put(skill, created);
 		}
 
 		sessionStartedAt = now;
@@ -298,6 +364,7 @@ public class XpLoggerOverlay extends Overlay
 	private void reset()
 	{
 		sessions.clear();
+		fx.reset();
 		initialized = false;
 		sessionStartedAt = 0L;
 	}
@@ -376,6 +443,11 @@ public class XpLoggerOverlay extends Overlay
 		private long gained;
 		private long firstGainAt;
 		private long lastGainAt;
+		/** Last XP seen in StatChanged; -1 until the first event. */
+		private long statXp = -1;
+		/** XP drops counted this session and their total, for the mean XP per action. */
+		private int actions;
+		private long actionXp;
 
 		private SkillSession(Skill skill, long xp)
 		{
@@ -387,6 +459,9 @@ public class XpLoggerOverlay extends Overlay
 		{
 			lastXp = xp;
 			gained = 0L;
+			statXp = xp;
+			actions = 0;
+			actionXp = 0L;
 			firstGainAt = 0L;
 			lastGainAt = 0L;
 		}

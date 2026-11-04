@@ -28,10 +28,7 @@ import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.FontMetrics;
-import java.awt.GradientPaint;
 import java.awt.Graphics2D;
-import java.awt.Shape;
-import java.awt.geom.RoundRectangle2D;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -59,21 +56,30 @@ public class XpProgressOverlay extends Overlay
 	private static final Color BORDER = new Color(120, 95, 62, 255);
 	private static final Color TITLE = new Color(255, 222, 170);
 	private static final Color TEXT = new Color(235, 235, 235);
-	private static final Color TRACK = new Color(28, 22, 16, 220);
-	private static final Color TRACK_BORDER = new Color(92, 73, 49, 255);
 
 	private final RSBuddyPlugin plugin;
+	private final RSBuddyConfig config;
 	private final Map<String, Double> displayedProgress = new HashMap<>();
+	private final Map<String, Double> lastTarget = new HashMap<>();
+	private final XpBarFx fx = new XpBarFx();
+	private ShiftDragHandler dragHandler;
 
 	private long lastFrameAt;
 
 	@Inject
-	private XpProgressOverlay(RSBuddyPlugin plugin)
+	private XpProgressOverlay(RSBuddyPlugin plugin, RSBuddyConfig config)
 	{
 		this.plugin = plugin;
+		this.config = config;
 
 		setPosition(OverlayPosition.TOP_RIGHT);
 		setLayer(OverlayLayer.ABOVE_WIDGETS);
+	}
+
+	/** Lets the Shift-drag handler draw its hover outline on this overlay. */
+	void setDragHandler(ShiftDragHandler dragHandler)
+	{
+		this.dragHandler = dragHandler;
 	}
 
 	@Override
@@ -108,13 +114,25 @@ public class XpProgressOverlay extends Overlay
 
 		int width = WIDTH;
 		int barWidth = width - PADDING * 2;
-		int rowHeight = metrics.getHeight() + LABEL_GAP + BAR_HEIGHT + BAR_GAP;
-		int height = PADDING * 2 + titleMetrics.getHeight() + 4 + bars.size() * rowHeight - BAR_GAP;
+		double scale = config.xpBarThickness() / 100.0;
+		int barHeight = Math.max(4, (int) Math.round(BAR_HEIGHT * scale));
+		int barGap = (int) Math.round(BAR_GAP * (1 + (scale - 1) * 0.5));
+		boolean animate = config.xpBarAnimations();
+		double intensity = config.xpSparkIntensity() / 100.0;
+		long nanos = System.nanoTime();
+		int rowHeight = metrics.getHeight() + LABEL_GAP + barHeight + barGap;
+		int height = PADDING * 2 + titleMetrics.getHeight() + 4 + bars.size() * rowHeight - barGap;
 
 		graphics.setColor(BACKGROUND);
 		graphics.fillRoundRect(0, 0, width, height, 6, 6);
 		graphics.setColor(BORDER);
 		graphics.drawRoundRect(0, 0, width - 1, height - 1, 6, 6);
+		if (dragHandler != null && dragHandler.isHighlighted(this))
+		{
+			// Shift held over the overlay: show it can be dragged.
+			graphics.setColor(new Color(255, 170, 60, 200));
+			graphics.drawRoundRect(1, 1, width - 3, height - 3, 6, 6);
+		}
 
 		graphics.setFont(titleFont);
 		graphics.setColor(TITLE);
@@ -124,6 +142,11 @@ public class XpProgressOverlay extends Overlay
 		for (Routine.ProgressBar bar : bars)
 		{
 			double target = bar.getProgress();
+			Double previous = lastTarget.put(bar.getLabel(), target);
+			if (previous != null && target > previous + 1e-9)
+			{
+				fx.pulse(bar.getLabel());
+			}
 			double current = displayedProgress.getOrDefault(bar.getLabel(), 0.0);
 			current += (target - current) * ease;
 			if (Math.abs(target - current) < 0.0005)
@@ -146,53 +169,21 @@ public class XpProgressOverlay extends Overlay
 
 			y += metrics.getHeight() + LABEL_GAP;
 
-			graphics.setColor(TRACK);
-			graphics.fillRoundRect(PADDING, y, barWidth, BAR_HEIGHT, BAR_HEIGHT, BAR_HEIGHT);
-			graphics.setColor(TRACK_BORDER);
-			graphics.drawRoundRect(PADDING, y, barWidth, BAR_HEIGHT, BAR_HEIGHT, BAR_HEIGHT);
+			fx.draw(graphics, bar.getLabel(), PADDING, y, barWidth, barHeight, current, bar.getColor(),
+				nanos, animate, intensity);
 
-			int fillWidth = (int) Math.round(barWidth * current);
-			if (fillWidth > 0)
-			{
-				Shape oldClip = graphics.getClip();
-				Shape fill = new RoundRectangle2D.Double(
-					PADDING, y, fillWidth, BAR_HEIGHT, BAR_HEIGHT, BAR_HEIGHT);
-				graphics.setClip(fill);
-
-				Color base = bar.getColor();
-				graphics.setPaint(new GradientPaint(
-					PADDING, y, base.darker(),
-					PADDING, y + BAR_HEIGHT, base.brighter()));
-				graphics.fillRect(PADDING, y, fillWidth, BAR_HEIGHT);
-
-				// A soft highlight sweeps across the filled section.
-				double phase = (now % 2200L) / 2200.0;
-				int shimmerX = PADDING - 24 + (int) Math.round((barWidth + 48) * phase);
-				graphics.setPaint(new GradientPaint(
-					shimmerX, 0, new Color(255, 255, 255, 0),
-					shimmerX + 16, 0, new Color(255, 255, 255, 90)));
-				graphics.fillRect(shimmerX, y, 16, BAR_HEIGHT);
-				graphics.setPaint(new GradientPaint(
-					shimmerX + 16, 0, new Color(255, 255, 255, 90),
-					shimmerX + 32, 0, new Color(255, 255, 255, 0)));
-				graphics.fillRect(shimmerX + 16, y, 16, BAR_HEIGHT);
-
-				graphics.setClip(oldClip);
-				graphics.setColor(new Color(base.getRed(), base.getGreen(), base.getBlue(), 130));
-				graphics.drawRoundRect(PADDING, y, fillWidth, BAR_HEIGHT, BAR_HEIGHT, BAR_HEIGHT);
-			}
-
-			graphics.setFont(smallFont);
+			graphics.setFont(barHeight >= 20 ? titleFont : smallFont);
+			FontMetrics percentMetrics = graphics.getFontMetrics();
 			String percent = String.format(Locale.ROOT, "%.1f%%", current * 100.0);
-			int percentWidth = metrics.stringWidth(percent);
+			int percentWidth = percentMetrics.stringWidth(percent);
 			int percentX = PADDING + (barWidth - percentWidth) / 2;
-			int percentY = y + (BAR_HEIGHT + metrics.getAscent()) / 2 - 1;
+			int percentY = y + (barHeight + percentMetrics.getAscent()) / 2 - 1;
 			graphics.setColor(new Color(0, 0, 0, 160));
 			graphics.drawString(percent, percentX + 1, percentY + 1);
 			graphics.setColor(Color.WHITE);
 			graphics.drawString(percent, percentX, percentY);
 
-			y += BAR_HEIGHT + BAR_GAP;
+			y += barHeight + barGap;
 		}
 
 		return new Dimension(width, height);
@@ -201,6 +192,8 @@ public class XpProgressOverlay extends Overlay
 	private void resetAnimation()
 	{
 		displayedProgress.clear();
+		lastTarget.clear();
+		fx.reset();
 		lastFrameAt = 0;
 	}
 }

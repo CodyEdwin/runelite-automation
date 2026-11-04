@@ -40,11 +40,13 @@ import net.runelite.api.events.ClientTick;
 import net.runelite.api.events.CommandExecuted;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.MenuEntryAdded;
+import net.runelite.api.events.StatChanged;
 import net.runelite.client.callback.ClientThread;
 import javax.swing.SwingUtilities;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.input.KeyManager;
 import net.runelite.client.input.MouseManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
@@ -100,6 +102,11 @@ public class RSBuddyPlugin extends Plugin
 
 	@Inject
 	private MouseManager mouseManager;
+
+	@Inject
+	private KeyManager keyManager;
+
+	private ShiftDragHandler xpDragHandler;
 
 	@Inject
 	private ClientToolbar clientToolbar;
@@ -202,6 +209,13 @@ public class RSBuddyPlugin extends Plugin
 		overlayManager.add(overlay);
 		overlayManager.add(xpProgressOverlay);
 		overlayManager.add(xpLoggerOverlay);
+		// Shift + drag moves the XP overlays (reads real input only, never injects).
+		xpDragHandler = new ShiftDragHandler(overlayManager, List.of(xpLoggerOverlay, xpProgressOverlay),
+			client::getRealDimensions);
+		xpLoggerOverlay.setDragHandler(xpDragHandler);
+		xpProgressOverlay.setDragHandler(xpDragHandler);
+		mouseManager.registerMouseListener(0, xpDragHandler);
+		keyManager.registerKeyListener(xpDragHandler);
 		overlayManager.add(mouseOverlay);
 		mouseManager.registerMouseListener(mouseOverlay);
 		log.info("RSBuddy started");
@@ -234,6 +248,12 @@ public class RSBuddyPlugin extends Plugin
 		overlayManager.remove(overlay);
 		overlayManager.remove(xpProgressOverlay);
 		overlayManager.remove(xpLoggerOverlay);
+		if (xpDragHandler != null)
+		{
+			mouseManager.unregisterMouseListener(xpDragHandler);
+			keyManager.unregisterKeyListener(xpDragHandler);
+			xpDragHandler = null;
+		}
 		overlayManager.remove(mouseOverlay);
 		mouseManager.unregisterMouseListener(mouseOverlay);
 		if (input != null)
@@ -243,6 +263,12 @@ public class RSBuddyPlugin extends Plugin
 		}
 		input = null;
 		log.info("RSBuddy stopped");
+	}
+
+	@Subscribe
+	public void onStatChanged(StatChanged event)
+	{
+		xpLoggerOverlay.onStatChanged(event.getSkill(), event.getXp());
 	}
 
 	@Subscribe

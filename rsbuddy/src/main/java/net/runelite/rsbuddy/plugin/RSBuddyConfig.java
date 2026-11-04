@@ -130,6 +130,41 @@ public interface RSBuddyConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "xpBarAnimations",
+		name = "XP bar animations",
+		description = "Animated XP bars: energy stripes, sheen, twirling embers, sparks and a flash on XP drops",
+		position = 34
+	)
+	default boolean xpBarAnimations()
+	{
+		return true;
+	}
+
+	@Range(min = 100, max = 400)
+	@ConfigItem(
+		keyName = "xpBarThickness",
+		name = "XP bar thickness %",
+		description = "XP bar thickness as a percent of the original (250 = 2.5x)",
+		position = 35
+	)
+	default int xpBarThickness()
+	{
+		return 250;
+	}
+
+	@Range(min = 0, max = 200)
+	@ConfigItem(
+		keyName = "xpSparkIntensity",
+		name = "XP spark intensity %",
+		description = "How many sparks fly off the XP bars (0 = none, 100 = default, 200 = double)",
+		position = 36
+	)
+	default int xpSparkIntensity()
+	{
+		return 100;
+	}
+
+	@ConfigItem(
 		keyName = "fruitStallStayAtOneStall",
 		name = "Fruit stall: stay at one stall",
 		description = "Stay at a single fruit stall and wait for it to respawn. Uncheck to run between both stalls.",
