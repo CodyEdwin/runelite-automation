@@ -51,6 +51,7 @@ import net.runelite.api.gameval.ObjectID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.rsbuddy.input.GameInput;
 import net.runelite.rsbuddy.inventory.Inventory;
+import net.runelite.rsbuddy.script.Actions;
 import net.runelite.rsbuddy.script.Script;
 import net.runelite.rsbuddy.script.ScriptContext;
 
@@ -648,7 +649,7 @@ public final class AnimatedSuitKillerScript extends Script
 
 		Player player = context.getPlayer();
 		Actor ours = player == null ? null : player.getInteracting();
-		if (ours == target || isMoving(player))
+		if (ours == target || Actions.isMoving(player))
 		{
 			idleTicks = 0;
 			setStatus("Fighting " + armour.label + " armour");
@@ -1306,10 +1307,6 @@ public final class AnimatedSuitKillerScript extends Script
 		}
 	}
 
-	private static boolean isMoving(Player player)
-	{
-		return player != null && player.getPoseAnimation() != player.getIdlePoseAnimation();
-	}
 
 	private static String itemName(Client client, int itemId)
 	{

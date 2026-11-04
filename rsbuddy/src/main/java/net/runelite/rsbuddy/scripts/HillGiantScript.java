@@ -49,6 +49,7 @@ import net.runelite.api.gameval.NpcID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.rsbuddy.input.GameInput;
 import net.runelite.rsbuddy.inventory.Inventory;
+import net.runelite.rsbuddy.script.Actions;
 import net.runelite.rsbuddy.script.Script;
 import net.runelite.rsbuddy.script.ScriptContext;
 
@@ -878,7 +879,7 @@ public final class HillGiantScript extends Script
 				lootClickFailed = false;
 				lootClickTicks = LOOT_RECLICK_TICKS;
 			}
-			if (isMoving(player) || lootClickTicks < LOOT_RECLICK_TICKS)
+			if (Actions.isMoving(player) || lootClickTicks < LOOT_RECLICK_TICKS)
 			{
 				setStatus("Looting " + getItemName(context.getClient(), loot.itemId));
 				return;
@@ -1143,7 +1144,7 @@ public final class HillGiantScript extends Script
 			--doorWaitTicks;
 			// Let the door action play out; give a moving player a little
 			// longer, but never wait forever.
-			if (doorWaitTicks > 0 || (isMoving(player) && doorWaitTicks > -DOOR_WAIT_TICKS))
+			if (doorWaitTicks > 0 || (Actions.isMoving(player) && doorWaitTicks > -DOOR_WAIT_TICKS))
 			{
 				logShed(context, location, "exit: waiting for the door to let us out");
 				setStatus("Leaving shed");
@@ -1482,7 +1483,7 @@ public final class HillGiantScript extends Script
 		{
 			shedStep = ShedStep.APPROACH_DOOR;
 			GameInput input = context.getInput();
-			if (input.isBusy() || isMoving(context.getPlayer()))
+			if (input.isBusy() || Actions.isMoving(context.getPlayer()))
 			{
 				return;
 			}
@@ -1529,7 +1530,7 @@ public final class HillGiantScript extends Script
 			// minimap; the shed footprint check sets the latch once inside.
 			// Not latched here: the player is still outside.
 			logShed(context, location, "door already open, walking in (no latch until inside)");
-			if (!context.getInput().isBusy() && !isMoving(context.getPlayer()))
+			if (!context.getInput().isBusy() && !Actions.isMoving(context.getPlayer()))
 			{
 				clickMinimap(context, new WorldPoint(SURFACE_DOOR.getX(), SURFACE_DOOR.getY() + 1, 0));
 			}
@@ -1649,7 +1650,7 @@ public final class HillGiantScript extends Script
 				+ " menuOpen={} moving={} animating={} interacting={} lootPhase={} lootTarget={} lootAttempts={}"
 				+ " lootClickTicks={} cooldown={}",
 			context.getClient().getTickCount(), state, stateTicks, getStatus(), context.getPlayerLocation(),
-			input.isBusy(), input.isCameraBusy(), context.getClient().isMenuOpen(), isMoving(player),
+			input.isBusy(), input.isCameraBusy(), context.getClient().isMenuOpen(), Actions.isMoving(player),
 			isAnimating(player), player == null ? null : player.getInteracting() != null, lootPhase, lootTarget,
 			lootAttempts, lootClickTicks, cooldown);
 	}
@@ -1802,7 +1803,7 @@ public final class HillGiantScript extends Script
 		if (ladderWaitTicks > 0)
 		{
 			--ladderWaitTicks;
-			boolean busy = isMoving(player) || isAnimating(player);
+			boolean busy = Actions.isMoving(player) || isAnimating(player);
 			if (busy || ladderWaitTicks > LADDER_WAIT_TICKS - 2)
 			{
 				setStatus(up ? "Climbing up" : "Climbing down");
@@ -2921,7 +2922,7 @@ public final class HillGiantScript extends Script
 	 */
 	private static boolean isSettled(ScriptContext context, Player player)
 	{
-		if (player == null || isMoving(player))
+		if (player == null || Actions.isMoving(player))
 		{
 			return false;
 		}
@@ -2931,10 +2932,6 @@ public final class HillGiantScript extends Script
 		return local == null || tile == null || local.equals(tile);
 	}
 
-	private static boolean isMoving(Player player)
-	{
-		return player != null && player.getPoseAnimation() != player.getIdlePoseAnimation();
-	}
 
 	private static boolean isAnimating(Player player)
 	{

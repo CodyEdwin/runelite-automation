@@ -44,6 +44,7 @@ import net.runelite.api.gameval.ItemID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.rsbuddy.input.GameInput;
 import net.runelite.rsbuddy.inventory.Inventory;
+import net.runelite.rsbuddy.script.Actions;
 import net.runelite.rsbuddy.script.Script;
 import net.runelite.rsbuddy.script.ScriptContext;
 import net.runelite.rsbuddy.target.BankFinder;
@@ -188,12 +189,6 @@ public final class GemCutterScript extends Script
 		{
 			return Gem.SAPPHIRE;
 		}
-	}
-
-	@Override
-	public boolean physicalInputOnly()
-	{
-		return true;
 	}
 
 	@Override
@@ -501,7 +496,7 @@ public final class GemCutterScript extends Script
 		}
 		Player player = context.getPlayer();
 		++waitTicks;
-		if (waitTicks < BANK_OPEN_WAIT_TICKS || isMoving(player) && waitTicks < BANK_OPEN_WALK_TICKS)
+		if (waitTicks < BANK_OPEN_WAIT_TICKS || Actions.isMoving(player) && waitTicks < BANK_OPEN_WALK_TICKS)
 		{
 			setStatus("Waiting for bank");
 			return;
@@ -1059,10 +1054,6 @@ public final class GemCutterScript extends Script
 		return composition == null ? "object " + object.getId() : composition.getName();
 	}
 
-	private static boolean isMoving(Player player)
-	{
-		return player != null && player.getPoseAnimation() != player.getIdlePoseAnimation();
-	}
 
 	private static String itemName(ScriptContext context, int itemId)
 	{

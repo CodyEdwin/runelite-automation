@@ -164,7 +164,12 @@ public final class Actions
 
 	public static boolean isMoving(ScriptContext context)
 	{
-		Player player = context.getPlayer();
+		return isMoving(context.getPlayer());
+	}
+
+	/** @return true while the player's pose is not the idle pose (walking or running) */
+	public static boolean isMoving(Player player)
+	{
 		return player != null && player.getPoseAnimation() != player.getIdlePoseAnimation();
 	}
 
@@ -507,6 +512,7 @@ public final class Actions
 				markAction("click " + key);
 				verifyMisses = 0;
 				verifyKey = null;
+				aimTarget = null;
 				lastClickKey = key;
 				lastClickAt = System.currentTimeMillis();
 				return true;
@@ -574,6 +580,12 @@ public final class Actions
 		verifyTarget = null;
 		aimTarget = null;
 		context.getInput().follow(null);
+	}
+
+	/** Forget which target is being clicked (miss counters restart on the next click) without moving anything. */
+	public void forgetKey()
+	{
+		verifyKey = null;
 	}
 
 	/** Forget the current target entirely (next click starts fresh). */

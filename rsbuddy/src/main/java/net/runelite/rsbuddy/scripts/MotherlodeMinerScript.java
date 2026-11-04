@@ -25,7 +25,6 @@
 package net.runelite.rsbuddy.scripts;
 
 import java.awt.Point;
-import java.awt.Shape;
 import java.awt.event.KeyEvent;
 import java.util.Arrays;
 import java.util.List;
@@ -52,6 +51,7 @@ import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.rsbuddy.input.GameInput;
 import net.runelite.rsbuddy.inventory.Inventory;
+import net.runelite.rsbuddy.script.Actions;
 import net.runelite.rsbuddy.script.Script;
 import net.runelite.rsbuddy.script.ScriptContext;
 import net.runelite.rsbuddy.walk.Walker;
@@ -64,7 +64,7 @@ import net.runelite.rsbuddy.walk.Walker;
  * bonus experience arrives (roughly eight seconds after the hopper click),
  * which is when the pay-dirt has reached the sack.
  */
-public final class MotherlodeMinerScript extends Script
+public final class MotherlodeMinerScript extends Script implements Actions.Host
 {
 	private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MotherlodeMinerScript.class);
 
@@ -233,18 +233,9 @@ public final class MotherlodeMinerScript extends Script
 	private int sackCapacity = SACK_SIZE;
 	private final boolean upstairs;
 	private final boolean dragonSpec;
-	private long lastActionAt;
-	private Point aimTarget;
-	private boolean coverMiss;
-	/** Key and time of the last verified click, so the walk it starts is not chased with the mouse. */
-	private String lastClickKey;
-	private long lastClickAt;
 	private State lastDispatchState;
-	/** Object being hovered for a verified click; its centre is followed each frame. */
-	private TileObject verifyObject;
-	private final java.util.Set<String> menuDumped = new java.util.HashSet<>();
-	private long fastReadyAt;
-	private String lastAction = "start";
+	/** Shared action layer: verified clicks, walking, aim/drop logic, gap logs. */
+	private Actions actions;
 	private boolean specHovered;
 	private int specClicks;
 	private int specWaitTicks;
@@ -268,14 +259,10 @@ public final class MotherlodeMinerScript extends Script
 	private int sackCameraTurns;
 	private int itemsBeforeSearch;
 	private int levelUpDismissAttempts;
-	private String verifyKey;
 	private boolean droppingExtras;
 	private boolean dropVerified;
 	private boolean dropHovered;
 	private int payDirtAtClick;
-	private boolean verifyHovered;
-	private int verifyRecoveries;
-	private int verifyMisses;
 	private int sackZeroTicks;
 	private int sackFruitlessTrips;
 	private boolean sackTripGotOres;
@@ -300,13 +287,6 @@ public final class MotherlodeMinerScript extends Script
 			"Mines pay-dirt, deposits it at the hopper, searches the sack, and banks the ores.");
 		this.upstairs = upstairs;
 		this.dragonSpec = dragonSpec;
-	}
-
-	@Override
-	public boolean physicalInputOnly()
-	{
-		// Every interaction is a real, visible mouse click.
-		return true;
 	}
 
 	@Override
@@ -361,18 +341,13 @@ public final class MotherlodeMinerScript extends Script
 		specClicks = 0;
 		specWaitTicks = 0;
 		specSkipLogged = false;
-		lastClickKey = null;
-		lastClickAt = 0;
 		lastDispatchState = null;
+		actions = null;
 		specSavedLogged = false;
-		menuDumped.clear();
-		verifyKey = null;
 		droppingExtras = false;
 		dropVerified = false;
 		dropHovered = false;
 		payDirtAtClick = 0;
-		verifyHovered = false;
-		verifyMisses = 0;
 		sackZeroTicks = 0;
 		sackFruitlessTrips = 0;
 		sackTripGotOres = false;
@@ -416,9 +391,10 @@ public final class MotherlodeMinerScript extends Script
 			? Math.min(sackCapacity, Math.max(liveSack, sackBase + depositedSinceEmpty))
 			: liveSack;
 
-		if (walker == null)
+		if (actions == null || walker == null)
 		{
-			walker = new Walker(context.getClient(), context.getInput());
+			actions = new Actions(context, this, "[MotherlodeMiner]").allowWithBankOpen("bank chest");
+			walker = actions.walker();
 		}
 
 		if (dismissLevelUp(context))
@@ -488,44 +464,16 @@ public final class MotherlodeMinerScript extends Script
 			GameInput input = context.getInput();
 			if (input.isBusy())
 			{
-				fastReadyAt = 0;
+				actions.onClientTick();
 				return;
 			}
 			boolean trigger;
-			if ((verifyHovered || verifyObject != null) && isMoving(context))
+			// Shared per-frame aim handling: drop targets while moving, glide
+			// onto a shifted centre, human pause, then ready to click.
+			boolean aimReady = actions.onClientTick();
+			if (actions.isAiming())
 			{
-				// Never hover or track a target while the player runs.
-				dropAim(context, "player is moving");
-				fastReadyAt = 0;
-				return;
-			}
-			if (verifyHovered && verifyObject != null)
-			{
-				Shape area = input.objectHull(verifyObject);
-				Point mouse = input.getMouseLocation();
-				if (area != null && mouse != null && !area.contains(mouse))
-				{
-					// The scene shifted after the move (camera settling):
-					// glide the end of the path onto the live centre rather
-					// than a second hop.
-					Point centre = input.objectCenter(verifyObject);
-					if (centre != null)
-					{
-						input.follow(centre);
-						fastReadyAt = 0;
-						return;
-					}
-				}
-			}
-			if (verifyHovered)
-			{
-				long now = System.currentTimeMillis();
-				if (fastReadyAt == 0)
-				{
-					fastReadyAt = now + java.util.concurrent.ThreadLocalRandom.current().nextLong(80, 201);
-					return;
-				}
-				trigger = now >= fastReadyAt;
+				trigger = aimReady;
 			}
 			else if (state == State.BANK)
 			{
@@ -540,7 +488,6 @@ public final class MotherlodeMinerScript extends Script
 			}
 			if (trigger)
 			{
-				fastReadyAt = 0;
 				cooldown = 0;
 				dispatch(context);
 			}
@@ -548,7 +495,6 @@ public final class MotherlodeMinerScript extends Script
 		catch (RuntimeException ex)
 		{
 			log.error("[MotherlodeMiner] fast step failed in state={}", state, ex);
-			fastReadyAt = 0;
 		}
 	}
 
@@ -558,7 +504,7 @@ public final class MotherlodeMinerScript extends Script
 		{
 			if (lastDispatchState == State.SACK)
 			{
-				dropAim(context, "sack search finished");
+				actions.dropAim("sack search finished");
 			}
 			lastDispatchState = state;
 		}
@@ -756,7 +702,7 @@ public final class MotherlodeMinerScript extends Script
 			return;
 		}
 
-		if (isMoving(context))
+		if (Actions.isMoving(context))
 		{
 			setStatus("Waiting to stop");
 			return;
@@ -776,7 +722,7 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		input.stopCamera();
-		if (verifiedObjectClick(context, vein, "vein", new String[]{"mine"}, "vein"))
+		if (actions.clickObject(vein, "vein", new String[]{"mine"}, "vein"))
 		{
 			mining = true;
 			miningAnimationSeen = false;
@@ -973,13 +919,13 @@ public final class MotherlodeMinerScript extends Script
 
 		input.stopCamera();
 		int carriedNow = inventory.countItem(ItemID.PAYDIRT);
-		if (!verifyHovered)
+		if (!actions.isAiming())
 		{
 			Point centre = input.objectCenter(hopper);
 			log.info("[MotherlodeMiner] hopper id={} at {} centre={} pay-dirt={} attempt {}", hopper.getId(),
 				hopperLocation, centre == null ? "-" : centre.x + "," + centre.y, carriedNow, actionAttempts + 1);
 		}
-		if (verifiedObjectClick(context, hopper, "hopper", new String[]{"deposit"}, "hopper"))
+		if (actions.clickObject(hopper, "hopper", new String[]{"deposit"}, "hopper"))
 		{
 			log.info("[MotherlodeMiner] hopper deposit click sent with {} pay-dirt", carriedNow);
 			++actionAttempts;
@@ -1215,22 +1161,12 @@ public final class MotherlodeMinerScript extends Script
 	/** Walker click with a gap log, so Cody can see the time between actions. */
 	private boolean walkLogged(WorldPoint target, boolean minimap, int stopDistance)
 	{
-		boolean sent = walker.walkTo(target, minimap, stopDistance);
-		if (sent)
-		{
-			markAction("walk " + state + " -> " + target.getX() + "," + target.getY());
-		}
-		return sent;
+		return actions.walkTo(target, minimap, stopDistance);
 	}
 
-	/** Logs an action and the time since the previous one. */
 	private void markAction(String action)
 	{
-		long now = System.currentTimeMillis();
-		log.info("[MotherlodeMiner] +{}ms {} (after {})", lastActionAt == 0 ? 0 : now - lastActionAt, action,
-			lastAction);
-		lastActionAt = now;
-		lastAction = action;
+		actions.markAction(action);
 	}
 
 	private void walkToSack(ScriptContext context)
@@ -1254,7 +1190,7 @@ public final class MotherlodeMinerScript extends Script
 		// Standing still with the sack clickable on screen: click it
 		// directly (the click walks there). While a minimap walk is running
 		// the mouse stays idle until the player arrives.
-		boolean nearAndVisible = sack != null && !bankOpen && !isMoving(context)
+		boolean nearAndVisible = sack != null && !bankOpen && !Actions.isMoving(context)
 			&& location.distanceTo2D(sack.getWorldLocation()) <= SACK_PREHOVER_DISTANCE
 			&& clickableOnScreen(context, sack);
 		if (nearAndVisible || (sack != null && location.distanceTo2D(sack.getWorldLocation()) <= WALK_STOP_DISTANCE)
@@ -1266,7 +1202,7 @@ public final class MotherlodeMinerScript extends Script
 			searchMisses = 0;
 			sackCameraTurns = 0;
 			itemsBeforeSearch = 0;
-			verifyKey = null;
+			actions.forgetKey();
 			setStatus("Searching the sack");
 			sack(context);
 			return;
@@ -1293,7 +1229,7 @@ public final class MotherlodeMinerScript extends Script
 			{
 				searchWait = 1;
 			}
-			else if (searchWait == 1 && isMoving(context))
+			else if (searchWait == 1 && Actions.isMoving(context))
 			{
 				// Clicked the sack while running: still on the way to it.
 				searchWait = 2;
@@ -1415,187 +1351,7 @@ public final class MotherlodeMinerScript extends Script
 
 	private boolean clickSack(ScriptContext context, TileObject sack)
 	{
-		return verifiedObjectClick(context, sack, "sack", new String[]{"search"}, "sack");
-	}
-
-	/**
-	 * Verified left click on a game object, aimed at the dead centre of its
-	 * hull. Tick 1: curved move onto the centre. Tick 2: recompute the centre
-	 * (the player or camera may have moved) and click only if the cursor is
-	 * still inside the hull, within {@link #CENTER_TOLERANCE_PX} of the centre,
-	 * and the real left-click option matches; otherwise re-aim. After
-	 * {@link #SACK_HOVER_ATTEMPTS} misses it turns the camera and walks closer
-	 * (never a direct action), and halts after {@link #VERIFY_RECOVERIES}.
-	 *
-	 * @return true when the action was sent
-	 */
-	private boolean verifiedObjectClick(ScriptContext context, TileObject object, String key,
-		String[] optionPrefixes, String targetWord)
-	{
-		GameInput input = context.getInput();
-		if (!key.equals(verifyKey))
-		{
-			if (verifyHovered || verifyObject != null)
-			{
-				dropAim(context, "new target " + key);
-			}
-			verifyKey = key;
-			verifyHovered = false;
-			verifyMisses = 0;
-			verifyRecoveries = 0;
-		}
-		if (input.isBusy())
-		{
-			// The mouse is still travelling to the centre.
-			return false;
-		}
-		if (!"bank chest".equals(key) && context.getTargets().findWidget(InterfaceID.Bankmain.UNIVERSE).isPresent())
-		{
-			// The bank closes once the walk starts; do not click through it.
-			return false;
-		}
-		if (isMoving(context))
-		{
-			// Never chase any target with the mouse while walking: leave it
-			// idle and aim once the player has stopped.
-			dropAim(context, key + ": player moving, mouse idle until arrival");
-			setStatus("Walking to the " + key);
-			return false;
-		}
-		if (key.equals(lastClickKey) && System.currentTimeMillis() - lastClickAt < POST_CLICK_GRACE_MS)
-		{
-			// Just clicked it: the walk starts a tick later. Do not re-aim at
-			// (and then track) the same target in that gap.
-			setStatus("Walking to the " + key);
-			return false;
-		}
-		if (!verifyHovered)
-		{
-			// First aim at the dead centre; after a miss try another point
-			// inside the clickable model (the centre can sit on a part that
-			// another object covers).
-			// One move to the centre of the clickable area (the same shape
-			// the check uses). A miss on the option only (something covers
-			// the centre) tries another point inside it on the next aim.
-			aimTarget = coverMiss ? null : input.objectCenter(object);
-			boolean moved = aimTarget != null ? input.moveTo(aimTarget) : input.hover(object);
-			coverMiss = false;
-			if (moved)
-			{
-				verifyHovered = true;
-				verifyObject = object;
-			}
-			else
-			{
-				++verifyMisses;
-				log.info("[MotherlodeMiner] {}: no clickable point on screen (miss {}/{})", key, verifyMisses,
-					SACK_HOVER_ATTEMPTS);
-				if (verifyMisses >= SACK_HOVER_ATTEMPTS)
-				{
-					verifyMisses = SACK_HOVER_ATTEMPTS - 1;
-					return recoverVerify(context, object, key);
-				}
-			}
-			setStatus("Moving mouse to the " + key);
-			return false;
-		}
-		verifyHovered = false;
-		verifyObject = null;
-		input.follow(null);
-
-		MenuEntry entry = input.getLeftClickEntry();
-		String option = entry == null ? "" : GameInput.plainText(entry.getOption()).toLowerCase(Locale.ROOT);
-		String target = entry == null ? "" : GameInput.plainText(entry.getTarget()).toLowerCase(Locale.ROOT);
-		Point mouse = input.getMouseLocation();
-		Point center = input.objectCenter(object);
-		Shape hull = input.objectHull(object);
-		boolean onHull = mouse != null && hull != null && hull.contains(mouse);
-		// On the clickable area with the right option is enough; a strict
-		// distance-to-centre rule only caused a second visible hop when the
-		// scene shifted a frame after arrival.
-		boolean centred = onHull;
-		log.info("[MotherlodeMiner] aim: target {} -> arrived {}, centre now {}, re-aim={}", key == null ? "" : key
-			+ " " + (aimTarget == null ? "-" : aimTarget.x + "," + aimTarget.y),
-			mouse == null ? "-" : mouse.x + "," + mouse.y, center == null ? "-" : center.x + "," + center.y,
-			onHull ? "no" : "yes");
-		boolean optionOk = target.contains(targetWord);
-		boolean prefixOk = false;
-		for (String prefix : optionPrefixes)
-		{
-			prefixOk |= option.startsWith(prefix);
-		}
-		if (onHull && centred && optionOk && prefixOk)
-		{
-			if (input.click(mouse))
-			{
-				log.info("[MotherlodeMiner] {} click: top='{} {}' at {},{} (centre {},{})", key, option, target,
-					mouse.x, mouse.y, center.x, center.y);
-				markAction("click " + key);
-				verifyMisses = 0;
-				verifyKey = null;
-				lastClickKey = key;
-				lastClickAt = System.currentTimeMillis();
-				return true;
-			}
-			return false;
-		}
-
-		++verifyMisses;
-		coverMiss = onHull;
-		if (menuDumped.add(key))
-		{
-			// Once per start and target: the full menu ordering, to check
-			// which entry the game treats as the left click.
-			log.info("[MotherlodeMiner] {} menu order: {}", key, input.describeMenuOrder());
-		}
-		log.info("[MotherlodeMiner] {} hover miss {}/{}: top='{} {}' onHull={} centred={} -> re-aiming", key,
-			verifyMisses, SACK_HOVER_ATTEMPTS, option, target, onHull, centred);
-		if (verifyMisses < SACK_HOVER_ATTEMPTS)
-		{
-			cooldown = 0;
-			return false;
-		}
-
-		return recoverVerify(context, object, key);
-	}
-
-	/**
-	 * Clears every hover/aim target and stops the cursor follower, logging
-	 * the reason when there was something to drop.
-	 */
-	private void dropAim(ScriptContext context, String reason)
-	{
-		if (verifyHovered || verifyObject != null || aimTarget != null)
-		{
-			log.info("[MotherlodeMiner] {}, dropping the {} target", reason, verifyKey == null ? "aim" : verifyKey);
-		}
-		verifyHovered = false;
-		verifyObject = null;
-		aimTarget = null;
-		context.getInput().follow(null);
-	}
-
-	private boolean recoverVerify(ScriptContext context, TileObject object, String key)
-	{
-		GameInput input = context.getInput();
-		// Never act invisibly. Turn the camera toward it and walk a step
-		// closer (a real tile/minimap click), then re-aim; halt after a few
-		// recoveries with a clear log.
-		verifyMisses = 0;
-		if (++verifyRecoveries > VERIFY_RECOVERIES)
-		{
-			log.info("[MotherlodeMiner] {}: left click never verified after {} recoveries, halting", key,
-				VERIFY_RECOVERIES);
-			state = State.HALTED;
-			setStatus("Stopped: could not click the " + key);
-			return false;
-		}
-		log.info("[MotherlodeMiner] {}: recovery {}/{} - turning camera and walking closer, then re-aiming", key,
-			verifyRecoveries, VERIFY_RECOVERIES);
-		input.turnCameraToward(object.getWorldLocation());
-		walkLogged(onPlayerPlane(context, object.getWorldLocation()), true, 1);
-		cooldown = 2;
-		return false;
+		return actions.clickObject(sack, "sack", new String[]{"search"}, "sack");
 	}
 
 	private void finishSackTrip(ScriptContext context, Inventory inventory)
@@ -1823,7 +1579,7 @@ public final class MotherlodeMinerScript extends Script
 			// mouse to arrive, verify 'Use'/'Bank' on 'Bank chest', click.
 			Point before = input.getMouseLocation();
 			Point centre = input.objectCenter(chest);
-			boolean clicked = verifiedObjectClick(context, chest, "bank chest", new String[]{"use", "bank"},
+			boolean clicked = actions.clickObject(chest, "bank chest", new String[]{"use", "bank"},
 				"bank chest");
 			log.info("[MotherlodeMiner] bank-open attempt: cursor {} vs hull centre {} -> {}",
 				before == null ? "-" : before.x + "," + before.y,
@@ -2091,7 +1847,7 @@ public final class MotherlodeMinerScript extends Script
 			return;
 		}
 
-		if (isMoving(context))
+		if (Actions.isMoving(context))
 		{
 			setStatus("Waiting to stop");
 			return;
@@ -2119,7 +1875,7 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		input.stopCamera();
-		if (verifiedObjectClick(context, strut, "strut", new String[]{"hammer", "fix", "use"}, "strut"))
+		if (actions.clickObject(strut, "strut", new String[]{"hammer", "fix", "use"}, "strut"))
 		{
 			cooldown = CLICK_COOLDOWN;
 			setStatus("Fixing the water wheel");
@@ -2270,7 +2026,7 @@ public final class MotherlodeMinerScript extends Script
 				return;
 			}
 
-			if (isMoving(context))
+			if (Actions.isMoving(context))
 			{
 				climbWaitTicks = Math.max(climbWaitTicks, 2);
 			}
@@ -2295,7 +2051,7 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		GameInput input = context.getInput();
-		if (input.isBusy() || isMoving(context))
+		if (input.isBusy() || Actions.isMoving(context))
 		{
 			setStatus("Waiting to climb");
 			return;
@@ -2340,7 +2096,7 @@ public final class MotherlodeMinerScript extends Script
 				return;
 			}
 
-			if (isMoving(context))
+			if (Actions.isMoving(context))
 			{
 				climbWaitTicks = Math.max(climbWaitTicks, 2);
 			}
@@ -2365,7 +2121,7 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		GameInput input = context.getInput();
-		if (input.isBusy() || isMoving(context))
+		if (input.isBusy() || Actions.isMoving(context))
 		{
 			setStatus("Waiting to climb down");
 			return;
@@ -2420,7 +2176,7 @@ public final class MotherlodeMinerScript extends Script
 			setStatus("Stopped: could not climb the ladder");
 			return false;
 		}
-		boolean sent = verifiedObjectClick(context, ladder, up ? "ladder up" : "ladder down",
+		boolean sent = this.actions.clickObject(ladder, up ? "ladder up" : "ladder down",
 			new String[]{"climb"}, "ladder");
 		if (sent)
 		{
@@ -2595,15 +2351,8 @@ public final class MotherlodeMinerScript extends Script
 			// The hammer is in: drop the crate hover at once. Otherwise the
 			// per-frame hook keeps following the crate centre (a re-aim
 			// started while the search was resolving) all the way to the wheel.
-			if (verifyHovered || verifyObject != null)
-			{
-				log.info("[MotherlodeMiner] hammer received, dropping the crate hover and heading to the strut");
-			}
-			verifyHovered = false;
-			verifyObject = null;
-			verifyKey = null;
-			aimTarget = null;
-			context.getInput().follow(null);
+			actions.dropAim("hammer received, heading to the strut");
+			actions.forgetKey();
 			walker.reset();
 			state = State.FIX_WHEEL;
 			wheelAttempts = 0;
@@ -2688,7 +2437,7 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		input.stopCamera();
-		if (verifiedObjectClick(context, crate, "crate", new String[]{"search"}, "crate"))
+		if (actions.clickObject(crate, "crate", new String[]{"search"}, "crate"))
 		{
 			++crateAttempts;
 			cooldown = 2;
@@ -2700,17 +2449,9 @@ public final class MotherlodeMinerScript extends Script
 		}
 	}
 
-	/**
-	 * @return true when the object has a clickable point on screen (not off
-	 * the viewport or under an interface), so it can be clicked directly
-	 * instead of walking to it first
-	 */
-	private static boolean clickableOnScreen(ScriptContext context, TileObject object)
+	private boolean clickableOnScreen(ScriptContext context, TileObject object)
 	{
-		// With the bank open the game view is covered: walk by minimap
-		// instead (the bank closes itself once the walk starts).
-		return object != null && context.getInput().objectCenter(object) != null
-			&& !context.getTargets().findWidget(InterfaceID.Bankmain.UNIVERSE).isPresent();
+		return actions.clickableOnScreen(object);
 	}
 
 	private static WorldPoint onPlayerPlane(ScriptContext context, WorldPoint point)
@@ -2820,11 +2561,6 @@ public final class MotherlodeMinerScript extends Script
 		return true;
 	}
 
-	private static boolean isMoving(ScriptContext context)
-	{
-		Player player = context.getPlayer();
-		return player != null && player.getPoseAnimation() != player.getIdlePoseAnimation();
-	}
 
 	private static boolean veinStillExists(ScriptContext context, TileObject vein)
 	{
@@ -2938,5 +2674,32 @@ public final class MotherlodeMinerScript extends Script
 				+ " | Pay-dirt: " + inventory.countItem(ItemID.PAYDIRT),
 			"Hopper: " + sackContents + " / " + sackCapacity,
 			"Wheels: " + (wheelsDown ? "Repairing" : "Working"));
+	}
+
+	// Actions.Host
+
+	@Override
+	public void status(String status)
+	{
+		setStatus(status);
+	}
+
+	@Override
+	public void halt(String status)
+	{
+		state = State.HALTED;
+		setStatus(status);
+	}
+
+	@Override
+	public void cooldown(int ticks)
+	{
+		cooldown = ticks;
+	}
+
+	@Override
+	public String stepName()
+	{
+		return String.valueOf(state);
 	}
 }

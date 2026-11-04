@@ -50,3 +50,52 @@ Every mouse move, click, scroll and key goes through an OS-level backend:
 - **Windows SendInput**: Win32 `SendInput` via JNA user32. Absolute virtual-desktop mouse coordinates (DPI-aware) and scan-code keys (`KEYEVENTF_SCANCODE`). Untested on real Windows.
 
 Detection runs when the plugin starts. Auto picks the backend by OS and runs a harmless check: X11 opens the display and queries XTEST, Windows loads user32 and reads the cursor position. The result is logged as `[Input] using <backend>`, shown in the side panel (green or red), and cached. If a backend call throws, it is dropped, and the next script Start detects again. Override it with the panel dropdown or the wrench config **Input backend** (Auto / Linux X11 / Windows SendInput); the two stay in sync. Java input (AWT Robot, synthetic AWT events) is never used. With no backend, scripts refuse to start with an `[Input]` error.
+
+## Writing a script
+
+Every script acts through real, visible clicks: `ScriptManager` turns on physical-only input for all scripts (the GE flipper is the only exemption while it is rebuilt). The shared layer is `net.runelite.rsbuddy.script.Actions`, and the rules are built in: one curved move to the dead centre of the hull, the real left-click option is checked before clicking (never Examine), on-screen targets are clicked directly and anything else is walked to by minimap and clicked on arrival, the mouse never hovers while the player moves, the click comes 80-200 ms after the cursor arrives (per frame), and every action logs its gap.
+
+`Actions` methods:
+- Clicks: `clickObject(obj, key, optionPrefixes, targetWord)`, `clickNpc(...)`, `clickWidget(...)`, `clickItem(itemId, option)`, `useItemOn(a, b)`, `goAndClick(find, area, key, options, target, reach)`
+- Walking: `walkTo(point[, minimap, stopDistance])`, `onPlayerPlane(point)`
+- Bank: `openNearestBank(radius, preferBooth)`, `bankOpen()`, `depositAll()`, `withdraw(itemId)`, `allowWithBankOpen(key)`
+- Keys: `pressKey(code)`, `makeAll()` (Space), `makeOption(n)`
+- Waits and state: `waitUntil(key, condition, maxTicks)` (the cap is a timeout, never a delay), `isMoving()`, `isAnimating()`, `clickableOnScreen(obj)`
+- Targets and logs: `dropAim(reason)`, `resetTarget()`, `markAction(label)`, `onClientTick()`
+
+`TaskScript` is a `Script` with a priority list of `task(name, when, run)`. The first task whose condition holds runs every tick, and again the moment a verified hover is ready. Settings declared in `getScriptSettings()` show up in the side panel automatically; read them with `bool/integer/text(key)`. To also show a setting in the wrench config, add a `@ConfigItem` with the same key to `TestConfig`.
+
+```java
+public class OakChopperScript extends TaskScript
+{
+	private static final int OAK_TREE = 10820;
+	private static final int OAK_LOGS = 1521;
+
+	public OakChopperScript()
+	{
+		super("Oak Chopper", "Chops oak trees and banks the logs.");
+	}
+
+	@Override
+	public List<ScriptSetting> getScriptSettings()
+	{
+		return Arrays.asList(ScriptSetting.bool("oakBank", "Bank logs", "Bank instead of stopping when full", true));
+	}
+
+	@Override
+	protected void setup()
+	{
+		task("deposit", () -> actions.bankOpen() && getContext().getInventory().countItem(OAK_LOGS) > 0,
+			() -> actions.depositAll());
+		task("bank", () -> getContext().getInventory().isFull() && bool("oakBank"),
+			() -> actions.openNearestBank(15, true));
+		task("chop", () -> !actions.isAnimating() && !actions.isMoving(), () ->
+		{
+			TileObject tree = getContext().getTargets().findTileObject(OAK_TREE, 15).orElse(null);
+			actions.goAndClick(() -> tree, null, "oak", new String[]{"chop"}, "oak", 8);
+		});
+	}
+}
+```
+
+Register it in `TestPlugin.startUp` with `scriptManager.register(new OakChopperScript());`.

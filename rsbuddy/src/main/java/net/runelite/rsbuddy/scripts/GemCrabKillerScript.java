@@ -43,6 +43,7 @@ import net.runelite.api.gameval.NpcID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.rsbuddy.input.GameInput;
 import net.runelite.rsbuddy.inventory.Inventory;
+import net.runelite.rsbuddy.script.Actions;
 import net.runelite.rsbuddy.script.Script;
 import net.runelite.rsbuddy.script.ScriptContext;
 
@@ -330,7 +331,7 @@ public final class GemCrabKillerScript extends Script
 
 		Player player = context.getPlayer();
 		Actor interacting = player == null ? null : player.getInteracting();
-		if (interacting == target || isAnimating(player) || isMoving(player))
+		if (interacting == target || isAnimating(player) || Actions.isMoving(player))
 		{
 			// Still attacking (or walking up to it). Do not click again.
 			idleTicks = 0;
@@ -481,7 +482,7 @@ public final class GemCrabKillerScript extends Script
 		boolean teleported = location != null && crawlStartLocation != null
 			&& (location.getPlane() != crawlStartLocation.getPlane()
 				|| location.distanceTo(crawlStartLocation) >= CRAWL_TELEPORT_DISTANCE);
-		boolean active = isMoving(player) || isAnimating(player);
+		boolean active = Actions.isMoving(player) || isAnimating(player);
 		if (active || location != null && !location.equals(crawlStartLocation))
 		{
 			crawlStarted = true;
@@ -784,10 +785,6 @@ public final class GemCrabKillerScript extends Script
 		return player != null && player.getAnimation() != -1;
 	}
 
-	private static boolean isMoving(Player player)
-	{
-		return player != null && player.getPoseAnimation() != player.getIdlePoseAnimation();
-	}
 
 	@Override
 	public List<String> getOverlayLines()
