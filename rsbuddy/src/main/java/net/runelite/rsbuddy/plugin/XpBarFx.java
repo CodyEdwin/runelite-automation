@@ -81,8 +81,10 @@ public final class XpBarFx
 	private static final Color GLASS_TOP = new Color(255, 255, 255, 80);
 	private static final Color GLASS_END = new Color(255, 255, 255, 0);
 	private static final Color OUTLINE = new Color(6, 8, 16);
-	private static final int MAX_LABELS = 8;
+	private static final int MAX_LABELS = 16;
 	private static final float LABEL_LIFE = 1.05f;
+	/** How long the launch arc runs before the label floats up (where it used to fade). */
+	private static final float ARC_TIME = 0.58f;
 
 	/** A bar's hand-tuned neon gradient: left end, right end, and the accent used by sparks, embers, glow and text. */
 	static final class Palette
@@ -195,14 +197,8 @@ public final class XpBarFx
 		long queuedXp;
 		final Palette palette;
 
-		// Flying "+N xp" labels, pooled.
-		final float[] lx = new float[MAX_LABELS];
-		final float[] ly = new float[MAX_LABELS];
-		final float[] lvx = new float[MAX_LABELS];
-		final float[] lvy = new float[MAX_LABELS];
-		final float[] lage = new float[MAX_LABELS];
-		final String[] ltext = new String[MAX_LABELS];
-		int labels;
+		/** Skill icon for this bar's flying XP label, may be null. */
+		java.awt.image.BufferedImage icon;
 
 		Bar(String key)
 		{
@@ -215,6 +211,26 @@ public final class XpBarFx
 	private final Line2D.Float line = new Line2D.Float();
 	private BasicStroke sparkStroke;
 	private Font labelFont;
+
+	// Flying "+N xp" labels for all bars, pooled (see drawLabels).
+	private final float[] lx = new float[MAX_LABELS];
+	private final float[] ly = new float[MAX_LABELS];
+	private final float[] lvx = new float[MAX_LABELS];
+	private final float[] lvy = new float[MAX_LABELS];
+	private final float[] lage = new float[MAX_LABELS];
+	private final String[] ltext = new String[MAX_LABELS];
+	private final Color[] lcolor = new Color[MAX_LABELS];
+	private final java.awt.image.BufferedImage[] licon = new java.awt.image.BufferedImage[MAX_LABELS];
+	private final boolean[] lclimb = new boolean[MAX_LABELS];
+	/** Float duration (0 while still in the launch arc) and the scale the float starts at. */
+	private final float[] ldur = new float[MAX_LABELS];
+	private final float[] lscale = new float[MAX_LABELS];
+	private int labels;
+	private long labelsNanos;
+	private boolean climb;
+	private float climbTop = -1000f;
+	private float climbRight = 100000f;
+	private int labelSize = 16;
 	private final Ellipse2D.Float dot = new Ellipse2D.Float();
 	private final int[] polyX = new int[4];
 	private final int[] polyY = new int[4];
@@ -243,7 +259,20 @@ public final class XpBarFx
 	 */
 	public void pulse(String key, long xp)
 	{
+		pulse(key, xp, null);
+	}
+
+	/**
+	 * Same as {@link #pulse(String, long)} with the skill icon drawn next to
+	 * the label in climb mode (so it can replace the vanilla XP drops).
+	 */
+	public void pulse(String key, long xp, java.awt.image.BufferedImage icon)
+	{
 		Bar bar = bars.computeIfAbsent(key, Bar::new);
+		if (icon != null)
+		{
+			bar.icon = icon;
+		}
 		if (bar.sweepAt != 0)
 		{
 			bar.queuedXp += xp;
@@ -269,6 +298,12 @@ public final class XpBarFx
 	public void reset()
 	{
 		bars.clear();
+		for (int i = 0; i < labels; i++)
+		{
+			ltext[i] = null;
+			licon[i] = null;
+		}
+		labels = 0;
 	}
 
 	/**
@@ -348,7 +383,7 @@ public final class XpBarFx
 						bar.pendingBurst += 26;
 						if (bar.sweepXp > 0)
 						{
-							spawnLabel(bar, x + fill, y + h / 2f, "+" + String.format(Locale.ROOT, "%,d", bar.sweepXp) + " xp");
+							spawnLabel(bar, x + fill, y + h / 2f, bar.sweepXp);
 						}
 						bar.sweepXp = bar.queuedXp;
 						bar.queuedXp = 0;
@@ -394,10 +429,6 @@ public final class XpBarFx
 				drawEdgeGlow(g, x + fill, y + h / 2f, h, t, base, hot, glow);
 			}
 			drawSparks(g, bar, base, hot, Math.max(1f, h / 10f));
-		}
-		if (bar.labels > 0)
-		{
-			drawLabels(g, bar, dt, h);
 		}
 
 		g.setStroke(oldStroke);
@@ -535,82 +566,205 @@ public final class XpBarFx
 		g.setComposite(AlphaComposite.SrcOver);
 	}
 
-	private static void spawnLabel(Bar bar, float ex, float ey, String text)
+	/**
+	 * Launches a flying XP label at the end of a bar. Labels share one pool so
+	 * drops from different skills stack instead of overlapping: a new label
+	 * starts at least one line below the newest one still near the bar.
+	 */
+	private void spawnLabel(Bar bar, float ex, float ey, long xp)
 	{
-		if (bar.labels == MAX_LABELS)
+		if (labels == MAX_LABELS)
 		{
 			return;
 		}
-		int i = bar.labels++;
-		bar.lx[i] = ex;
-		bar.ly[i] = ey;
-		bar.lvx[i] = 55f + 25f * ThreadLocalRandom.current().nextFloat();
-		bar.lvy[i] = -95f;
-		bar.lage[i] = 0f;
-		bar.ltext[i] = text;
+		float startY = ey;
+		float line = labelLine();
+		for (int j = 0; j < labels; j++)
+		{
+			if (lx[j] > ex - 60 && lx[j] < ex + 140 && ly[j] > startY - line)
+			{
+				startY = ly[j] + line;
+			}
+		}
+		int i = labels++;
+		lx[i] = ex;
+		ly[i] = startY;
+		lvx[i] = 55f + 25f * ThreadLocalRandom.current().nextFloat();
+		lvy[i] = -95f;
+		lage[i] = 0f;
+		ltext[i] = climb
+			? "+" + String.format(Locale.ROOT, "%,d", xp) + (bar.icon == null ? " xp" : "")
+			: "+" + String.format(Locale.ROOT, "%,d", xp) + " xp";
+		lcolor[i] = bar.palette.hot;
+		licon[i] = climb ? bar.icon : null;
+		lclimb[i] = climb;
+		ldur[i] = 0f;
+	}
+
+	private float labelLine()
+	{
+		return labelSize * 1.25f;
 	}
 
 	/**
-	 * Flies each label up and out from the end of the bar on a slight arc,
-	 * growing a little then shrinking, and fading out. RuneLite clips overlays
-	 * to the whole canvas, not their own bounds, so labels can leave the overlay.
+	 * Sets how XP labels fly; call once per frame before {@link #drawLabels}.
+	 *
+	 * @param climb    true: climb to the top of the canvas like the vanilla XP drops; false: short arc and fade
+	 * @param topLocal the canvas top (y = 0) in the overlay's coordinates, i.e. minus the overlay's screen y
+	 * @param rightLocal the canvas right edge in the overlay's coordinates; labels stay left of it
+	 * @param barH     bar thickness, used for the text size
 	 */
-	private void drawLabels(Graphics2D g, Bar bar, float dt, int h)
+	public void setLabelMode(boolean climb, float topLocal, float rightLocal, int barH)
 	{
-		Font previous = g.getFont();
-		int size = Math.max(16, Math.round(h * 1.35f));
-		if (labelFont == null || labelFont.getSize() != size)
+		this.climb = climb;
+		this.climbTop = topLocal;
+		this.climbRight = rightLocal;
+		this.labelSize = Math.max(16, Math.round(barH * 1.35f));
+	}
+
+	/**
+	 * Draws every flying XP label. Call once per frame after the bars.
+	 * RuneLite clips overlays to the whole canvas, not their own bounds, so
+	 * labels can leave the overlay and reach the top of the screen.
+	 * <p>
+	 * Climb mode: the same launch arc off the bar end, then, where the arc
+	 * used to fade, a slow eased float up to the canvas top (3-4.2 s) with a
+	 * gentle sideways sway and bob, fading only near the top.
+	 */
+	public void drawLabels(Graphics2D g, long now)
+	{
+		float dt = labelsNanos == 0 ? 0f : Math.min(0.05f, (now - labelsNanos) / 1e9f);
+		labelsNanos = now;
+		if (labels == 0)
 		{
-			labelFont = previous.deriveFont(Font.BOLD, (float) size);
+			return;
+		}
+		Object oldAa = g.getRenderingHint(RenderingHints.KEY_ANTIALIASING);
+		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+		Font previous = g.getFont();
+		if (labelFont == null || labelFont.getSize() != labelSize)
+		{
+			labelFont = previous.deriveFont(Font.BOLD, (float) labelSize);
 		}
 		g.setFont(labelFont);
 		FontMetrics metrics = g.getFontMetrics();
-		for (int i = 0; i < bar.labels; )
+		float fadeZone = labelLine() * 2.5f;
+		for (int i = 0; i < labels; )
 		{
-			bar.lage[i] += dt;
-			float k = bar.lage[i] / LABEL_LIFE;
-			if (k >= 1f)
+			lage[i] += dt;
+			float scale;
+			float alpha;
+			boolean dead;
+			if (lclimb[i])
 			{
-				int last = --bar.labels;
-				bar.lx[i] = bar.lx[last];
-				bar.ly[i] = bar.ly[last];
-				bar.lvx[i] = bar.lvx[last];
-				bar.lvy[i] = bar.lvy[last];
-				bar.lage[i] = bar.lage[last];
-				bar.ltext[i] = bar.ltext[last];
-				bar.ltext[last] = null;
-				continue;
-			}
-			bar.lvy[i] += 70f * dt;
-			bar.lx[i] += bar.lvx[i] * dt;
-			bar.ly[i] += bar.lvy[i] * dt;
-			float scale = 0.85f + 0.45f * (float) Math.sin(Math.PI * Math.min(1f, k * 1.4f)) - 0.15f * k;
-			float alpha = k < 0.55f ? 1f : 1f - (k - 0.55f) / 0.45f;
-			String text = bar.ltext[i];
-			float tx = -metrics.stringWidth(text) / 2f;
-			float ty = metrics.getAscent() / 2f - 1;
-			g.translate(bar.lx[i], bar.ly[i]);
-			g.scale(scale, scale);
-			g.setComposite(alpha(alpha));
-			g.setColor(OUTLINE);
-			for (int dx = -1; dx <= 1; dx++)
-			{
-				for (int dy = -1; dy <= 1; dy++)
+				if (ldur[i] == 0f && lage[i] < ARC_TIME)
 				{
-					if (dx != 0 || dy != 0)
+					// Same launch arc as before, off the bar end with the sparks.
+					float k = lage[i] / LABEL_LIFE;
+					lvy[i] += 70f * dt;
+					lx[i] += lvx[i] * dt;
+					ly[i] += lvy[i] * dt;
+					scale = 0.85f + 0.45f * (float) Math.sin(Math.PI * Math.min(1f, k * 1.4f)) - 0.15f * k;
+					alpha = 1f;
+					dead = false;
+				}
+				else
+				{
+					if (ldur[i] == 0f)
 					{
-						g.drawString(text, tx + dx * 1.5f, ty + dy * 1.5f);
+						// Where the arc used to fade: switch to a slow float up.
+						// lvx/lvy now hold the start x/y of the float.
+						lvx[i] = lx[i];
+						lvy[i] = ly[i];
+						ldur[i] = Math.max(3f, Math.min(4.2f, (ly[i] - climbTop) / 140f));
+						lscale[i] = 0.85f + 0.45f * (float) Math.sin(Math.PI * Math.min(1f, ARC_TIME / LABEL_LIFE * 1.4f))
+							- 0.15f * ARC_TIME / LABEL_LIFE;
 					}
+					float f = (lage[i] - ARC_TIME) / ldur[i];
+					float p = Math.min(1f, f);
+					// Smoothstep: gentle ease in and out, so it drifts rather than shoots.
+					float eased = p * p * (3f - 2f * p);
+					float floatT = lage[i] - ARC_TIME;
+					float sway = (float) Math.sin(floatT * 2.1f + i) * 7f * Math.min(1f, floatT * 2f);
+					float bob = (float) Math.sin(floatT * 5.3f) * 1.6f;
+					lx[i] = lvx[i] + sway + floatT * 4f;
+					ly[i] = lvy[i] + (climbTop + labelSize - lvy[i]) * eased + bob;
+					scale = lscale[i] + (1.1f - lscale[i]) * Math.min(1f, floatT * 1.5f);
+					float toTop = ly[i] - climbTop - labelSize;
+					alpha = Math.max(0f, Math.min(1f, Math.min(toTop / fadeZone, (1f - p) * 4f)));
+					dead = f >= 1f;
 				}
 			}
-			g.setColor(bar.palette.hot);
-			g.drawString(text, tx, ty);
-			g.scale(1 / scale, 1 / scale);
-			g.translate(-bar.lx[i], -bar.ly[i]);
+			else
+			{
+				float k = lage[i] / LABEL_LIFE;
+				lvy[i] += 70f * dt;
+				lx[i] += lvx[i] * dt;
+				ly[i] += lvy[i] * dt;
+				scale = 0.85f + 0.45f * (float) Math.sin(Math.PI * Math.min(1f, k * 1.4f)) - 0.15f * k;
+				alpha = k < 0.55f ? 1f : 1f - (k - 0.55f) / 0.45f;
+				dead = k >= 1f;
+			}
+			if (dead)
+			{
+				int last = --labels;
+				lx[i] = lx[last];
+				ly[i] = ly[last];
+				lvx[i] = lvx[last];
+				lvy[i] = lvy[last];
+				lage[i] = lage[last];
+				ltext[i] = ltext[last];
+				lcolor[i] = lcolor[last];
+				licon[i] = licon[last];
+				lclimb[i] = lclimb[last];
+				ldur[i] = ldur[last];
+				lscale[i] = lscale[last];
+				ltext[last] = null;
+				licon[last] = null;
+				continue;
+			}
+			drawLabel(g, metrics, i, scale, alpha);
 			i++;
 		}
 		g.setComposite(AlphaComposite.SrcOver);
 		g.setFont(previous);
+		g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, oldAa);
+	}
+
+	private void drawLabel(Graphics2D g, FontMetrics metrics, int i, float scale, float alpha)
+	{
+		String text = ltext[i];
+		java.awt.image.BufferedImage icon = licon[i];
+		int iconW = icon == null ? 0 : Math.round(icon.getWidth() * (labelSize / (float) Math.max(1, icon.getHeight()))) + 3;
+		float tx = -(metrics.stringWidth(text) + iconW) / 2f;
+		float ty = metrics.getAscent() / 2f - 1;
+		// Keep the whole label on the canvas when the overlay sits at the right edge.
+		float cx = Math.min(lx[i], climbRight + tx * scale - 6f);
+		g.translate(cx, ly[i]);
+		g.scale(scale, scale);
+		g.setComposite(alpha(alpha));
+		if (icon != null)
+		{
+			int ih = labelSize;
+			g.drawImage(icon, Math.round(tx), Math.round(ty - metrics.getAscent() + (metrics.getAscent() - ih) / 2f + 1),
+				iconW - 3, ih, null);
+		}
+		float textX = tx + iconW;
+		g.setColor(OUTLINE);
+		for (int dx = -1; dx <= 1; dx++)
+		{
+			for (int dy = -1; dy <= 1; dy++)
+			{
+				if (dx != 0 || dy != 0)
+				{
+					g.drawString(text, textX + dx * 1.5f, ty + dy * 1.5f);
+				}
+			}
+		}
+		g.setColor(lcolor[i]);
+		g.drawString(text, textX, ty);
+		g.scale(1 / scale, 1 / scale);
+		g.translate(-cx, -ly[i]);
 	}
 
 	private void forgetStale(long now)

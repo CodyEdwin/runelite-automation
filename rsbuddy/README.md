@@ -137,6 +137,9 @@ by the mean XP per drop seen this session (each StatChanged gain counts as one a
 
 - **Move:** hold **Shift** and drag either overlay. An orange outline shows while Shift is held over it. The spot is
   saved through RuneLite's overlay settings and survives restarts. RuneLite's Alt-drag still works too.
+- **XP drops:** the `+N` label (with the skill icon) arcs off the bar end, then floats up to the top of the game
+  screen over 3–4 s, swaying gently and fading near the top, so the vanilla XP drops can be hidden. Turn it off with
+  *XP drop climbs to top* to get the short arc and fade instead.
 - **Config:** *XP bar animations* (on/off), *XP bar thickness %* (100–400, default 250), *XP spark intensity %*
   (0–200, default 100).
 

@@ -140,6 +140,18 @@ public interface RSBuddyConfig extends Config
 		return true;
 	}
 
+	@ConfigItem(
+		keyName = "xpDropClimb",
+		name = "XP drop climbs to top",
+		description = "The +N xp label flies off the bar and climbs to the top of the screen like the vanilla XP drops"
+			+ " (so the vanilla XP drops can be hidden). Off: a short arc and fade by the bar.",
+		position = 37
+	)
+	default boolean xpDropClimb()
+	{
+		return true;
+	}
+
 	@Range(min = 100, max = 400)
 	@ConfigItem(
 		keyName = "xpBarThickness",

@@ -39,6 +39,7 @@ import net.runelite.api.Client;
 import net.runelite.api.Experience;
 import net.runelite.api.GameState;
 import net.runelite.api.Skill;
+import net.runelite.client.game.SkillIconManager;
 import net.runelite.client.ui.FontManager;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayLayer;
@@ -71,6 +72,7 @@ public class XpLoggerOverlay extends Overlay
 
 	private final Client client;
 	private final RSBuddyConfig config;
+	private final SkillIconManager skillIcons;
 	private final Map<Skill, SkillSession> sessions = new EnumMap<>(Skill.class);
 
 	private final XpBarFx fx = new XpBarFx();
@@ -79,10 +81,11 @@ public class XpLoggerOverlay extends Overlay
 	private long sessionStartedAt;
 
 	@Inject
-	private XpLoggerOverlay(Client client, RSBuddyConfig config)
+	private XpLoggerOverlay(Client client, RSBuddyConfig config, SkillIconManager skillIcons)
 	{
 		this.client = client;
 		this.config = config;
+		this.skillIcons = skillIcons;
 
 		setPosition(OverlayPosition.BOTTOM_RIGHT);
 		setLayer(OverlayLayer.ABOVE_WIDGETS);
@@ -109,7 +112,7 @@ public class XpLoggerOverlay extends Overlay
 		{
 			session.actions++;
 			session.actionXp += xp - session.statXp;
-			fx.pulse(skill.getName(), xp - session.statXp);
+			fx.pulse(skill.getName(), xp - session.statXp, skillIcons.getSkillImage(skill, true));
 		}
 		session.statXp = xp;
 	}
@@ -291,6 +294,11 @@ public class XpLoggerOverlay extends Overlay
 
 			y += barHeight + rowGap;
 		}
+
+		// Flying XP labels: the canvas top is at -bounds.y in overlay coordinates
+		// (bounds are from the last frame; the overlay draws on the whole canvas).
+		fx.setLabelMode(config.xpDropClimb(), -getBounds().y, client.getCanvasWidth() - getBounds().x, barHeight);
+		fx.drawLabels(graphics, nanos);
 
 		if (hiddenRows > 0)
 		{
