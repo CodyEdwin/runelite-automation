@@ -395,4 +395,16 @@ public interface TestConfig extends Config
 	{
 		return false;
 	}
+
+	@ConfigItem(
+		keyName = "motherlodeDragonSpec",
+		name = "Motherlode: use dragon pickaxe special",
+		description = "While mining pay-dirt, use the wielded dragon pickaxe's special (+3 Mining) every time"
+			+ " special energy reaches 100%, by clicking the special attack orb.",
+		position = 30
+	)
+	default boolean motherlodeDragonSpec()
+	{
+		return false;
+	}
 }

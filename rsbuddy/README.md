@@ -411,6 +411,13 @@ pay-dirt, deposits it in the hopper, empties the sack and banks the ores.
   still washing. If the hopper takes only part of a load, or the sack is already full, the rest of
   the pay-dirt is dropped (first drop verified as `Drop Pay-dirt`, left-click Drop) and it goes
   to empty the sack (`[MotherlodeMiner] sack full, dropping N extra pay-dirt`).
+- **Dragon pickaxe special** (setting **Motherlode: use dragon pickaxe special**, default off; also
+  in the side panel as *Use dragon pickaxe special*): while mining, whenever special energy
+  (varp 300) is 100%, the mouse moves to the centre of the special attack orb, the left click is
+  verified as the special attack, and it clicks it (`[MotherlodeMiner] spec at 100%, using dragon
+  pickaxe special`), then waits for the energy to drop; up to 6 tries per charge. Needs a dragon
+  pickaxe (11920, 12797, 23677, 25376) wielded; if it is only in the inventory or missing, it logs
+  once and skips.
 - **Camera:** no random camera nudges; it only turns when a target is off screen.
 - **Physical clicks only:** Motherlode Miner, Bow Fletcher and Gem Cutter run with
   `GameInput.setPhysicalOnly(true)`: every helper that would run a menu action directly
