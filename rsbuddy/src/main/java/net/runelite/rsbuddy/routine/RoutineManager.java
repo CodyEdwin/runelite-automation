@@ -59,6 +59,23 @@ public final class RoutineManager
 	}
 
 	/**
+	 * Removes a routine (its jar was removed or changed), stopping it first
+	 * if it is running.
+	 */
+	public synchronized void unregister(Routine script)
+	{
+		if (script == null)
+		{
+			return;
+		}
+		if (activeScript == script)
+		{
+			stop();
+		}
+		scripts.remove(script);
+	}
+
+	/**
 	 * Replaces a registered routine, stopping it first if it is currently
 	 * running. Used when a routine has been reloaded from newly compiled
 	 * classes.

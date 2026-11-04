@@ -27,6 +27,7 @@ package net.runelite.rsbuddy.plugin;
 import com.google.inject.Provides;
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.io.IOException;
 import java.net.MalformedURLException;
 import java.util.ArrayList;
 import java.util.List;
@@ -56,7 +57,9 @@ import net.runelite.rsbuddy.debug.WidgetDumper;
 import net.runelite.rsbuddy.debug.WidgetWatcher;
 import net.runelite.rsbuddy.input.GameInput;
 import net.runelite.rsbuddy.inventory.Inventory;
+import net.runelite.rsbuddy.routine.JarRoutineLoader;
 import net.runelite.rsbuddy.routine.ReloadingClassLoader;
+import net.runelite.rsbuddy.routine.RoutineJarWriter;
 import net.runelite.rsbuddy.routine.Routine;
 import net.runelite.rsbuddy.routine.RoutineCompiler;
 import net.runelite.rsbuddy.routine.RoutineContext;
@@ -119,6 +122,21 @@ public class RSBuddyPlugin extends Plugin
 	private volatile WidgetWatcher watcher;
 	private volatile GeProbe probe;
 	private RoutineListPanel panel;
+	private JarRoutineLoader jarLoader;
+	private final JarRoutineLoader.Listener jarListener = new JarRoutineLoader.Listener()
+	{
+		@Override
+		public void removed(JarRoutineLoader.LoadedJar jar)
+		{
+			unregisterJar(jar);
+		}
+
+		@Override
+		public void added(JarRoutineLoader.LoadedJar jar)
+		{
+			registerJar(jar);
+		}
+	};
 	private NavigationButton navButton;
 
 	@Provides
@@ -167,6 +185,9 @@ public class RSBuddyPlugin extends Plugin
 		panel = new RoutineListPanel(routineManager, registry, config, new ConfigRoutinePreferences(configManager),
 			this::startRoutine, this::reloadRoutine, this::loadCustomRoutine);
 		panel.setInputStatusSupplier(input::getBackendStatus);
+		jarLoader = new JarRoutineLoader(getClass().getClassLoader());
+		panel.setJarActions(this::rescanJars, this::exportRoutineJar);
+		panel.rescan();
 		panel.setNotice(customError);
 
 		BufferedImage icon = ImageUtil.loadImageResource(getClass(), "rsbuddy_icon.png");
@@ -192,6 +213,12 @@ public class RSBuddyPlugin extends Plugin
 		if (routineManager != null)
 		{
 			routineManager.stop();
+		}
+
+		if (jarLoader != null)
+		{
+			jarLoader.closeAll(jarListener);
+			jarLoader = null;
 		}
 
 		if (navButton != null)
@@ -462,7 +489,12 @@ public class RSBuddyPlugin extends Plugin
 		// created through their own class loader so the new code is kept.
 		try
 		{
-			target = registry.create(routine.getClass().getName(), routine.getClass().getClassLoader());
+			// Look the entry up by instance first so a jar routine is recreated
+			// from its own jar even when a built-in has the same class name.
+			RoutineDefinition definition = registry.findByInstance(routine);
+			target = definition != null
+				? definition.create(routine.getClass().getClassLoader())
+				: registry.create(routine.getClass().getName(), routine.getClass().getClassLoader());
 		}
 		catch (RoutineLoader.RoutineLoadException ex)
 		{
@@ -490,38 +522,7 @@ public class RSBuddyPlugin extends Plugin
 			return routine;
 		}
 
-		// Never run Gradle here: it cannot rebuild while the client holds the
-		// build output. Compile the routine sources in-process into a fresh
-		// temp directory instead and load them with a child-first loader.
-		File sourceRoot = resolveRoutineSourceDirectory();
-		File classesRoot;
-		if (sourceRoot != null)
-		{
-			log.info("[Reload] compiling routines from {}", sourceRoot);
-			long started = System.currentTimeMillis();
-			try
-			{
-				classesRoot = RoutineCompiler.compile(sourceRoot, getClass().getClassLoader(),
-					getClass(), Routine.class, Client.class, net.runelite.api.EquipmentInventorySlot.class,
-					ConfigManager.class, Logger.class);
-			}
-			catch (IllegalStateException ex)
-			{
-				log.warn(ex.getMessage());
-				throw ex;
-			}
-			log.info("[Reload] compiled routines in {}ms into {}", System.currentTimeMillis() - started, classesRoot);
-		}
-		else
-		{
-			classesRoot = resolveRoutineClassesDirectory();
-			log.info("[Reload] routine sources not found, loading prebuilt classes from {}", classesRoot);
-		}
-		if (classesRoot == null || !classesRoot.isDirectory())
-		{
-			throw new IllegalStateException("[Reload] routine sources not found. Set 'Routine source directory'"
-				+ " in the panel to your rsbuddy/src/main/java folder.");
-		}
+		File classesRoot = compileRoutineClasses("[Reload]");
 
 		String className = routine.getClass().getName();
 		File classFile = new File(classesRoot, className.replace('.', '/') + ".class");
@@ -551,6 +552,159 @@ public class RSBuddyPlugin extends Plugin
 		routineManager.replace(routine, replacement);
 		log.info("[Reload] reloaded {} from {}", className, classesRoot);
 		return replacement;
+	}
+
+	/**
+	 * "Export as jar": compiles the routine sources in-process (no Gradle) and
+	 * writes the selected routine, its nested classes and the services file
+	 * to {@code <routines folder>/<SimpleName>.jar}. Runs off the Swing thread;
+	 * the panel rescans afterwards so the jar shows up marked (jar).
+	 */
+	File exportRoutineJar(Routine routine)
+	{
+		if (routine == null)
+		{
+			throw new IllegalStateException("[JarRoutines] no routine selected");
+		}
+		File classesRoot = compileRoutineClasses("[JarRoutines]");
+		String className = routine.getClass().getName();
+		File jar = new File(resolveRoutineJarDirectory(), routine.getClass().getSimpleName() + ".jar");
+		try
+		{
+			int classes = RoutineJarWriter.write(classesRoot, className, jar);
+			log.info("[JarRoutines] exported {} ({} class files) to {}", className, classes, jar);
+		}
+		catch (IOException ex)
+		{
+			throw new IllegalStateException("[JarRoutines] export failed: " + ex.getMessage(), ex);
+		}
+		return jar;
+	}
+
+	/** The routine jar folder: the panel/config setting, else ~/.runelite/rsbuddy/routines. */
+	private File resolveRoutineJarDirectory()
+	{
+		String configured = config.routineJarDirectory();
+		if (configured != null && !configured.trim().isEmpty())
+		{
+			return resolveAgainstWorkingDirectory(configured.trim());
+		}
+		return new File(System.getProperty("user.home"), ".runelite/rsbuddy/routines");
+	}
+
+	/**
+	 * Syncs the registry with the jar folder. Called on the Swing thread at
+	 * startup, on Reload and on Rescan.
+	 *
+	 * @return a short summary for the panel status line
+	 */
+	String rescanJars()
+	{
+		if (jarLoader == null)
+		{
+			return null;
+		}
+		File folder = resolveRoutineJarDirectory();
+		if (!folder.isDirectory() && !folder.mkdirs())
+		{
+			log.warn("[JarRoutines] cannot create routine folder {}", folder);
+		}
+		jarLoader.rescan(folder, jarListener);
+		int routines = 0;
+		for (JarRoutineLoader.LoadedJar jar : jarLoader.getLoaded())
+		{
+			routines += jar.getRoutines().size();
+		}
+		log.info("[JarRoutines] {} jar(s), {} routine(s) in {}", jarLoader.getLoaded().size(), routines, folder);
+		return routines + " jar routine(s) in " + folder.getName() + ".";
+	}
+
+	private static String jarId(JarRoutineLoader.LoadedJar jar, Class<?> type)
+	{
+		return "jar:" + jar.getFile().getName() + "!" + type.getName();
+	}
+
+	private void registerJar(JarRoutineLoader.LoadedJar jar)
+	{
+		for (Class<? extends Routine> type : jar.getRoutines())
+		{
+			String id = jarId(jar, type);
+			try
+			{
+				// Same path as built-ins: RoutineManager applies the
+				// physical-click lock on start, and the panel draws the
+				// routine's declared RoutineSettings (no settings builder).
+				Routine routine = jar.create(type);
+				RoutineDefinition definition = registry.register(id, loader -> jar.create(type), null);
+				definition.setJarFile(jar.getFile());
+				definition.setInstance(routine);
+				routineManager.register(routine);
+			}
+			catch (RoutineLoader.RoutineLoadException | LinkageError ex)
+			{
+				log.warn("[JarRoutines] skipping {} in {}: {}", type.getName(), jar.getFile().getName(), ex.getMessage());
+				registry.remove(id);
+			}
+		}
+	}
+
+	private void unregisterJar(JarRoutineLoader.LoadedJar jar)
+	{
+		for (Class<? extends Routine> type : jar.getRoutines())
+		{
+			RoutineDefinition definition = registry.find(jarId(jar, type));
+			if (definition == null)
+			{
+				continue;
+			}
+			if (definition.getInstance() != null && definition.getInstance() == routineManager.getActiveRoutine())
+			{
+				log.info("[JarRoutines] stopping {}: its jar was removed or changed", definition.getDisplayName());
+			}
+			routineManager.unregister(definition.getInstance());
+			registry.remove(definition.getId());
+		}
+	}
+
+	/**
+	 * Compiles the routine sources into a fresh temp folder (or falls back to
+	 * prebuilt classes) and returns it.
+	 */
+	private File compileRoutineClasses(String prefix)
+	{
+		// Never run Gradle here: it cannot rebuild while the client holds the
+		// build output. Compile the routine sources in-process into a fresh
+		// temp directory instead and load them with a child-first loader.
+		File sourceRoot = resolveRoutineSourceDirectory();
+		File classesRoot;
+		if (sourceRoot != null)
+		{
+			log.info(prefix + " compiling routines from {}", sourceRoot);
+			long started = System.currentTimeMillis();
+			try
+			{
+				classesRoot = RoutineCompiler.compile(sourceRoot, getClass().getClassLoader(),
+					getClass(), Routine.class, Client.class, net.runelite.api.EquipmentInventorySlot.class,
+					ConfigManager.class, Logger.class);
+			}
+			catch (IllegalStateException ex)
+			{
+				log.warn(ex.getMessage());
+				throw ex;
+			}
+			log.info(prefix + " compiled routines in {}ms into {}", System.currentTimeMillis() - started, classesRoot);
+		}
+		else
+		{
+			classesRoot = resolveRoutineClassesDirectory();
+			log.info(prefix + " routine sources not found, loading prebuilt classes from {}", classesRoot);
+		}
+		if (classesRoot == null || !classesRoot.isDirectory())
+		{
+			throw new IllegalStateException("[Reload] routine sources not found. Set 'Routine source directory'"
+				+ " in the panel to your rsbuddy/src/main/java folder.");
+		}
+		return classesRoot;
 	}
 
 	/**

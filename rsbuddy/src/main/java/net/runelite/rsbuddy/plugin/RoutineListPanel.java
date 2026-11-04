@@ -86,6 +86,9 @@ public final class RoutineListPanel extends PluginPanel
 	private final JPanel listPanel;
 	private final JScrollPane scrollPane;
 	private final JTextField sourceField;
+	private final JTextField jarFolderField;
+	private Supplier<String> rescanJars = () -> null;
+	private Function<Routine, java.io.File> exportJar;
 	private final JTextField customClassField;
 	private final JLabel reloadStatusLabel;
 	private final Timer refreshTimer;
@@ -219,6 +222,14 @@ public final class RoutineListPanel extends PluginPanel
 			}
 		});
 
+		jarFolderField = new JTextField(config.routineJarDirectory());
+		jarFolderField.setToolTipText("Folder of routine jars (empty = ~/.runelite/rsbuddy/routines). Press Enter to save and rescan.");
+		jarFolderField.addActionListener(event ->
+		{
+			preferences.set("routineJarDirectory", jarFolderField.getText().trim());
+			rescan();
+		});
+
 		customClassField = new JTextField(config.customRoutineClass());
 		customClassField.setToolTipText("Fully-qualified Routine class name with a no-arg constructor");
 		customClassField.addActionListener(event -> loadCustomRoutine());
@@ -287,6 +298,11 @@ public final class RoutineListPanel extends PluginPanel
 		if ("routineSourceDirectory".equals(key) && !sourceField.getText().equals(config.routineSourceDirectory()))
 		{
 			sourceField.setText(config.routineSourceDirectory());
+		}
+
+		if ("routineJarDirectory".equals(key) && !jarFolderField.getText().equals(config.routineJarDirectory()))
+		{
+			jarFolderField.setText(config.routineJarDirectory());
 		}
 
 		if ("customRoutineClass".equals(key) && !customClassField.getText().equals(config.customRoutineClass()))
@@ -359,8 +375,88 @@ public final class RoutineListPanel extends PluginPanel
 		repaint();
 	}
 
+	/**
+	 * Wires the jar routine actions (set by the plugin after construction).
+	 *
+	 * @param rescan rescans the routines folder and returns a short summary
+	 * @param export compiles a source routine and writes its jar, returning the file
+	 */
+	void setJarActions(Supplier<String> rescan, Function<Routine, java.io.File> export)
+	{
+		this.rescanJars = rescan;
+		this.exportJar = export;
+	}
+
+	/** Rescans the routines folder on the Swing thread and redraws the list. */
+	void rescan()
+	{
+		try
+		{
+			String summary = rescanJars.get();
+			if (summary != null)
+			{
+				reloadStatusLabel.setText(summary);
+			}
+		}
+		catch (RuntimeException ex)
+		{
+			setNotice("[JarRoutines] " + ex.getMessage());
+		}
+		rebuildList();
+	}
+
+	/** "Export as jar": compile in the background, then rescan so the jar shows up. */
+	void exportJar(RoutineListItem item)
+	{
+		final Routine selected = item.getDefinition().getInstance();
+		if (selected == null || exportJar == null)
+		{
+			return;
+		}
+
+		reloadStatusLabel.setText("Exporting…");
+		setNotice(null);
+		new SwingWorker<java.io.File, Void>()
+		{
+			@Override
+			protected java.io.File doInBackground()
+			{
+				return exportJar.apply(selected);
+			}
+
+			@Override
+			protected void done()
+			{
+				try
+				{
+					java.io.File jar = get();
+					rescan();
+					reloadStatusLabel.setText("Exported " + jar.getName() + ".");
+				}
+				catch (InterruptedException ex)
+				{
+					Thread.currentThread().interrupt();
+					reloadStatusLabel.setText("Export interrupted.");
+				}
+				catch (ExecutionException ex)
+				{
+					Throwable cause = ex.getCause() == null ? ex : ex.getCause();
+					reloadStatusLabel.setText("Export failed.");
+					setNotice(cause.getMessage());
+				}
+			}
+		}.execute();
+	}
+
 	void reload(RoutineListItem item)
 	{
+		if (item.getDefinition().isJar())
+		{
+			// A jar routine reloads by rescanning: replace the jar, press Reload.
+			rescan();
+			return;
+		}
+
 		final Routine selected = item.getDefinition().getInstance();
 		if (selected == null)
 		{
@@ -384,6 +480,7 @@ public final class RoutineListPanel extends PluginPanel
 				try
 				{
 					Routine replacement = get();
+					rescan();
 					reloadStatusLabel.setText("Reloaded " + selected.getName() + ".");
 					if (replacement != null)
 					{
@@ -496,6 +593,20 @@ public final class RoutineListPanel extends PluginPanel
 		section.add(sourceField);
 		section.add(reloadStatusLabel);
 
+		JLabel jarTitle = new JLabel("Routine jar folder (empty = ~/.runelite/rsbuddy/routines)");
+		jarTitle.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		jarTitle.setFont(FontManager.getRunescapeSmallFont());
+		section.add(jarTitle);
+		JButton rescanButton = new JButton("Rescan");
+		rescanButton.setFocusPainted(false);
+		rescanButton.setToolTipText("Load added or changed jars and unload removed ones");
+		rescanButton.addActionListener(event -> rescan());
+		JPanel jarRow = new JPanel(new BorderLayout(4, 0));
+		jarRow.setOpaque(false);
+		jarRow.add(jarFolderField, BorderLayout.CENTER);
+		jarRow.add(rescanButton, BorderLayout.EAST);
+		section.add(jarRow);
+
 		JLabel customTitle = new JLabel("Custom routine");
 		customTitle.setForeground(ColorScheme.TEXT_COLOR);
 		customTitle.setFont(FontManager.getRunescapeSmallFont());
@@ -587,13 +698,7 @@ public final class RoutineListPanel extends PluginPanel
 
 	private static String displayName(RoutineDefinition definition)
 	{
-		Routine instance = definition.getInstance();
-		if (instance != null && instance.getName() != null)
-		{
-			return instance.getName();
-		}
-
-		return definition.getSimpleName();
+		return definition.getDisplayName();
 	}
 
 	private static void setSearchPrompt(Component component, String prompt)

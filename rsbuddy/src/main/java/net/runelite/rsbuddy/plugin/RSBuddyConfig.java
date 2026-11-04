@@ -422,6 +422,18 @@ public interface RSBuddyConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "routineJarDirectory",
+		name = "Routine jar folder",
+		description = "Folder scanned for routine jars on startup, Reload and Rescan."
+			+ " Leave empty for ~/.runelite/rsbuddy/routines.",
+		position = 33
+	)
+	default String routineJarDirectory()
+	{
+		return "";
+	}
+
+	@ConfigItem(
 		keyName = "inputBackend",
 		name = "Input backend",
 		description = "OS hardware input used for every mouse move, click and key. Auto picks Linux X11 (XTest)"

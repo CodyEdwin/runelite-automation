@@ -264,6 +264,13 @@ final class RoutineListItem extends JPanel
 		reload.setToolTipText("Compile routine sources in the client and reload this routine");
 		reload.addActionListener(event -> panel.reload(this));
 		settingsPanel.add(reload);
+
+		JButton export = new JButton("Export as jar");
+		export.setFocusPainted(false);
+		export.setToolTipText("Compile this routine's source in the client and write it as a jar to the routines folder");
+		export.addActionListener(event -> panel.exportJar(this));
+		export.setEnabled(!definition.isJar());
+		settingsPanel.add(export);
 		if (form.getHint().getText() != null && !form.getHint().getText().isEmpty())
 		{
 			settingsPanel.add(form.getHint());
@@ -314,7 +321,7 @@ final class RoutineListItem extends JPanel
 	private void refreshText()
 	{
 		Routine instance = definition.getInstance();
-		String name = instance == null ? definition.getSimpleName() : instance.getName();
+		String name = definition.getDisplayName();
 		String description = instance == null ? "" : instance.getDescription();
 		nameLabel.setText(html(name));
 		nameLabel.setToolTipText(description == null || description.isEmpty() ? name : description);

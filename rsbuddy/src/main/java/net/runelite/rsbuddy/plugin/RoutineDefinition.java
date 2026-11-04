@@ -37,6 +37,8 @@ public final class RoutineDefinition
 	@Nullable
 	private final RoutineRegistry.Settings settings;
 	private Routine instance;
+	@Nullable
+	private java.io.File jarFile;
 
 	RoutineDefinition(String id, RoutineRegistry.Factory factory, @Nullable RoutineRegistry.Settings settings)
 	{
@@ -54,6 +56,31 @@ public final class RoutineDefinition
 	{
 		int dot = id.lastIndexOf('.');
 		return dot < 0 ? id : id.substring(dot + 1);
+	}
+
+	/** @return the jar this routine was loaded from, or null for a built-in routine */
+	@Nullable
+	public java.io.File getJarFile()
+	{
+		return jarFile;
+	}
+
+	void setJarFile(@Nullable java.io.File jarFile)
+	{
+		this.jarFile = jarFile;
+	}
+
+	/** @return true when the routine came from a jar in the routines folder */
+	public boolean isJar()
+	{
+		return jarFile != null;
+	}
+
+	/** @return the panel name: the routine's name, with " (jar)" for jar routines */
+	public String getDisplayName()
+	{
+		String name = instance != null && instance.getName() != null ? instance.getName() : getSimpleName();
+		return isJar() ? name + " (jar)" : name;
 	}
 
 	@Nullable

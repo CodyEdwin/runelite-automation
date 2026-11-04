@@ -142,10 +142,12 @@ public final class RoutineRegistry
 			return;
 		}
 
-		RoutineDefinition definition = find(next.getClass().getName());
-		if (definition == null && previous != null)
+		// Prefer the entry that held the previous instance so a jar routine
+		// with the same class name as a built-in updates its own entry.
+		RoutineDefinition definition = previous == null ? null : findByInstance(previous);
+		if (definition == null)
 		{
-			definition = findByInstance(previous);
+			definition = find(next.getClass().getName());
 		}
 
 		if (definition != null)
