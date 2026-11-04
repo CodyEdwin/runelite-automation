@@ -72,14 +72,14 @@ public class XpLoggerOverlay extends Overlay
 	private static final Color TRACK_BORDER = new Color(92, 73, 49, 255);
 
 	private final Client client;
-	private final TestConfig config;
+	private final RSBuddyConfig config;
 	private final Map<Skill, SkillSession> sessions = new EnumMap<>(Skill.class);
 
 	private boolean initialized;
 	private long sessionStartedAt;
 
 	@Inject
-	private XpLoggerOverlay(Client client, TestConfig config)
+	private XpLoggerOverlay(Client client, RSBuddyConfig config)
 	{
 		this.client = client;
 		this.config = config;

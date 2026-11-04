@@ -29,18 +29,18 @@ Please view our [Developer Guide](https://github.com/runelite/runelite/wiki/Deve
 - Dragon pickaxe special: skipped for a whole run when the sack has room for 12 or fewer pay-dirt (capacity minus sack contents and pay-dirt still washing; the current inventory is not counted). Normal use comes back on the run after the sack is emptied.
 - Water wheel repair: as soon as the crate hammer lands in the inventory, the crate hover is cleared and the mouse goes straight to the broken strut. If the strut is clickable on screen it is clicked once and the mouse stays still while walking; otherwise the script walks via the minimap and clicks on arrival.
 
-## Reloading scripts while the client runs
+## Reloading routines while the client runs
 
 The panel's **Reload** button does not run Gradle; Gradle can't rebuild while the client is running. Instead it:
 
-1. Finds the script sources. It checks the **Script source directory** panel field, then `-Drsbuddy.scriptSources`, then `rsbuddy/src/main/java` walking up from the client's working directory, then `src/main/java` next to the plugin's `build` folder. The field accepts `rsbuddy/src/main/java`, the `rsbuddy` module folder, or the repo root.
-2. Compiles every file in `net/runelite/rsbuddy/scripts` in-process with the JDK compiler (`javax.tools`) into a new temp folder, using the running client's classpath.
-3. Loads the selected script from that folder with a child-first class loader (scripts package only), stops it if it was running, and swaps it into the panel. Press Start to run the new code with the current settings.
+1. Finds the routine sources. It checks the **Routine source directory** panel field, then `-Drsbuddy.routineSources` (or the previous `-Drsbuddy.scriptSources`), then `rsbuddy/src/main/java` walking up from the client's working directory, then `src/main/java` next to the plugin's `build` folder. The field accepts `rsbuddy/src/main/java`, the `rsbuddy` module folder, or the repo root.
+2. Compiles every file in `net/runelite/rsbuddy/routines` in-process with the JDK compiler (`javax.tools`) into a new temp folder, using the running client's classpath.
+3. Loads the selected routine from that folder with a child-first class loader (routines package only), stops it if it was running, and swaps it into the panel. Press Start to run the new code with the current settings.
 
-Compile errors (first 3) show in the panel and the log with a `[Reload]` prefix. The client must run on a JDK, not a JRE. Only classes in the `scripts` package are reloaded. Changes to shared helpers (GameInput, Script, walker, inventory, plugin, panel, config) still need a normal build and a client restart.
+Compile errors (first 3) show in the panel and the log with a `[Reload]` prefix. The client must run on a JDK, not a JRE. Only classes in the `routines` package are reloaded. Changes to shared helpers (GameInput, Routine, walker, inventory, plugin, panel, config) still need a normal build and a client restart.
 - No hovering while running (all legs: sack, bank chest, hopper, ladder, crate, strut). While the player moves, the mouse does nothing and any aim or follow target is dropped (logged as `... dropping the X target`). After a click, the script waits about 1.3s for the walk to start rather than aiming at the same target again. The sack target is dropped as soon as the sack search finishes.
 
-Reload class loading: script classes load child-first from the fresh compile. Everything else (RuneLite API, client, shared rsbuddy code) resolves through the plugin's loader first, then the loaders that defined `Client`, `EquipmentInventorySlot`, `ConfigManager` and `Script`, then the thread's context loader. Script failures log their cause on one line: `Script X failed: <error> caused by <root> at <frame>`.
+Reload class loading: routine classes load child-first from the fresh compile. Everything else (RuneLite API, client, shared rsbuddy code) resolves through the plugin's loader first, then the loaders that defined `Client`, `EquipmentInventorySlot`, `ConfigManager` and `Routine`, then the thread's context loader. Routine failures log their cause on one line: `Routine X failed: <error> caused by <root> at <frame>`.
 
 ## Input backends (OS hardware only, no Java fallback)
 
@@ -49,11 +49,11 @@ Every mouse move, click, scroll and key goes through an OS-level backend:
 - **Linux X11 (XTest)**: libXtst via JNA (XFCE or any X11 session). Needs `DISPLAY` and the XTEST extension (`libxtst6`).
 - **Windows SendInput**: Win32 `SendInput` via JNA user32. Absolute virtual-desktop mouse coordinates (DPI-aware) and scan-code keys (`KEYEVENTF_SCANCODE`). Untested on real Windows.
 
-Detection runs when the plugin starts. Auto picks the backend by OS and runs a harmless check: X11 opens the display and queries XTEST, Windows loads user32 and reads the cursor position. The result is logged as `[Input] using <backend>`, shown in the side panel (green or red), and cached. If a backend call throws, it is dropped, and the next script Start detects again. Override it with the panel dropdown or the wrench config **Input backend** (Auto / Linux X11 / Windows SendInput); the two stay in sync. Java input (AWT Robot, synthetic AWT events) is never used. With no backend, scripts refuse to start with an `[Input]` error.
+Detection runs when the plugin starts. Auto picks the backend by OS and runs a harmless check: X11 opens the display and queries XTEST, Windows loads user32 and reads the cursor position. The result is logged as `[Input] using <backend>`, shown in the side panel (green or red), and cached. If a backend call throws, it is dropped, and the next routine Start detects again. Override it with the panel dropdown or the wrench config **Input backend** (Auto / Linux X11 / Windows SendInput); the two stay in sync. Java input (AWT Robot, synthetic AWT events) is never used. With no backend, routines refuse to start with an `[Input]` error.
 
-## Writing a script
+## Writing a routine
 
-Every script acts through real, visible clicks: `ScriptManager` turns on physical-only input for all scripts (the GE flipper is the only exemption while it is rebuilt). The shared layer is `net.runelite.rsbuddy.script.Actions`, and the rules are built in: one curved move to the dead centre of the hull, the real left-click option is checked before clicking (never Examine), on-screen targets are clicked directly and anything else is walked to by minimap and clicked on arrival, the mouse never hovers while the player moves, the click comes 80-200 ms after the cursor arrives (per frame), and every action logs its gap.
+Every routine acts through real, visible clicks: `RoutineManager` turns on physical-only input for every routine (the GE flipper is the only exemption while it is rebuilt). The shared layer is `net.runelite.rsbuddy.routine.Actions`, and the rules are built in: one curved move to the dead centre of the hull, the real left-click option is checked before clicking (never Examine), on-screen targets are clicked directly and anything else is walked to by minimap and clicked on arrival, the mouse never hovers while the player moves, the click comes 80-200 ms after the cursor arrives (per frame), and every action logs its gap.
 
 `Actions` methods:
 - Clicks: `clickObject(obj, key, optionPrefixes, targetWord)`, `clickNpc(...)`, `clickWidget(...)`, `clickItem(itemId, option)`, `useItemOn(a, b)`, `goAndClick(find, area, key, options, target, reach)`
@@ -63,10 +63,10 @@ Every script acts through real, visible clicks: `ScriptManager` turns on physica
 - Waits and state: `waitUntil(key, condition, maxTicks)` (the cap is a timeout, never a delay), `isMoving()`, `isAnimating()`, `clickableOnScreen(obj)`
 - Targets and logs: `dropAim(reason)`, `resetTarget()`, `markAction(label)`, `onClientTick()`
 
-`TaskScript` is a `Script` with a priority list of `task(name, when, run)`. The first task whose condition holds runs every tick, and again the moment a verified hover is ready. Settings declared in `getScriptSettings()` show up in the side panel automatically; read them with `bool/integer/text(key)`. To also show a setting in the wrench config, add a `@ConfigItem` with the same key to `TestConfig`.
+`TaskRoutine` is a `Routine` with a priority list of `task(name, when, run)`. The first task whose condition holds runs every tick, and again the moment a verified hover is ready. Settings declared in `getRoutineSettings()` show up automatically in the routine's settings in the side panel when it has no hand-written settings builder in `RoutineLibrary`; read them with `bool/integer/text(key)`. To also show a setting in the wrench config, add a `@ConfigItem` with the same key to `RSBuddyConfig`.
 
 ```java
-public class OakChopperScript extends TaskScript
+public class OakChopperScript extends TaskRoutine
 {
 	private static final int OAK_TREE = 10820;
 	private static final int OAK_LOGS = 1521;
@@ -77,9 +77,9 @@ public class OakChopperScript extends TaskScript
 	}
 
 	@Override
-	public List<ScriptSetting> getScriptSettings()
+	public List<RoutineSetting> getRoutineSettings()
 	{
-		return Arrays.asList(ScriptSetting.bool("oakBank", "Bank logs", "Bank instead of stopping when full", true));
+		return Arrays.asList(RoutineSetting.bool("oakBank", "Bank logs", "Bank instead of stopping when full", true));
 	}
 
 	@Override
@@ -98,4 +98,4 @@ public class OakChopperScript extends TaskScript
 }
 ```
 
-Register it in `TestPlugin.startUp` with `scriptManager.register(new OakChopperScript());`.
+Register it in `RoutineLibrary.create` with `registry.register(OakChopperScript.class.getName(), loader -> RoutineLoader.load(OakChopperScript.class.getName(), loader), null);`.

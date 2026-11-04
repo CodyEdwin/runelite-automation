@@ -25,10 +25,10 @@
 package net.runelite.rsbuddy.plugin;
 
 /**
- * The rooftop agility courses the trainer script can run.
+ * The rooftop agility courses the trainer routine can run.
  * <p>
  * Add a new constant here, then add a matching {@link
- * net.runelite.rsbuddy.scripts.RooftopAgilityTrainerScript.Course} with that
+ * net.runelite.rsbuddy.routines.RooftopAgilityTrainerScript.Course} with that
  * course's obstacles to support another location.
  */
 public enum RoofCourse

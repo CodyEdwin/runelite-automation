@@ -42,8 +42,8 @@ import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
 import net.runelite.rsbuddy.input.GameInput;
-import net.runelite.rsbuddy.script.Script;
-import net.runelite.rsbuddy.script.ScriptManager;
+import net.runelite.rsbuddy.routine.Routine;
+import net.runelite.rsbuddy.routine.RoutineManager;
 
 /**
  * Draws the current mouse position and recent click animations. Real mouse
@@ -63,11 +63,11 @@ public class MouseOverlay extends Overlay implements MouseListener
 	private static final int CLICK_MERGE_DISTANCE = 8;
 
 	private final Client client;
-	private final TestPlugin plugin;
+	private final RSBuddyPlugin plugin;
 	private final List<ClickFx> clicks = new CopyOnWriteArrayList<>();
 
 	@Inject
-	private MouseOverlay(Client client, TestPlugin plugin)
+	private MouseOverlay(Client client, RSBuddyPlugin plugin)
 	{
 		this.client = client;
 		this.plugin = plugin;
@@ -81,8 +81,8 @@ public class MouseOverlay extends Overlay implements MouseListener
 	public Dimension render(Graphics2D graphics)
 	{
 		GameInput input = plugin.getInput();
-		ScriptManager scriptManager = plugin.getScriptManager();
-		Script active = scriptManager == null ? null : scriptManager.getActiveScript();
+		RoutineManager routineManager = plugin.getRoutineManager();
+		Routine active = routineManager == null ? null : routineManager.getActiveRoutine();
 
 		Point actual = getActualMousePoint();
 		if (actual != null)
