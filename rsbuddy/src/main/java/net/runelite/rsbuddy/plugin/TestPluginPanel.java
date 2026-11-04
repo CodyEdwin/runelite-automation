@@ -145,7 +145,7 @@ public final class TestPluginPanel extends PluginPanel
 
 		reloadButton = new JButton("Reload");
 		reloadButton.setFocusPainted(false);
-		reloadButton.setToolTipText("Rebuild the rsbuddy module and reload the selected script without restarting the client");
+		reloadButton.setToolTipText("Compile the script sources in the client (no Gradle) and reload the selected script");
 		reloadButton.addActionListener(event -> reloadSelectedScript());
 
 		JPanel buttonPanel = new JPanel(new GridLayout(1, 3, 4, 0));
@@ -155,10 +155,29 @@ public final class TestPluginPanel extends PluginPanel
 		buttonPanel.add(reloadButton);
 		add(buttonPanel);
 
-		reloadStatusLabel = new JLabel("Reload rebuilds rsbuddy first.");
+		reloadStatusLabel = new JLabel("Reload compiles scripts in the client.");
 		reloadStatusLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		reloadStatusLabel.setFont(FontManager.getRunescapeSmallFont());
 		add(reloadStatusLabel);
+
+		JLabel sourceTitle = new JLabel("Script source directory (empty = auto)");
+		sourceTitle.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		sourceTitle.setFont(FontManager.getRunescapeSmallFont());
+		add(sourceTitle);
+		JTextField sourceField = new JTextField(config.scriptSourceDirectory());
+		sourceField.setToolTipText("Path to rsbuddy/src/main/java (or the repo root). Press Enter to save.");
+		Runnable saveSource = () -> configManager.setConfiguration(TestConfig.GROUP, "scriptSourceDirectory",
+			sourceField.getText().trim());
+		sourceField.addActionListener(event -> saveSource.run());
+		sourceField.addFocusListener(new FocusAdapter()
+		{
+			@Override
+			public void focusLost(FocusEvent event)
+			{
+				saveSource.run();
+			}
+		});
+		add(sourceField);
 
 		activeLabel = new JLabel();
 		activeLabel.setForeground(ColorScheme.TEXT_COLOR);
@@ -294,8 +313,11 @@ public final class TestPluginPanel extends PluginPanel
 		}
 		else
 		{
-			customErrorLabel.setText(message);
-			customErrorLabel.setToolTipText(message);
+			// Wrap so multi-line compile errors stay readable in the narrow panel.
+			String html = "<html>" + message.replace("&", "&amp;").replace("<", "&lt;")
+				.replace(">", "&gt;").replace("\n", "<br>") + "</html>";
+			customErrorLabel.setText(html);
+			customErrorLabel.setToolTipText(html);
 		}
 	}
 
@@ -379,7 +401,7 @@ public final class TestPluginPanel extends PluginPanel
 		}
 
 		reloadButton.setEnabled(false);
-		reloadStatusLabel.setText("Rebuilding and reloading...");
+		reloadStatusLabel.setText("[Reload] compiling...");
 		setCustomScriptError(null);
 
 		new SwingWorker<Script, Void>()
@@ -403,17 +425,17 @@ public final class TestPluginPanel extends PluginPanel
 						replaceSelectedScript(selected, replacement);
 					}
 
-					reloadStatusLabel.setText("Reloaded " + selected.getName() + ".");
+					reloadStatusLabel.setText("[Reload] reloaded " + selected.getName() + ".");
 				}
 				catch (InterruptedException ex)
 				{
 					Thread.currentThread().interrupt();
-					reloadStatusLabel.setText("Reload interrupted.");
+					reloadStatusLabel.setText("[Reload] interrupted.");
 				}
 				catch (ExecutionException ex)
 				{
 					Throwable cause = ex.getCause() == null ? ex : ex.getCause();
-					reloadStatusLabel.setText("Reload failed.");
+					reloadStatusLabel.setText("[Reload] failed, see message below.");
 					setCustomScriptError(cause.getMessage());
 				}
 

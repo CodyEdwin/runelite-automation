@@ -407,4 +407,16 @@ public interface TestConfig extends Config
 	{
 		return false;
 	}
+
+	@ConfigItem(
+		keyName = "scriptSourceDirectory",
+		name = "Script source directory",
+		description = "Folder Reload compiles scripts from (rsbuddy/src/main/java, the rsbuddy module or the repo root)."
+			+ " Leave empty to auto-detect from the client's working directory.",
+		position = 31
+	)
+	default String scriptSourceDirectory()
+	{
+		return "";
+	}
 }
