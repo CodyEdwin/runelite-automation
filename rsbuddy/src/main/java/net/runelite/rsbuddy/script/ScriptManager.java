@@ -189,7 +189,7 @@ public final class ScriptManager
 		}
 		catch (Throwable ex)
 		{
-			log.warn("Script {} client tick failed", script.getName(), ex);
+			log.warn("Script {} client tick failed: {}", script.getName(), describeFailure(ex), ex);
 		}
 	}
 
@@ -207,7 +207,7 @@ public final class ScriptManager
 		}
 		catch (Throwable ex)
 		{
-			log.error("Script {} failed", script.getName(), ex);
+			log.error("Script {} failed: {}", script.getName(), describeFailure(ex), ex);
 			activeScript = null;
 			context.getInput().setGroundItemPickupFilter(null);
 			context.getInput().stopPileTracking();
@@ -225,5 +225,26 @@ public final class ScriptManager
 
 			script.setStatus("Error: " + ex.getMessage());
 		}
+	}
+
+	/** One line: the exception, its root cause and where it was thrown. */
+	static String describeFailure(Throwable ex)
+	{
+		Throwable root = ex;
+		while (root.getCause() != null && root.getCause() != root)
+		{
+			root = root.getCause();
+		}
+		StringBuilder line = new StringBuilder(ex.toString());
+		if (root != ex)
+		{
+			line.append(" caused by ").append(root);
+		}
+		StackTraceElement[] trace = ex.getStackTrace();
+		if (trace.length > 0)
+		{
+			line.append(" at ").append(trace[0]);
+		}
+		return line.toString().replace('\n', ' ');
 	}
 }

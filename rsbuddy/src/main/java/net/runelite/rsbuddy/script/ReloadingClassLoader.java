@@ -28,6 +28,8 @@ import java.io.File;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Loads freshly compiled script classes from disk while sharing the script
@@ -42,9 +44,38 @@ public final class ReloadingClassLoader extends URLClassLoader
 {
 	private static final String SCRIPT_PACKAGE = "net.runelite.rsbuddy.scripts.";
 
+	/**
+	 * Loaders that resolve everything outside the scripts package, tried in
+	 * order: the plugin's loader first, then the loaders that actually
+	 * defined the API/client classes the plugin uses. A sideloaded or
+	 * Gradle-run plugin's own loader does not always see every API class.
+	 */
+	private final List<ClassLoader> delegates = new ArrayList<>();
+
 	public ReloadingClassLoader(File classesRoot, ClassLoader parent) throws MalformedURLException
 	{
+		this(classesRoot, parent, new ClassLoader[0]);
+	}
+
+	public ReloadingClassLoader(File classesRoot, ClassLoader parent, ClassLoader... fallbacks)
+		throws MalformedURLException
+	{
 		super(new URL[]{classesRoot.toURI().toURL()}, parent);
+		addDelegate(parent);
+		addDelegate(Script.class.getClassLoader());
+		for (ClassLoader fallback : fallbacks)
+		{
+			addDelegate(fallback);
+		}
+		addDelegate(Thread.currentThread().getContextClassLoader());
+	}
+
+	private void addDelegate(ClassLoader loader)
+	{
+		if (loader != null && loader != this && !delegates.contains(loader))
+		{
+			delegates.add(loader);
+		}
 	}
 
 	@Override
@@ -52,7 +83,12 @@ public final class ReloadingClassLoader extends URLClassLoader
 	{
 		if (!name.startsWith(SCRIPT_PACKAGE))
 		{
-			return super.loadClass(name, resolve);
+			Class<?> type = loadFromDelegates(name);
+			if (resolve)
+			{
+				resolveClass(type);
+			}
+			return type;
 		}
 
 		synchronized (getClassLoadingLock(name))
@@ -67,7 +103,7 @@ public final class ReloadingClassLoader extends URLClassLoader
 				catch (ClassNotFoundException ex)
 				{
 					// The class might only exist in the installed plugin jar.
-					type = super.loadClass(name, false);
+					type = loadFromDelegates(name);
 				}
 			}
 
@@ -78,5 +114,25 @@ public final class ReloadingClassLoader extends URLClassLoader
 
 			return type;
 		}
+	}
+
+	private Class<?> loadFromDelegates(String name) throws ClassNotFoundException
+	{
+		ClassNotFoundException first = null;
+		for (ClassLoader loader : delegates)
+		{
+			try
+			{
+				return Class.forName(name, false, loader);
+			}
+			catch (ClassNotFoundException | NoClassDefFoundError ex)
+			{
+				if (first == null)
+				{
+					first = new ClassNotFoundException(name + " not found in " + delegates, ex);
+				}
+			}
+		}
+		throw first != null ? first : new ClassNotFoundException(name);
 	}
 }
