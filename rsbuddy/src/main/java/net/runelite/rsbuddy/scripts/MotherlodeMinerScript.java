@@ -142,6 +142,8 @@ public final class MotherlodeMinerScript extends Script
 	private static final int SACK_HOVER_ATTEMPTS = 4;
 	/** Max distance (px) from the live hull centre for a verified click. */
 	private static final double CENTER_TOLERANCE_PX = 6.0;
+	/** Camera/walk recoveries for one target before halting. */
+	private static final int VERIFY_RECOVERIES = 3;
 	/** Ladder clicks without a floor change before halting. */
 	private static final int CLIMB_ATTEMPT_LIMIT = 8;
 	/** Ticks the sack varbit must read 0 before the sack counts as empty (it lags a tick). */
@@ -235,6 +237,7 @@ public final class MotherlodeMinerScript extends Script
 	private boolean dropHovered;
 	private int payDirtAtClick;
 	private boolean verifyHovered;
+	private int verifyRecoveries;
 	private int verifyMisses;
 	private int sackZeroTicks;
 	private int sackFruitlessTrips;
@@ -250,6 +253,13 @@ public final class MotherlodeMinerScript extends Script
 		super("Motherlode Miner",
 			"Mines pay-dirt, deposits it at the hopper, searches the sack, and banks the ores.");
 		this.upstairs = upstairs;
+	}
+
+	@Override
+	public boolean physicalInputOnly()
+	{
+		// Every interaction is a real, visible mouse click.
+		return true;
 	}
 
 	@Override
@@ -608,7 +618,7 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		input.stopCamera();
-		if (input.clickCenter(vein) || input.interact(vein, "Mine"))
+		if (verifiedObjectClick(context, vein, "vein", new String[]{"mine"}, "vein"))
 		{
 			mining = true;
 			miningAnimationSeen = false;
@@ -808,11 +818,10 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		input.stopCamera();
-		++actionAttempts;
-
 		int carriedNow = inventory.countItem(ItemID.PAYDIRT);
-		if (input.clickCenter(hopper) || input.interact(hopper, "Deposit"))
+		if (verifiedObjectClick(context, hopper, "hopper", new String[]{"deposit"}, "hopper"))
 		{
+			++actionAttempts;
 			payDirtAtClick = carriedNow;
 			depositClickSent = true;
 			washXpAtDeposit = context.getClient().getSkillExperience(Skill.MINING);
@@ -1095,7 +1104,7 @@ public final class MotherlodeMinerScript extends Script
 
 	private boolean clickSack(ScriptContext context, TileObject sack)
 	{
-		return verifiedObjectClick(context, sack, "sack", new String[]{"search"}, "sack", "Search");
+		return verifiedObjectClick(context, sack, "sack", new String[]{"search"}, "sack");
 	}
 
 	/**
@@ -1104,12 +1113,13 @@ public final class MotherlodeMinerScript extends Script
 	 * (the player or camera may have moved) and click only if the cursor is
 	 * still inside the hull, within {@link #CENTER_TOLERANCE_PX} of the centre,
 	 * and the real left-click option matches; otherwise re-aim. After
-	 * {@link #SACK_HOVER_ATTEMPTS} misses it sends the object's own option.
+	 * {@link #SACK_HOVER_ATTEMPTS} misses it turns the camera and walks closer
+	 * (never a direct action), and halts after {@link #VERIFY_RECOVERIES}.
 	 *
 	 * @return true when the action was sent
 	 */
 	private boolean verifiedObjectClick(ScriptContext context, TileObject object, String key,
-		String[] optionPrefixes, String targetWord, String... fallbackActions)
+		String[] optionPrefixes, String targetWord)
 	{
 		GameInput input = context.getInput();
 		if (!key.equals(verifyKey))
@@ -1117,6 +1127,12 @@ public final class MotherlodeMinerScript extends Script
 			verifyKey = key;
 			verifyHovered = false;
 			verifyMisses = 0;
+			verifyRecoveries = 0;
+		}
+		if (input.isBusy())
+		{
+			// The mouse is still travelling to the centre.
+			return false;
 		}
 		if (!verifyHovered)
 		{
@@ -1169,14 +1185,24 @@ public final class MotherlodeMinerScript extends Script
 			return false;
 		}
 
-		// Something keeps covering it: send its own option on the object
-		// instead of clicking whatever is in front.
+		// Never act invisibly. Turn the camera toward it and walk a step
+		// closer (a real tile/minimap click), then re-aim; halt after a few
+		// recoveries with a clear log.
 		verifyMisses = 0;
-		verifyKey = null;
-		boolean sent = input.invokeObjectAction(object, fallbackActions);
-		log.info("[MotherlodeMiner] {} left click never verified, used its option {}: {}", key,
-			Arrays.toString(fallbackActions), sent);
-		return sent;
+		if (++verifyRecoveries > VERIFY_RECOVERIES)
+		{
+			log.info("[MotherlodeMiner] {}: left click never verified after {} recoveries, halting", key,
+				VERIFY_RECOVERIES);
+			state = State.HALTED;
+			setStatus("Stopped: could not click the " + key);
+			return false;
+		}
+		log.info("[MotherlodeMiner] {}: recovery {}/{} - turning camera and walking closer, then re-aiming", key,
+			verifyRecoveries, VERIFY_RECOVERIES);
+		input.turnCameraToward(object.getWorldLocation());
+		walker.walkTo(onPlayerPlane(context, object.getWorldLocation()), true, 1);
+		cooldown = 2;
+		return false;
 	}
 
 	private void finishSackTrip(ScriptContext context, Inventory inventory)
@@ -1402,50 +1428,19 @@ public final class MotherlodeMinerScript extends Script
 				return;
 			}
 
-			// Glide the cursor onto the chest first, confirm the cursor is
-			// actually over the chest, then left click in place. This keeps the
-			// opening visible without a click landing on a nearby object.
-			if (!chestHovered)
-			{
-				if (!input.isBusy() && input.hoverCenter(chest))
-				{
-					chestHovered = true;
-				}
-				setStatus("Moving mouse to the bank chest");
-				return;
-			}
-
-			MenuEntry entry = input.getLeftClickEntry();
-			String option = entry == null
-				? "" : GameInput.plainText(entry.getOption()).toLowerCase(Locale.ROOT);
-			String target = entry == null
-				? "" : GameInput.plainText(entry.getTarget()).toLowerCase(Locale.ROOT);
-			boolean onChest = target.contains("bank chest")
-				&& (option.contains("use") || option.contains("bank"));
-
-			boolean clicked;
-			if (onChest)
-			{
-				Point mouse = input.getMouseLocation();
-				clicked = mouse != null && input.click(mouse);
-				chestHovered = false;
-			}
-			else
-			{
-				// The cursor did not land on the chest; use its exact action
-				// so a bad camera angle cannot stall the trip.
-				chestHovered = false;
-				clicked = input.invokeObjectAction(chest, "Use", "Bank");
-			}
-
+			// Real click only: curved move to the hull centre, wait for the
+			// mouse to arrive, verify 'Use'/'Bank' on 'Bank chest', click.
+			Point before = input.getMouseLocation();
+			Point centre = input.objectCenter(chest);
+			boolean clicked = verifiedObjectClick(context, chest, "bank chest", new String[]{"use", "bank"},
+				"bank chest");
+			log.info("[MotherlodeMiner] bank-open attempt: cursor {} vs hull centre {} -> {}",
+				before == null ? "-" : before.x + "," + before.y,
+				centre == null ? "-" : centre.x + "," + centre.y, clicked ? "clicked" : "aiming");
 			if (clicked)
 			{
 				cooldown = CLICK_COOLDOWN;
 				setStatus("Opening bank");
-			}
-			else
-			{
-				cooldown = 1;
 			}
 			return;
 		}
@@ -1586,53 +1581,48 @@ public final class MotherlodeMinerScript extends Script
 					return;
 				}
 
-				// Walk the mouse over to the hammer slot first so the
-				// withdrawal is visible, then send the deterministic action
-				// once the pointer has actually arrived.
+				// Real click only: hover the visible hammer slot, verify the
+				// left click is "Withdraw-1 Hammer", then click it.
 				Widget hammer = input.findBankItemWidget(ItemID.HAMMER);
-				if (hammer != null && !hammerHovered)
+				if (hammer == null || hammer.isHidden())
 				{
-					if (!input.isBusy() && input.hover(hammer))
+					if (++actionAttempts > ACTION_ATTEMPTS)
+					{
+						log.info("[MotherlodeMiner] no visible hammer in the bank, skipping the repair");
+						hammerUnavailable = true;
+						bankStage = BankStage.LEAVE;
+					}
+					setStatus("Looking for a hammer in the bank");
+					return;
+				}
+				if (!hammerHovered)
+				{
+					if (input.hover(hammer))
 					{
 						hammerHovered = true;
 					}
 					setStatus("Moving mouse to the hammer");
 					return;
 				}
-
-				if (hammerHovered && input.isBusy())
+				hammerHovered = false;
+				MenuEntry top = input.getLeftClickEntry();
+				String topOption = top == null ? "" : GameInput.plainText(top.getOption()).toLowerCase(Locale.ROOT);
+				String topTarget = top == null ? "" : GameInput.plainText(top.getTarget()).toLowerCase(Locale.ROOT);
+				Point mouse = input.getMouseLocation();
+				if (topOption.startsWith("withdraw") && topTarget.contains("hammer") && mouse != null && input.click(mouse))
 				{
-					setStatus("Moving mouse to the hammer");
-					return;
-				}
-
-				// Withdraw by item id and bank slot. The old physical
-				// click used the first widget that reported the hammer id,
-				// which could be a stale or off-tab slot and click the
-				// wrong item.
-				boolean withdrew = input.withdrawBankItem(ItemID.HAMMER, "Withdraw-1");
-				if (withdrew)
-				{
-					// The action was sent but the hammer may still not
-					// arrive (wrong tab/scroll state). Stop retrying instead
-					// of looping on the bank forever.
-					if (++actionAttempts > ACTION_ATTEMPTS * 2)
-					{
-						hammerUnavailable = true;
-						bankStage = BankStage.LEAVE;
-					}
+					log.info("[MotherlodeMiner] hammer click: top='{} {}' at {},{}", topOption, topTarget, mouse.x, mouse.y);
 					cooldown = CLICK_COOLDOWN;
-				}
-				else if (++actionAttempts > ACTION_ATTEMPTS)
-				{
-					// No hammer in the bank. Skip the repair instead of
-					// bouncing between the bank and the wheels forever.
-					hammerUnavailable = true;
-					bankStage = BankStage.LEAVE;
 				}
 				else
 				{
-					cooldown = 1;
+					log.info("[MotherlodeMiner] hammer hover: top='{} {}', re-aiming", topOption, topTarget);
+				}
+				if (++actionAttempts > ACTION_ATTEMPTS * 2)
+				{
+					log.info("[MotherlodeMiner] hammer never withdrew after {} tries, skipping the repair", actionAttempts);
+					hammerUnavailable = true;
+					bankStage = BankStage.LEAVE;
 				}
 				setStatus("Withdrawing a hammer");
 				return;
@@ -1734,7 +1724,7 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		input.stopCamera();
-		if (input.clickCenter(strut) || input.interact(strut, "Hammer", "Fix", "Use"))
+		if (verifiedObjectClick(context, strut, "strut", new String[]{"hammer", "fix", "use"}, "strut"))
 		{
 			cooldown = CLICK_COOLDOWN;
 			setStatus("Fixing the water wheel");
@@ -2036,7 +2026,7 @@ public final class MotherlodeMinerScript extends Script
 			return false;
 		}
 		boolean sent = verifiedObjectClick(context, ladder, up ? "ladder up" : "ladder down",
-			new String[]{"climb"}, "ladder", actions);
+			new String[]{"climb"}, "ladder");
 		if (sent)
 		{
 			log.info("[MotherlodeMiner] ladder {} attempt {}: waiting {} ticks for the floor change", up ? "up" : "down",
@@ -2284,9 +2274,9 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		input.stopCamera();
-		++crateAttempts;
-		if (input.clickCenter(crate) || input.interact(crate, "Search"))
+		if (verifiedObjectClick(context, crate, "crate", new String[]{"search"}, "crate"))
 		{
+			++crateAttempts;
 			cooldown = 2;
 			setStatus("Searching the crate for a hammer");
 		}

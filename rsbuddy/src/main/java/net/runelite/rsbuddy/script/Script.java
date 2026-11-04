@@ -94,6 +94,15 @@ public abstract class Script
 		onClientTick();
 	}
 
+	/**
+	 * True when this script must only ever act through real, visible mouse
+	 * clicks and key presses (no direct menu actions).
+	 */
+	public boolean physicalInputOnly()
+	{
+		return false;
+	}
+
 	protected abstract void onGameTick();
 
 	/**

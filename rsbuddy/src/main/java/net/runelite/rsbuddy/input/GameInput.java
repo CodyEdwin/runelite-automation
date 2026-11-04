@@ -72,6 +72,7 @@ import net.runelite.rsbuddy.input.backend.HardwareInputFactory;
  */
 public final class GameInput
 {
+	private volatile boolean physicalOnly;
 	private static final int RANDOM_POINT_ATTEMPTS = 25;
 	private static final double TAU = Math.PI * 2.0;
 	private static final long CLICK_EFFECT_LIFETIME_MS = 1000L;
@@ -1548,6 +1549,10 @@ public final class GameInput
 		{
 			if (actions[i] != null && stripTags(actions[i]).equalsIgnoreCase(stripTags(action)))
 			{
+				if (!directActionAllowed("interactStripped"))
+				{
+					return false;
+				}
 				client.menuAction(-1, widget.getId(), MenuAction.CC_OP, i + 1, -1, actions[i], "");
 				return true;
 			}
@@ -1614,6 +1619,10 @@ public final class GameInput
 		int sceneX = (int) (hash & 0x7F);
 		int sceneY = (int) ((hash >>> 7) & 0x7F);
 
+		if (!directActionAllowed("interact"))
+		{
+			return false;
+		}
 		client.menuAction(sceneX, sceneY, type, object.getId(), -1,
 			composition.getActions()[actionIndex],
 			composition.getName() == null ? "" : composition.getName());
@@ -1649,6 +1658,10 @@ public final class GameInput
 		long hash = object.getHash();
 		int sceneX = (int) (hash & 0x7F);
 		int sceneY = (int) ((hash >>> 7) & 0x7F);
+		if (!directActionAllowed("invokeObjectAction"))
+		{
+			return false;
+		}
 		client.menuAction(sceneX, sceneY, type, object.getId(), -1,
 			composition.getActions()[actionIndex],
 			composition.getName() == null ? "" : composition.getName());
@@ -1758,6 +1771,10 @@ public final class GameInput
 			return false;
 		}
 
+		if (!directActionAllowed("interact"))
+		{
+			return false;
+		}
 		client.menuAction(0, 0, type, npc.getIndex(), -1,
 			composition.getActions()[actionIndex],
 			npc.getName() == null ? "" : npc.getName());
@@ -1804,6 +1821,10 @@ public final class GameInput
 			return false;
 		}
 
+		if (!directActionAllowed("interact"))
+		{
+			return false;
+		}
 		client.menuAction(-1, widget.getId(), MenuAction.CC_OP, actionIndex + 1, -1, action, "");
 		return true;
 	}
@@ -1901,6 +1922,10 @@ public final class GameInput
 			? actions[actionIndex]
 			: withdrawOption;
 
+		if (!directActionAllowed("withdrawBankItem"))
+		{
+			return false;
+		}
 		client.menuAction(slot, InterfaceID.Bankmain.ITEMS, MenuAction.CC_OP,
 			actionIndex + 1, itemId, option, "");
 		return true;
@@ -2076,6 +2101,10 @@ public final class GameInput
 
 	private boolean invokeMenuEntry(MenuEntry entry)
 	{
+		if (!directActionAllowed("invokeMenuEntry"))
+		{
+			return false;
+		}
 		client.menuAction(entry.getParam0(), entry.getParam1(), entry.getType(),
 			entry.getIdentifier(), entry.getItemId(), entry.getOption(), entry.getTarget());
 
@@ -2265,6 +2294,10 @@ public final class GameInput
 		}
 
 		// Some menus do not include a Cancel row. Run the action directly.
+		if (!directActionAllowed("closeMenu"))
+		{
+			return false;
+		}
 		client.menuAction(-1, -1, MenuAction.CANCEL, -1, -1, "", "");
 		return true;
 	}
@@ -2540,6 +2573,10 @@ public final class GameInput
 	 */
 	public boolean invokeGroundItemTake(int sceneX, int sceneY, int itemId, String itemName)
 	{
+		if (!directActionAllowed("invokeGroundItemTake"))
+		{
+			return false;
+		}
 		client.menuAction(sceneX, sceneY, MenuAction.GROUND_ITEM_THIRD_OPTION, itemId, -1, "Take",
 			itemName == null ? "" : itemName);
 		return true;
@@ -2612,6 +2649,31 @@ public final class GameInput
 		}
 
 		return randomPoint(tilePoly);
+	}
+
+	/**
+	 * Physical-input-only mode: every helper that would run a menu action
+	 * directly (client.menuAction, no visible mouse click) refuses and logs
+	 * instead. Set per script on start by the ScriptManager.
+	 */
+	public void setPhysicalOnly(boolean physicalOnly)
+	{
+		this.physicalOnly = physicalOnly;
+	}
+
+	public boolean isPhysicalOnly()
+	{
+		return physicalOnly;
+	}
+
+	private boolean directActionAllowed(String caller)
+	{
+		if (physicalOnly)
+		{
+			log.info("[GameInput] refused direct menu action from {}(): physical clicks only", caller);
+			return false;
+		}
+		return true;
 	}
 
 	public boolean walkTo(WorldPoint worldPoint)

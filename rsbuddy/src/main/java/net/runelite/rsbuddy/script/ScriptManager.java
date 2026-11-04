@@ -121,6 +121,7 @@ public final class ScriptManager
 		activeScript = script;
 		context.getInput().setGroundItemPickupFilter(script.getGroundItemPickupFilter());
 		context.getInput().setFastMouse(script.useFastMouse());
+		context.getInput().setPhysicalOnly(script.physicalInputOnly());
 
 		try
 		{
@@ -133,6 +134,7 @@ public final class ScriptManager
 			context.getInput().setGroundItemPickupFilter(null);
 			context.getInput().stopPileTracking();
 			context.getInput().setFastMouse(false);
+			context.getInput().setPhysicalOnly(false);
 			script.setStatus("Error: " + ex.getMessage());
 
 			try
@@ -155,6 +157,7 @@ public final class ScriptManager
 		context.getInput().setGroundItemPickupFilter(null);
 		context.getInput().stopPileTracking();
 		context.getInput().setFastMouse(false);
+		context.getInput().setPhysicalOnly(false);
 
 		if (script == null)
 		{
@@ -209,6 +212,7 @@ public final class ScriptManager
 			context.getInput().setGroundItemPickupFilter(null);
 			context.getInput().stopPileTracking();
 			context.getInput().setFastMouse(false);
+			context.getInput().setPhysicalOnly(false);
 
 			try
 			{
