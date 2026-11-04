@@ -25,11 +25,21 @@
 package net.runelite.rsbuddy.routine;
 
 /**
- * One user setting a script declares. It appears automatically in the
- * RSBuddy side panel under routine settings and is stored in the RSBuddy
- * config group under {@link #getKey()}. To also show it in the wrench config,
- * add a matching {@code @ConfigItem} with the same key to RSBuddyConfig (RuneLite
- * builds that page from the interface, so it cannot be added at runtime).
+ * One user setting a routine declares.
+ * <p>
+ * Wiring: return these from {@code Routine.getRoutineSettings()}. When the
+ * routine has no hand-written settings builder in {@code RoutineLibrary},
+ * its settings form in the side panel draws one control per setting
+ * (checkbox, number spinner or text field) and saves it in the RSBuddy
+ * config group under {@link #getKey()}. A {@link TaskRoutine} reads the value
+ * with {@code bool/integer/text(key)}; an unset key returns the default.
+ * To also show it on RuneLite's wrench config page, add a {@code @ConfigItem}
+ * with the same key to RSBuddyConfig (that page is built from the interface,
+ * so it cannot be added at runtime).
+ * <p>
+ * Example: {@code RoutineSetting.bool("oakBank", "Bank logs", "Bank when full", true)}
+ * <p>
+ * Use a key unique to your routine (prefix it with the routine name).
  */
 public final class RoutineSetting
 {
@@ -53,16 +63,19 @@ public final class RoutineSetting
 		this.defaultValue = defaultValue;
 	}
 
+	/** A checkbox setting. */
 	public static RoutineSetting bool(String key, String label, String tooltip, boolean defaultValue)
 	{
 		return new RoutineSetting(key, label, tooltip, Type.BOOLEAN, Boolean.toString(defaultValue));
 	}
 
+	/** A number setting (0 or more). */
 	public static RoutineSetting integer(String key, String label, String tooltip, int defaultValue)
 	{
 		return new RoutineSetting(key, label, tooltip, Type.INTEGER, Integer.toString(defaultValue));
 	}
 
+	/** A free-text setting. */
 	public static RoutineSetting text(String key, String label, String tooltip, String defaultValue)
 	{
 		return new RoutineSetting(key, label, tooltip, Type.TEXT, defaultValue == null ? "" : defaultValue);

@@ -31,6 +31,39 @@ panel is the Routine Library: a search field and a list of every registered rout
 
 ## Writing a routine
 
+### Architecture
+
+```
+Routine -> TaskRoutine -> your tasks          (what to do)
+Actions facade -> Aim / Interact / Movement / Bank / Keys / Waits / ActionLog
+  -> GameInput (human mouse paths, physical clicks only)
+    -> hardware backend (X11 XTest or Windows SendInput)
+```
+
+| Module (routine/) | Purpose |
+|---|---|
+| `Actions` | Facade every routine uses: `actions.clickObject(...)`, `actions.walkTo(...)` etc. |
+| `Aim` | Dead-centre target, follows drift, drops aim while moving, 80-200 ms reaction |
+| `Interact` | Verified real clicks on objects/NPCs/widgets/items, right-click options, recovery |
+| `Movement` | Minimap walking, `isMoving`, click-on-screen-or-walk (`goAndClick`) |
+| `Bank` | Open nearest bank, deposit all, withdraw |
+| `Keys` | Key presses, Make-All / make option |
+| `Waits` | `waitUntil` with timeout, `isAnimating` |
+| `ActionLog` | `[Prefix]` logs and `+Nms` timing between actions |
+| `TaskRoutine` | Priority task list and tick loop |
+| `RoutineSetting` | Declared settings, drawn in the panel and stored in config |
+
+### Steps
+
+1. Copy `routines/ExampleRoutine.java` (a template, not registered) to `routines/MyRoutine.java`.
+2. Set the name/description in the no-arg constructor.
+3. Declare settings in `getRoutineSettings()` (keys prefixed with your routine name).
+4. Add tasks in `setup()`, highest priority first; each calls one `actions.*` method.
+5. Register it in `RoutineLibrary` (or load it as a jar, below) and press Reload.
+
+All clicks are real, visible and verified; never call `menuAction` yourself.
+
+
 Extend `Routine`, implement `onGameTick`, and register it in `RoutineLibrary.create`:
 
 ```java

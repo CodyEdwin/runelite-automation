@@ -29,13 +29,27 @@ import java.util.List;
 import java.util.function.BooleanSupplier;
 
 /**
- * Light structure for scripts: a list of tasks, each "when this holds, do
- * that". Every game tick (and every frame right after a verified hover
- * arrives) the first task whose condition holds runs. All input goes through
- * {@link #actions}, which applies the standing click/walk rules.
+ * The easiest way to write a routine: a priority list of tasks, each
+ * "when this holds, do that".
+ * <p>
+ * Tick loop: every game tick (and every frame right after a verified hover
+ * is ready to click) the tasks are checked in the order they were added and
+ * the first whose condition holds runs; the rest wait for the next round.
+ * Keep each task short; it is called again next round until its condition
+ * stops holding. All input goes through {@link #actions}, which applies the
+ * standing click/walk rules, so tasks only say what to click.
  * <p>
  * Settings are declared with {@link #getRoutineSettings()} and read with
  * {@link #bool}, {@link #integer} and {@link #text}.
+ * <p>
+ * Example:
+ * <pre>{@code
+ * protected void setup() {
+ *     task("deposit", () -> actions.bankOpen(), () -> actions.depositAll());
+ *     task("chop", () -> !actions.isAnimating(), () -> actions.goAndClick(...));
+ * }
+ * }</pre>
+ * See {@code routines/ExampleRoutine} for a full template.
  */
 public abstract class TaskRoutine extends Routine implements Actions.Host
 {
@@ -69,6 +83,13 @@ public abstract class TaskRoutine extends Routine implements Actions.Host
 	/** Register tasks with {@link #task}, in priority order. Called on every Start. */
 	protected abstract void setup();
 
+	/**
+	 * Adds a task. Earlier tasks win when several conditions hold.
+	 *
+	 * @param name shown in walk logs and handy in status lines
+	 * @param when checked every round; keep it cheap and side-effect free
+	 * @param run what to do this round (usually one actions.* call)
+	 */
 	protected final void task(String name, BooleanSupplier when, Runnable run)
 	{
 		tasks.add(new Task(name, when, run));
@@ -92,6 +113,7 @@ public abstract class TaskRoutine extends Routine implements Actions.Host
 		setup();
 	}
 
+	/** Game-tick loop: skip while halted, logged out or cooling down, else run the first matching task. */
 	@Override
 	protected final void onGameTick()
 	{
@@ -107,6 +129,7 @@ public abstract class TaskRoutine extends Routine implements Actions.Host
 		runTasks();
 	}
 
+	/** Per-frame loop: when the aim module says a hovered target is ready, run the tasks now (no idle gap). */
 	@Override
 	protected final void onClientTick()
 	{
@@ -139,6 +162,7 @@ public abstract class TaskRoutine extends Routine implements Actions.Host
 		setStatus(status);
 	}
 
+	/** Stops running tasks and shows {@code status} in the panel. Press Start to run again. */
 	@Override
 	public void halt(String status)
 	{
@@ -160,11 +184,13 @@ public abstract class TaskRoutine extends Routine implements Actions.Host
 
 	// Settings
 
+	/** @return the stored boolean for a declared {@link RoutineSetting}, or its default */
 	protected final boolean bool(String key)
 	{
 		return Boolean.parseBoolean(setting(key));
 	}
 
+	/** @return the stored integer for a declared {@link RoutineSetting}, or its default (0 when unparseable) */
 	protected final int integer(String key)
 	{
 		try
@@ -177,6 +203,7 @@ public abstract class TaskRoutine extends Routine implements Actions.Host
 		}
 	}
 
+	/** @return the stored text for a declared {@link RoutineSetting}, or its default */
 	protected final String text(String key)
 	{
 		return setting(key);
