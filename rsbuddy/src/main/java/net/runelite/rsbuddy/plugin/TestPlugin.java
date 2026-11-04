@@ -497,7 +497,8 @@ public class TestPlugin extends Plugin
 			try
 			{
 				classesRoot = ScriptCompiler.compile(sourceRoot, getClass().getClassLoader(),
-					getClass(), Script.class, Client.class, ConfigManager.class, Logger.class);
+					getClass(), Script.class, Client.class, net.runelite.api.EquipmentInventorySlot.class,
+					ConfigManager.class, Logger.class);
 			}
 			catch (IllegalStateException ex)
 			{
@@ -527,7 +528,11 @@ public class TestPlugin extends Plugin
 		Script replacement;
 		try
 		{
-			ClassLoader loader = new ReloadingClassLoader(classesRoot, getClass().getClassLoader());
+			// Non-script classes resolve through the plugin's loader, then the
+			// loaders that defined the API and client classes it uses.
+			ClassLoader loader = new ReloadingClassLoader(classesRoot, getClass().getClassLoader(),
+				Client.class.getClassLoader(), net.runelite.api.EquipmentInventorySlot.class.getClassLoader(),
+				ConfigManager.class.getClassLoader());
 			replacement = createScript(className, loader);
 		}
 		catch (MalformedURLException ex)
