@@ -391,6 +391,24 @@ Exchange booth, counter, chest) or a bank chest with **Use**, plus bankers (id 1
 or any NPC with **Bank**). It logs the candidates it picked from, and if nothing matches it logs the
 nearby bank-like objects, other objects and NPCs before stopping.
 
+## Motherlode Miner
+
+`MotherlodeMinerScript` (panel: **Motherlode Miner**, setting **Motherlode: upstairs**) mines
+pay-dirt, deposits it in the hopper, empties the sack and banks the ores.
+
+- **Sack:** keeps searching the sack and banking until the sack varbit
+  (`MOTHERLODE_SACK_TRANSMIT`) has read 0 for 2 ticks and the inventory is banked; only then does
+  it go back upstairs / to the veins. A missed click never counts as "sack empty". Three sack trips
+  in a row that get nothing while the sack still shows ore stop the script with a clear status.
+- **Clicks:** the sack and ladder use a verified left click: curved move onto the dead centre of the
+  object's hull, then (next tick) the centre is recomputed and the click is sent only if the cursor
+  is still on the hull, within 6 px of the centre, and the top option is `Search … Sack` /
+  `Climb … Ladder`. After 4 misses it uses the object's own option. Ladder: up to 8 clicks, each
+  waits for the floor change before re-clicking. Veins, hopper, strut, crate and bank chest are
+  clicked at their hull centre too (no random offset).
+- **Camera:** no random camera nudges; it only turns when a target is off screen.
+- Log lines start with `[MotherlodeMiner]`.
+
 ## Panel and commands
 
 The sidebar panel lists registered scripts and provides Start/Stop controls with live status and

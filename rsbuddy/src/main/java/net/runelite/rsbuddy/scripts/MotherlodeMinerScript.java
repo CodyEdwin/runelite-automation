@@ -25,6 +25,7 @@
 package net.runelite.rsbuddy.scripts;
 
 import java.awt.Point;
+import java.awt.Shape;
 import java.awt.event.KeyEvent;
 import java.util.Arrays;
 import java.util.List;
@@ -60,6 +61,8 @@ import net.runelite.rsbuddy.walk.Walker;
  */
 public final class MotherlodeMinerScript extends Script
 {
+	private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(MotherlodeMinerScript.class);
+
 	private static final int HOPPER_ID = ObjectID.MOTHERLODE_HOPPER;
 	private static final int SACK_ID = ObjectID.MOTHERLODE_SACK;
 	private static final int SACK_EMPTY_ID = ObjectID.MOTHERLODE_SACK_EMPTY;
@@ -135,8 +138,16 @@ public final class MotherlodeMinerScript extends Script
 	private static final int MAX_SEARCH_CLICKS = 12;
 	private static final long MINE_START_TIMEOUT_MS = 3000L;
 	private static final long MINE_ANIMATION_GAP_MS = 1500L;
-	private static final long CAMERA_NUDGE_MIN_MS = 30000L;
-	private static final long CAMERA_NUDGE_MAX_MS = 60000L;
+	/** Hover checks on the sack before falling back to its menu option. */
+	private static final int SACK_HOVER_ATTEMPTS = 4;
+	/** Max distance (px) from the live hull centre for a verified click. */
+	private static final double CENTER_TOLERANCE_PX = 6.0;
+	/** Ladder clicks without a floor change before halting. */
+	private static final int CLIMB_ATTEMPT_LIMIT = 8;
+	/** Ticks the sack varbit must read 0 before the sack counts as empty (it lags a tick). */
+	private static final int SACK_EMPTY_CONFIRM_TICKS = 2;
+	/** Sack trips in a row with ore left in the sack but none coming out before halting. */
+	private static final int SACK_FRUITLESS_TRIPS = 3;
 	private static final long WASH_TIMEOUT_MS = 15000L;
 	// Give the server a moment to remove the deposited pay-dirt from the
 	// inventory before the same load is clicked into the hopper twice.
@@ -204,9 +215,6 @@ public final class MotherlodeMinerScript extends Script
 	private boolean mining;
 	private boolean miningAnimationSeen;
 	private long lastMiningAnimationAt;
-	private long nextCameraNudgeAt;
-	private boolean cameraNudgeLeft;
-	private final java.util.Random random = new java.util.Random();
 	private TileObject currentVein;
 	private int miningLevel = -1;
 	private long lastMineClickAt;
@@ -221,6 +229,12 @@ public final class MotherlodeMinerScript extends Script
 	private int sackCameraTurns;
 	private int itemsBeforeSearch;
 	private int levelUpDismissAttempts;
+	private String verifyKey;
+	private boolean verifyHovered;
+	private int verifyMisses;
+	private int sackZeroTicks;
+	private int sackFruitlessTrips;
+	private boolean sackTripGotOres;
 
 	public MotherlodeMinerScript()
 	{
@@ -269,8 +283,6 @@ public final class MotherlodeMinerScript extends Script
 		mining = false;
 		miningAnimationSeen = false;
 		lastMiningAnimationAt = 0;
-		nextCameraNudgeAt = System.currentTimeMillis() + CAMERA_NUDGE_MIN_MS + (long) random.nextInt((int) (CAMERA_NUDGE_MAX_MS - CAMERA_NUDGE_MIN_MS) + 1);
-		cameraNudgeLeft = random.nextBoolean();
 		currentVein = null;
 		miningLevel = -1;
 		lastMineClickAt = 0;
@@ -284,6 +296,12 @@ public final class MotherlodeMinerScript extends Script
 		sackCameraTurns = 0;
 		itemsBeforeSearch = 0;
 		levelUpDismissAttempts = 0;
+		verifyKey = null;
+		verifyHovered = false;
+		verifyMisses = 0;
+		sackZeroTicks = 0;
+		sackFruitlessTrips = 0;
+		sackTripGotOres = false;
 		setStatus("Ready");
 	}
 
@@ -308,6 +326,7 @@ public final class MotherlodeMinerScript extends Script
 			sackKnownEmpty = false;
 		}
 		lastLiveSack = liveSack;
+		sackZeroTicks = liveSack == 0 ? sackZeroTicks + 1 : 0;
 		sackCapacity = context.getClient().getVarbitValue(VarbitID.MOTHERLODE_BIGGERSACK) == 1
 			? SACK_LARGE_SIZE : SACK_SIZE;
 		if (!sackBaseInit)
@@ -372,11 +391,6 @@ public final class MotherlodeMinerScript extends Script
 			setStatus("Climbing up the ladder");
 		}
 
-		if (state == State.MINE && maybeNudgeCamera(context))
-		{
-			return;
-		}
-
 		switch (state)
 		{
 			case MINE:
@@ -419,40 +433,6 @@ public final class MotherlodeMinerScript extends Script
 			default:
 				break;
 		}
-	}
-
-	/**
-	 * Small left/right camera nudge every 30-60 seconds, but only while
-	 * actually mining. Keeps the view moving like a player and wakes up a
-	 * stalled mining animation.
-	 *
-	 * @return true if a nudge was started and the state machine should skip
-	 * this tick
-	 */
-	private boolean maybeNudgeCamera(ScriptContext context)
-	{
-		long now = System.currentTimeMillis();
-		if (now < nextCameraNudgeAt || !mining || state != State.MINE)
-		{
-			return false;
-		}
-
-		GameInput input = context.getInput();
-		if (input.isBusy() || input.isCameraBusy())
-		{
-			return false;
-		}
-
-		cameraNudgeLeft = !cameraNudgeLeft;
-		if (!input.nudgeCamera(cameraNudgeLeft, 220 + random.nextInt(300)))
-		{
-			return false;
-		}
-
-		nextCameraNudgeAt = now + CAMERA_NUDGE_MIN_MS
-			+ random.nextInt((int) (CAMERA_NUDGE_MAX_MS - CAMERA_NUDGE_MIN_MS) + 1);
-		setStatus("Adjusting the camera while mining");
-		return true;
 	}
 
 	private void mine(ScriptContext context)
@@ -620,7 +600,7 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		input.stopCamera();
-		if (input.interact(vein, "Mine") || input.click(vein))
+		if (input.clickCenter(vein) || input.interact(vein, "Mine"))
 		{
 			mining = true;
 			miningAnimationSeen = false;
@@ -829,7 +809,7 @@ public final class MotherlodeMinerScript extends Script
 		input.stopCamera();
 		++actionAttempts;
 
-		if (input.interact(hopper, "Deposit") || input.click(hopper))
+		if (input.clickCenter(hopper) || input.interact(hopper, "Deposit"))
 		{
 			depositClickSent = true;
 			washXpAtDeposit = context.getClient().getSkillExperience(Skill.MINING);
@@ -869,6 +849,7 @@ public final class MotherlodeMinerScript extends Script
 			searchMisses = 0;
 			sackCameraTurns = 0;
 			itemsBeforeSearch = 0;
+			verifyKey = null;
 			setStatus("Searching the sack");
 			return;
 		}
@@ -896,37 +877,42 @@ public final class MotherlodeMinerScript extends Script
 
 			if (countInventoryItems(inventory) > itemsBeforeSearch)
 			{
-				// Ores arrived. Take the rest of the sack too while there is
-				// room left: banking after every single click only means
-				// another trip down the ladder for the same sack.
-				if (sackContents > 0 && inventory.getEmptySlots() > 0)
+				// Ores arrived. Bank them once the inventory is full or the
+				// sack is out; the bank trip comes back here while the sack
+				// varbit still shows ore.
+				searchMisses = 0;
+				sackTripGotOres = true;
+				log.info("[MotherlodeMiner] sack gave {} items, sack varbit now {}, {} free slots",
+					countInventoryItems(inventory) - itemsBeforeSearch, lastLiveSack, inventory.getEmptySlots());
+				if (lastLiveSack > 0 && inventory.getEmptySlots() > 0)
 				{
-					searchMisses = 0;
 					searchClicks = 0;
 					cooldown = 1;
 					setStatus("Emptying the sack");
 					return;
-				}
-
-				if (sackContents <= 0)
-				{
-					sackKnownEmpty = true;
 				}
 				finishSackTrip(context, inventory);
 				return;
 			}
 
 			++searchMisses;
-			if (searchMisses >= 2)
-			{
-				// Two clicks in a row produced nothing, so the sack is out of
-				// ore. Bank what came out and go back up to mine instead of
-				// searching the empty sack over and over.
-				sackKnownEmpty = true;
-				collectingSack = false;
-				finishSackTrip(context, inventory);
-				return;
-			}
+			log.info("[MotherlodeMiner] sack search #{} gave nothing (sack varbit {}, zero for {} ticks)",
+				searchClicks, lastLiveSack, sackZeroTicks);
+		}
+
+		// Empty only when the sack varbit has read 0 for a couple of ticks
+		// (it updates a tick late), never because a click missed.
+		boolean washed = !payDirtDeposited
+			|| context.getClient().getSkillExperience(Skill.MINING) > washXpAtDeposit
+			|| System.currentTimeMillis() - depositClickedAt >= WASH_TIMEOUT_MS;
+		if (lastLiveSack == 0 && sackZeroTicks >= SACK_EMPTY_CONFIRM_TICKS && washed)
+		{
+			log.info("[MotherlodeMiner] sack is empty (varbit 0 for {} ticks), {} items to bank",
+				sackZeroTicks, countInventoryItems(inventory));
+			sackKnownEmpty = true;
+			collectingSack = false;
+			finishSackTrip(context, inventory);
+			return;
 		}
 
 		boolean xpGained = context.getClient().getSkillExperience(Skill.MINING) > washXpAtDeposit;
@@ -995,43 +981,146 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		input.stopCamera();
-		itemsBeforeSearch = countInventoryItems(inventory);
-
-		// Run the sack's exact Search option. A raw click can land on the
-		// water wheel or a neighbouring object and walk instead of searching.
-		boolean clicked = input.invokeObjectAction(sack, "Search")
-			|| input.interact(sack, "Search")
-			|| input.click(sack);
-
-		if (clicked)
+		if (clickSack(context, sack))
 		{
+			itemsBeforeSearch = countInventoryItems(inventory);
 			++searchClicks;
 			searchWait = SEARCH_WAIT_TICKS;
 			cooldown = 1;
 			setStatus("Searching the sack");
 		}
-		else
+	}
+
+	private boolean clickSack(ScriptContext context, TileObject sack)
+	{
+		return verifiedObjectClick(context, sack, "sack", new String[]{"search"}, "sack", "Search");
+	}
+
+	/**
+	 * Verified left click on a game object, aimed at the dead centre of its
+	 * hull. Tick 1: curved move onto the centre. Tick 2: recompute the centre
+	 * (the player or camera may have moved) and click only if the cursor is
+	 * still inside the hull, within {@link #CENTER_TOLERANCE_PX} of the centre,
+	 * and the real left-click option matches; otherwise re-aim. After
+	 * {@link #SACK_HOVER_ATTEMPTS} misses it sends the object's own option.
+	 *
+	 * @return true when the action was sent
+	 */
+	private boolean verifiedObjectClick(ScriptContext context, TileObject object, String key,
+		String[] optionPrefixes, String targetWord, String... fallbackActions)
+	{
+		GameInput input = context.getInput();
+		if (!key.equals(verifyKey))
+		{
+			verifyKey = key;
+			verifyHovered = false;
+			verifyMisses = 0;
+		}
+		if (!verifyHovered)
+		{
+			if (input.hoverCenter(object))
+			{
+				verifyHovered = true;
+			}
+			else
+			{
+				log.info("[MotherlodeMiner] {}: no clickable centre on screen", key);
+			}
+			setStatus("Moving mouse to the " + key);
+			return false;
+		}
+		verifyHovered = false;
+
+		MenuEntry entry = input.getLeftClickEntry();
+		String option = entry == null ? "" : GameInput.plainText(entry.getOption()).toLowerCase(Locale.ROOT);
+		String target = entry == null ? "" : GameInput.plainText(entry.getTarget()).toLowerCase(Locale.ROOT);
+		Point mouse = input.getMouseLocation();
+		Point center = input.objectCenter(object);
+		Shape hull = input.objectHull(object);
+		boolean onHull = mouse != null && hull != null && hull.contains(mouse);
+		boolean centred = mouse != null && center != null && mouse.distance(center) <= CENTER_TOLERANCE_PX;
+		boolean optionOk = target.contains(targetWord);
+		boolean prefixOk = false;
+		for (String prefix : optionPrefixes)
+		{
+			prefixOk |= option.startsWith(prefix);
+		}
+		if (onHull && centred && optionOk && prefixOk)
+		{
+			if (input.click(mouse))
+			{
+				log.info("[MotherlodeMiner] {} click: top='{} {}' at {},{} (centre {},{})", key, option, target,
+					mouse.x, mouse.y, center.x, center.y);
+				verifyMisses = 0;
+				verifyKey = null;
+				return true;
+			}
+			return false;
+		}
+
+		++verifyMisses;
+		log.info("[MotherlodeMiner] {} hover miss {}/{}: top='{} {}' onHull={} centred={} -> re-aiming", key,
+			verifyMisses, SACK_HOVER_ATTEMPTS, option, target, onHull, centred);
+		if (verifyMisses < SACK_HOVER_ATTEMPTS)
 		{
 			cooldown = 1;
+			return false;
 		}
+
+		// Something keeps covering it: send its own option on the object
+		// instead of clicking whatever is in front.
+		verifyMisses = 0;
+		verifyKey = null;
+		boolean sent = input.invokeObjectAction(object, fallbackActions);
+		log.info("[MotherlodeMiner] {} left click never verified, used its option {}: {}", key,
+			Arrays.toString(fallbackActions), sent);
+		return sent;
 	}
 
 	private void finishSackTrip(ScriptContext context, Inventory inventory)
 	{
 		payDirtDeposited = false;
 		searchClicks = 0;
-		// The descent collection is done once we leave the sack. If this flag
-		// stays set, the bank-exit path walks straight back to the sack and
-		// repeatedly searches an already empty sack.
-		collectingSack = false;
+		// Keep coming back from the bank until the sack varbit reads 0;
+		// only then is the descent collection done.
+		collectingSack = lastLiveSack > 0;
+		if (collectingSack)
+		{
+			sackKnownEmpty = false;
+			sackFruitlessTrips = sackTripGotOres ? 0 : sackFruitlessTrips + 1;
+			if (sackFruitlessTrips >= SACK_FRUITLESS_TRIPS)
+			{
+				log.info("[MotherlodeMiner] sack still shows {} but {} trips in a row got nothing, halting",
+					lastLiveSack, sackFruitlessTrips);
+				state = State.HALTED;
+				setStatus("Stopped: the sack shows ore but searching it gives nothing");
+				return;
+			}
+		}
+		else
+		{
+			sackFruitlessTrips = 0;
+		}
+		sackTripGotOres = false;
+		log.info("[MotherlodeMiner] leaving the sack: varbit {}, {} items to bank, {}", lastLiveSack,
+			countInventoryItems(inventory), collectingSack ? "coming back for the rest" : "sack done");
 		// The sack is emptied (or left with only what is still in it), so
 		// the local deposit count starts again from the live value.
 		sackBase = lastLiveSack;
 		depositedSinceEmpty = 0;
 		lastPayDirtCount = 0;
 		bankPurpose = BankPurpose.DEPOSIT;
-		if (hasBankableItems(inventory))
+		if (hasBankableItems(inventory) || collectingSack)
 		{
+			if (!hasBankableItems(inventory))
+			{
+				// Ore left in the sack but nothing came out (missed clicks):
+				// search again instead of walking to the bank empty.
+				state = State.WALK_TO_SACK;
+				searchWait = 0;
+				setStatus("Back to the sack");
+				return;
+			}
 			state = State.WALK_TO_BANK;
 			walker.reset();
 			actionAttempts = 0;
@@ -1142,12 +1231,18 @@ public final class MotherlodeMinerScript extends Script
 				return;
 			}
 
-			if (collectingSack)
+			if (collectingSack || lastLiveSack > 0)
 			{
+				// The sack still has ore: empty it fully before going back
+				// to mine.
+				log.info("[MotherlodeMiner] banked, sack varbit {} -> back to the sack", lastLiveSack);
+				collectingSack = true;
+				sackKnownEmpty = false;
 				state = State.WALK_TO_SACK;
 				setStatus("Walking back to the sack");
 				return;
 			}
+			log.info("[MotherlodeMiner] banked, sack empty -> back to mining");
 
 			if (upstairs)
 			{
@@ -1210,7 +1305,7 @@ public final class MotherlodeMinerScript extends Script
 			// opening visible without a click landing on a nearby object.
 			if (!chestHovered)
 			{
-				if (!input.isBusy() && input.hover(chest))
+				if (!input.isBusy() && input.hoverCenter(chest))
 				{
 					chestHovered = true;
 				}
@@ -1537,7 +1632,7 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		input.stopCamera();
-		if (input.interact(strut, "Hammer", "Fix", "Use") || input.click(strut))
+		if (input.clickCenter(strut) || input.interact(strut, "Hammer", "Fix", "Use"))
 		{
 			cooldown = CLICK_COOLDOWN;
 			setStatus("Fixing the water wheel");
@@ -1719,9 +1814,9 @@ public final class MotherlodeMinerScript extends Script
 			return;
 		}
 
-		++climbAttempts;
 		if (clickLadder(context, ladder, true))
 		{
+			++climbAttempts;
 			walker.reset();
 			climbWaitTicks = CLIMB_WAIT_TICKS;
 			cooldown = 2;
@@ -1789,9 +1884,9 @@ public final class MotherlodeMinerScript extends Script
 			return;
 		}
 
-		++climbAttempts;
 		if (clickLadder(context, ladder, false))
 		{
+			++climbAttempts;
 			walker.reset();
 			climbWaitTicks = CLIMB_WAIT_TICKS;
 			cooldown = 2;
@@ -1829,16 +1924,23 @@ public final class MotherlodeMinerScript extends Script
 			input.stopCamera();
 		}
 
-		// Send the exact Climb option first. The ladder is a wall object
-		// whose clickbox is often hidden by the tile the player stands on,
-		// so a physical click can miss even when the ladder is on screen.
-		if (input.invokeObjectAction(ladder, actions))
+		// Verified left click on the ladder's hull centre ("Climb..." on
+		// "Ladder"); its own Climb option only after repeated misses.
+		if (climbAttempts >= CLIMB_ATTEMPT_LIMIT)
 		{
-			return true;
+			log.info("[MotherlodeMiner] ladder: {} clicks without changing floor, halting", climbAttempts);
+			state = State.HALTED;
+			setStatus("Stopped: could not climb the ladder");
+			return false;
 		}
-
-		return input.interact(ladder, actions)
-			|| input.click(ladder);
+		boolean sent = verifiedObjectClick(context, ladder, up ? "ladder up" : "ladder down",
+			new String[]{"climb"}, "ladder", actions);
+		if (sent)
+		{
+			log.info("[MotherlodeMiner] ladder {} attempt {}: waiting {} ticks for the floor change", up ? "up" : "down",
+				climbAttempts + 1, CLIMB_WAIT_TICKS);
+		}
+		return sent;
 	}
 
 	private static TileObject findLadder(ScriptContext context, WorldPoint area, boolean up)
@@ -2081,7 +2183,7 @@ public final class MotherlodeMinerScript extends Script
 
 		input.stopCamera();
 		++crateAttempts;
-		if (input.interact(crate, "Search") || input.click(crate))
+		if (input.clickCenter(crate) || input.interact(crate, "Search"))
 		{
 			cooldown = 2;
 			setStatus("Searching the crate for a hammer");

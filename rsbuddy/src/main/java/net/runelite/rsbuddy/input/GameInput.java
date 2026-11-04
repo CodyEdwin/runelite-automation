@@ -424,6 +424,136 @@ public final class GameInput
 	}
 
 	/**
+	 * The object's convex hull (any object type), or its clickbox when it
+	 * has no hull. Client thread only.
+	 */
+	public Shape objectHull(TileObject object)
+	{
+		if (object == null)
+		{
+			return null;
+		}
+		Shape hull = null;
+		if (object instanceof net.runelite.api.GameObject)
+		{
+			hull = ((net.runelite.api.GameObject) object).getConvexHull();
+		}
+		else if (object instanceof net.runelite.api.WallObject)
+		{
+			hull = ((net.runelite.api.WallObject) object).getConvexHull();
+		}
+		else if (object instanceof net.runelite.api.DecorativeObject)
+		{
+			hull = ((net.runelite.api.DecorativeObject) object).getConvexHull();
+		}
+		else if (object instanceof net.runelite.api.GroundObject)
+		{
+			hull = ((net.runelite.api.GroundObject) object).getConvexHull();
+		}
+		return hull != null ? hull : object.getClickbox();
+	}
+
+	/**
+	 * Dead centre of the object's hull: the area centroid of the hull
+	 * polygon, or the clickable point inside the hull nearest to it when the
+	 * centroid itself is outside, off the viewport or under an interface. No
+	 * random offset. Recompute every time (client thread) because it moves
+	 * with the camera and the player.
+	 *
+	 * @return the point, or null when the object is not clickable on screen
+	 */
+	public Point objectCenter(TileObject object)
+	{
+		Shape hull = objectHull(object);
+		if (hull == null)
+		{
+			return null;
+		}
+		Rectangle bounds = hull.getBounds();
+		if (bounds == null || bounds.isEmpty())
+		{
+			return null;
+		}
+
+		double cx = bounds.getCenterX();
+		double cy = bounds.getCenterY();
+		if (hull instanceof Polygon)
+		{
+			Polygon poly = (Polygon) hull;
+			double area = 0;
+			double sx = 0;
+			double sy = 0;
+			for (int i = 0; i < poly.npoints; i++)
+			{
+				int j = (i + 1) % poly.npoints;
+				double cross = (double) poly.xpoints[i] * poly.ypoints[j] - (double) poly.xpoints[j] * poly.ypoints[i];
+				area += cross;
+				sx += (poly.xpoints[i] + poly.xpoints[j]) * cross;
+				sy += (poly.ypoints[i] + poly.ypoints[j]) * cross;
+			}
+			if (Math.abs(area) > 1e-6)
+			{
+				cx = sx / (3 * area);
+				cy = sy / (3 * area);
+			}
+		}
+
+		int x0 = (int) Math.round(cx);
+		int y0 = (int) Math.round(cy);
+		if (clickable(hull, x0, y0))
+		{
+			return new Point(x0, y0);
+		}
+		// Nearest clickable point to the centroid, ring by ring.
+		int maxRadius = Math.max(bounds.width, bounds.height);
+		for (int r = 1; r <= maxRadius; r++)
+		{
+			Point best = null;
+			double bestDistance = Double.MAX_VALUE;
+			for (int dx = -r; dx <= r; dx++)
+			{
+				for (int dy = -r; dy <= r; dy++)
+				{
+					if (Math.max(Math.abs(dx), Math.abs(dy)) != r || !clickable(hull, x0 + dx, y0 + dy))
+					{
+						continue;
+					}
+					double distance = dx * dx + dy * dy;
+					if (distance < bestDistance)
+					{
+						bestDistance = distance;
+						best = new Point(x0 + dx, y0 + dy);
+					}
+				}
+			}
+			if (best != null)
+			{
+				return best;
+			}
+		}
+		return null;
+	}
+
+	private boolean clickable(Shape shape, int x, int y)
+	{
+		return shape.contains(x, y) && isInViewport(x, y) && !isCoveredByInterface(x, y);
+	}
+
+	/** Curved human-like move onto the dead centre of the object's hull. */
+	public boolean hoverCenter(TileObject object)
+	{
+		Point point = objectCenter(object);
+		return point != null && moveTo(point);
+	}
+
+	/** Curved human-like move and left click on the dead centre of the object's hull. */
+	public boolean clickCenter(TileObject object)
+	{
+		Point point = objectCenter(object);
+		return point != null && click(point);
+	}
+
+	/**
 	 * Moves the mouse to a random point inside the shape without clicking.
 	 *
 	 * @return true if a movement was started
