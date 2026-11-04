@@ -93,9 +93,15 @@ public final class ExampleScript extends Routine
 Routines tick once per game tick. Keep each tick short and use a cooldown or a small state machine
 for actions that take several ticks.
 
-Override `getOverlayLines()` to add your own counters or progress to the status overlay. The
-Barbarian Fisher & Cooker uses this for fish totals, per-hour rates, and fishing/cooking XP
-remaining and time-to-level estimates:
+The running routine can supply its own overlay. Override `getOverlay()` and return a
+`RoutineOverlay` to draw it, or override `getOverlayLines()` for a text panel (the default
+`getOverlay()` shows those lines). A routine that does neither draws nothing: there is no
+built-in greeting or player box. **Show routine overlay** in the side panel turns the overlay
+off entirely and is saved in the RSBuddy config. Hold **Shift** and drag to move it (RuneLite's
+overlay drag hotkey works too). The panel background is translucent.
+
+The Barbarian Fisher & Cooker uses overlay lines for fish totals, per-hour rates, and
+fishing/cooking XP remaining and time-to-level estimates:
 
 ```java
 @Override
@@ -135,8 +141,8 @@ moving energy stripes and twirling embers. On every XP drop a white sheen sweeps
 the fill, then the flash, an end-of-bar glow and the spark burst fire there; the glow fades out with the sparks (no sheen, sparks or glow while idle). Each skill row in the XP Logger also shows **Actions to level: N**: the XP left to the next level divided
 by the mean XP per drop seen this session (each StatChanged gain counts as one action). It shows `--` until the first drop.
 
-- **Move:** hold **Shift** and drag either overlay. An orange outline shows while Shift is held over it. The spot is
-  saved through RuneLite's overlay settings and survives restarts. RuneLite's Alt-drag still works too.
+- **Move:** hold **Shift** and drag the routine overlay or either XP overlay. An orange outline shows while Shift is held over it. The spot is
+  saved through RuneLite's overlay settings and survives restarts. RuneLite's overlay drag hotkey (Alt by default) still works too.
 - **XP drops:** the `+N` label (with the skill icon) arcs off the bar end, then floats up to the top of the game
   screen over 3–4 s, swaying gently and fading near the top, so the vanilla XP drops can be hidden. Turn it off with
   *XP drop climbs to top* to get the short arc and fade instead.
@@ -246,7 +252,7 @@ It will:
 If the fishing spot or fire is not visible, the camera is turned toward it first. The routine never
 walks; it expects you to already be at the spot.
 
-The status overlay shows the current session's trout and salmon caught/cooked totals with per-hour
+Its overlay shows the current session's trout and salmon caught/cooked totals with per-hour
 rates, plus the remaining XP and estimated time to the next Fishing and Cooking level.
 
 ## Hill Giant (Edgeville)

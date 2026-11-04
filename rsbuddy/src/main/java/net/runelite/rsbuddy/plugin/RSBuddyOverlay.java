@@ -26,123 +26,93 @@ package net.runelite.rsbuddy.plugin;
 
 import java.awt.Color;
 import java.awt.Dimension;
-import java.awt.FontMetrics;
 import java.awt.Graphics2D;
-import java.util.ArrayList;
-import java.util.List;
 import javax.inject.Inject;
-import net.runelite.api.Client;
-import net.runelite.api.Player;
-import net.runelite.client.ui.FontManager;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
-import net.runelite.client.util.Text;
+import net.runelite.rsbuddy.routine.LineRoutineOverlay;
 import net.runelite.rsbuddy.routine.Routine;
 import net.runelite.rsbuddy.routine.RoutineManager;
+import net.runelite.rsbuddy.routine.RoutineOverlay;
 
 /**
- * Displays plugin state and the status of the active script.
+ * Draws the running routine's overlay, and nothing else.
+ * <p>
+ * Routines opt in with {@link Routine#getOverlay()} (text routines get one
+ * from {@link Routine#getOverlayLines()}). No routine, no overlay from that
+ * routine, or the side-panel toggle off: this draws nothing.
+ * <p>
+ * The overlay is free-floating ({@link OverlayPosition#DYNAMIC} and movable)
+ * so it can be dragged with Shift, and with RuneLite's overlay drag hotkey.
  */
 public class RSBuddyOverlay extends Overlay
 {
-	private static final int PADDING = 6;
-	private static final int LINE_GAP = 2;
-	private static final int PANEL_WIDTH = 280;
-	private static final Color BACKGROUND = new Color(56, 43, 28, 220);
-	private static final Color BORDER = new Color(120, 95, 62, 255);
+	private static final Color DRAG_OUTLINE = new Color(255, 170, 60, 200);
 
-	private final Client client;
 	private final RSBuddyConfig config;
 	private final RSBuddyPlugin plugin;
 
+	private ShiftDragHandler dragHandler;
+
 	@Inject
-	private RSBuddyOverlay(Client client, RSBuddyConfig config, RSBuddyPlugin plugin)
+	RSBuddyOverlay(RSBuddyConfig config, RSBuddyPlugin plugin)
 	{
-		this.client = client;
 		this.config = config;
 		this.plugin = plugin;
 
-		setPosition(OverlayPosition.TOP_LEFT);
+		// DYNAMIC clears movable. Turn it back on or RuneLite drops the saved spot.
+		setPosition(OverlayPosition.DYNAMIC);
+		setMovable(true);
 		setLayer(OverlayLayer.ABOVE_WIDGETS);
+	}
+
+	/** Lets the Shift-drag handler draw its hover outline on this overlay. */
+	void setDragHandler(ShiftDragHandler dragHandler)
+	{
+		this.dragHandler = dragHandler;
 	}
 
 	@Override
 	public Dimension render(Graphics2D graphics)
 	{
-		List<String> lines = new ArrayList<>();
-		lines.add(config.greeting());
-
-		if (config.showPlayerInfo())
+		if (!config.showRoutineOverlay())
 		{
-			Player player = client.getLocalPlayer();
-			if (player != null)
-			{
-				lines.add("Player: " + Text.removeTags(player.getName()));
-			}
-
-			lines.add("World: " + client.getWorld());
+			return null;
 		}
 
 		RoutineManager routineManager = plugin.getRoutineManager();
 		Routine active = routineManager == null ? null : routineManager.getActiveRoutine();
-		lines.add(active == null ? "Routine: none" : "Routine: " + active.getName());
-		lines.add("Status: " + (active == null ? "Idle" : active.getStatus()));
-
-		if (active != null)
+		if (active == null)
 		{
-			lines.addAll(active.getOverlayLines());
+			return null;
 		}
 
-		graphics.setFont(FontManager.getRunescapeSmallFont());
-		FontMetrics metrics = graphics.getFontMetrics();
-
-		int width = PANEL_WIDTH;
-		int textWidth = width - PADDING * 2;
-
-		int lineHeight = metrics.getHeight() + LINE_GAP;
-		int height = lines.size() * lineHeight - LINE_GAP + PADDING * 2;
-
-		graphics.setColor(BACKGROUND);
-		graphics.fillRoundRect(0, 0, width, height, 6, 6);
-		graphics.setColor(BORDER);
-		graphics.drawRoundRect(0, 0, width - 1, height - 1, 6, 6);
-
-		Color textColor = config.textColor() == null ? Color.WHITE : config.textColor();
-		int y = PADDING + metrics.getAscent();
-		for (String line : lines)
+		RoutineOverlay routineOverlay = active.getOverlay();
+		if (routineOverlay == null)
 		{
-			String text = fitText(metrics, line, textWidth);
-			graphics.setColor(Color.BLACK);
-			graphics.drawString(text, PADDING + 1, y + 1);
-			graphics.setColor(textColor);
-			graphics.drawString(text, PADDING, y);
-			y += lineHeight;
+			return null;
 		}
 
-		return new Dimension(width, height);
-	}
-
-	private static String fitText(FontMetrics metrics, String text, int maxWidth)
-	{
-		if (text == null)
+		if (routineOverlay instanceof LineRoutineOverlay)
 		{
-			return "";
+			Color textColor = config.textColor();
+			((LineRoutineOverlay) routineOverlay).setTextColor(textColor == null ? Color.WHITE : textColor);
 		}
 
-		if (metrics.stringWidth(text) <= maxWidth)
+		Dimension dimension = routineOverlay.render(graphics);
+		if (dimension == null || dimension.width <= 0 || dimension.height <= 0)
 		{
-			return text;
+			return null;
 		}
 
-		String ellipsis = "...";
-		int ellipsisWidth = metrics.stringWidth(ellipsis);
-		int end = text.length();
-		while (end > 0 && metrics.stringWidth(text.substring(0, end)) + ellipsisWidth > maxWidth)
+		if (dragHandler != null && dragHandler.isHighlighted(this)
+			&& dimension.width > 4 && dimension.height > 4)
 		{
-			--end;
+			graphics.setColor(DRAG_OUTLINE);
+			graphics.drawRoundRect(1, 1, dimension.width - 3, dimension.height - 3, 6, 6);
 		}
 
-		return text.substring(0, end) + ellipsis;
+		return dimension;
 	}
 }

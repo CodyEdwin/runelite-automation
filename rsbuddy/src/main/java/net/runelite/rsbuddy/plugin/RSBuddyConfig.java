@@ -37,24 +37,16 @@ public interface RSBuddyConfig extends Config
 {
 	String GROUP = "testplugin";
 
-	@ConfigItem(
-		keyName = "greeting",
-		name = "Greeting",
-		description = "Text to display in the overlay",
-		position = 0
-	)
-	default String greeting()
-	{
-		return "RSBuddy";
-	}
+	/** Config key for the side-panel overlay toggle. */
+	String SHOW_ROUTINE_OVERLAY = "showRoutineOverlay";
 
 	@ConfigItem(
-		keyName = "showPlayerInfo",
-		name = "Show player info",
-		description = "Display your player name and world in the overlay",
-		position = 1
+		keyName = SHOW_ROUTINE_OVERLAY,
+		name = "Show routine overlay",
+		description = "Draw the running routine's overlay. Turn off to hide it.",
+		position = 0
 	)
-	default boolean showPlayerInfo()
+	default boolean showRoutineOverlay()
 	{
 		return true;
 	}

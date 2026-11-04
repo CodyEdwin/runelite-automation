@@ -28,6 +28,7 @@ import java.awt.Color;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
+import javax.annotation.Nullable;
 
 /**
  * Base class for RSBuddy routines.
@@ -177,12 +178,29 @@ public abstract class Routine
 	}
 
 	/**
-	 * Extra lines rendered by the status overlay while this script is running.
-	 * Routines can override this to expose their own counters and progress.
+	 * Text lines for this routine's overlay while it is running.
+	 * <p>
+	 * The default {@link #getOverlay()} shows these lines. Return an empty list
+	 * when there is nothing to draw. Override {@link #getOverlay()} to draw
+	 * something other than text.
 	 */
 	public List<String> getOverlayLines()
 	{
 		return Collections.emptyList();
+	}
+
+	/**
+	 * Overlay drawn while this routine is the running one.
+	 * <p>
+	 * Return null to draw nothing. The default builds a text overlay from
+	 * {@link #getOverlayLines()} when that list has visible text. The host
+	 * hides the overlay when this returns null, when no routine is running,
+	 * and when the side-panel overlay toggle is off.
+	 */
+	@Nullable
+	public RoutineOverlay getOverlay()
+	{
+		return LineRoutineOverlay.of(getOverlayLines());
 	}
 
 	/**

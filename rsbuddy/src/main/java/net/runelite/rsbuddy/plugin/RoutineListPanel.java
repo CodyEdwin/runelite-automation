@@ -41,6 +41,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
@@ -80,6 +81,7 @@ public final class RoutineListPanel extends PluginPanel
 	private final Function<String, String> loadCustom;
 	private final IconTextField searchBar;
 	private final JLabel runningLabel;
+	private final JCheckBox overlayToggle;
 	private final JLabel noticeLabel;
 	private final JComboBox<InputBackendType> inputBackendSelector;
 	private final JLabel inputStatusLabel;
@@ -157,6 +159,16 @@ public final class RoutineListPanel extends PluginPanel
 		runningLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		runningLabel.setFont(FontManager.getRunescapeSmallFont());
 
+		overlayToggle = new JCheckBox("Show routine overlay");
+		overlayToggle.setOpaque(false);
+		overlayToggle.setForeground(ColorScheme.TEXT_COLOR);
+		overlayToggle.setFont(FontManager.getRunescapeSmallFont());
+		overlayToggle.setFocusPainted(false);
+		overlayToggle.setSelected(config.showRoutineOverlay());
+		overlayToggle.setToolTipText("Draw the running routine's overlay. Saved between restarts.");
+		overlayToggle.addActionListener(event ->
+			preferences.set(RSBuddyConfig.SHOW_ROUTINE_OVERLAY, overlayToggle.isSelected()));
+
 		noticeLabel = new JLabel(" ");
 		noticeLabel.setForeground(ColorScheme.PROGRESS_ERROR_COLOR);
 		noticeLabel.setFont(FontManager.getRunescapeSmallFont());
@@ -186,6 +198,7 @@ public final class RoutineListPanel extends PluginPanel
 		top.add(subtitle);
 		top.add(searchBar);
 		top.add(runningLabel);
+		top.add(overlayToggle);
 		top.add(inputTitle);
 		top.add(inputBackendSelector);
 		top.add(inputStatusLabel);
@@ -293,6 +306,12 @@ public final class RoutineListPanel extends PluginPanel
 		if ("inputBackend".equals(key) && inputBackendSelector.getSelectedItem() != config.inputBackend())
 		{
 			inputBackendSelector.setSelectedItem(config.inputBackend());
+		}
+
+		if (RSBuddyConfig.SHOW_ROUTINE_OVERLAY.equals(key)
+			&& overlayToggle.isSelected() != config.showRoutineOverlay())
+		{
+			overlayToggle.setSelected(config.showRoutineOverlay());
 		}
 
 		if ("routineSourceDirectory".equals(key) && !sourceField.getText().equals(config.routineSourceDirectory()))

@@ -209,9 +209,11 @@ public class RSBuddyPlugin extends Plugin
 		overlayManager.add(overlay);
 		overlayManager.add(xpProgressOverlay);
 		overlayManager.add(xpLoggerOverlay);
-		// Shift + drag moves the XP overlays (reads real input only, never injects).
-		xpDragHandler = new ShiftDragHandler(overlayManager, List.of(xpLoggerOverlay, xpProgressOverlay),
+		// Shift + drag moves the routine overlay and the XP overlays (reads real input only, never injects).
+		xpDragHandler = new ShiftDragHandler(overlayManager,
+			List.of(overlay, xpLoggerOverlay, xpProgressOverlay),
 			client::getRealDimensions);
+		overlay.setDragHandler(xpDragHandler);
 		xpLoggerOverlay.setDragHandler(xpDragHandler);
 		xpProgressOverlay.setDragHandler(xpDragHandler);
 		mouseManager.registerMouseListener(0, xpDragHandler);
