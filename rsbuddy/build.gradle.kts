@@ -15,6 +15,7 @@ dependencies {
     compileOnly(libs.jna.platform)
 
     testImplementation(libs.junit)
+    testImplementation(project(":client"))
 }
 
 tasks.jar {

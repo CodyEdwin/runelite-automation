@@ -244,7 +244,7 @@ public final class GameInput
 
 	/**
 	 * Switches between the default relaxed mouse profile and the fast,
-	 * attentive one. Set by {@link net.runelite.rsbuddy.script.ScriptManager}
+	 * attentive one. Set by {@link net.runelite.rsbuddy.routine.RoutineManager}
 	 * from the running script.
 	 */
 	public void setFastMouse(boolean fastMouse)
@@ -2745,7 +2745,7 @@ public final class GameInput
 	/**
 	 * Physical-input-only mode: every helper that would run a menu action
 	 * directly (client.menuAction, no visible mouse click) refuses and logs
-	 * instead. Set per script on start by the ScriptManager.
+	 * instead. Set per script on start by the RoutineManager.
 	 */
 	public void setPhysicalOnly(boolean physicalOnly)
 	{

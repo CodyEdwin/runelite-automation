@@ -41,8 +41,8 @@ import net.runelite.client.ui.FontManager;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
-import net.runelite.rsbuddy.script.Script;
-import net.runelite.rsbuddy.script.ScriptManager;
+import net.runelite.rsbuddy.routine.Routine;
+import net.runelite.rsbuddy.routine.RoutineManager;
 
 /**
  * Draws animated level progress bars for the active script.
@@ -62,13 +62,13 @@ public class XpProgressOverlay extends Overlay
 	private static final Color TRACK = new Color(28, 22, 16, 220);
 	private static final Color TRACK_BORDER = new Color(92, 73, 49, 255);
 
-	private final TestPlugin plugin;
+	private final RSBuddyPlugin plugin;
 	private final Map<String, Double> displayedProgress = new HashMap<>();
 
 	private long lastFrameAt;
 
 	@Inject
-	private XpProgressOverlay(TestPlugin plugin)
+	private XpProgressOverlay(RSBuddyPlugin plugin)
 	{
 		this.plugin = plugin;
 
@@ -79,15 +79,15 @@ public class XpProgressOverlay extends Overlay
 	@Override
 	public Dimension render(Graphics2D graphics)
 	{
-		ScriptManager scriptManager = plugin.getScriptManager();
-		Script active = scriptManager == null ? null : scriptManager.getActiveScript();
+		RoutineManager routineManager = plugin.getRoutineManager();
+		Routine active = routineManager == null ? null : routineManager.getActiveRoutine();
 		if (active == null)
 		{
 			resetAnimation();
 			return null;
 		}
 
-		List<Script.ProgressBar> bars = active.getProgressBars();
+		List<Routine.ProgressBar> bars = active.getProgressBars();
 		if (bars == null || bars.isEmpty())
 		{
 			resetAnimation();
@@ -121,7 +121,7 @@ public class XpProgressOverlay extends Overlay
 		graphics.drawString("XP Progress", PADDING, PADDING + titleMetrics.getAscent());
 
 		int y = PADDING + titleMetrics.getHeight() + 4;
-		for (Script.ProgressBar bar : bars)
+		for (Routine.ProgressBar bar : bars)
 		{
 			double target = bar.getProgress();
 			double current = displayedProgress.getOrDefault(bar.getLabel(), 0.0);

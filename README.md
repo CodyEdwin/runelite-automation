@@ -29,18 +29,18 @@ Please view our [Developer Guide](https://github.com/runelite/runelite/wiki/Deve
 - Dragon pickaxe special: skipped for a whole run when the sack has room for 12 or fewer pay-dirt (capacity minus sack contents and pay-dirt still washing; the current inventory is not counted). Normal use comes back on the run after the sack is emptied.
 - Water wheel repair: as soon as the crate hammer lands in the inventory, the crate hover is cleared and the mouse goes straight to the broken strut. If the strut is clickable on screen it is clicked once and the mouse stays still while walking; otherwise the script walks via the minimap and clicks on arrival.
 
-## Reloading scripts while the client runs
+## Reloading routines while the client runs
 
 The panel's **Reload** button does not run Gradle; Gradle can't rebuild while the client is running. Instead it:
 
-1. Finds the script sources. It checks the **Script source directory** panel field, then `-Drsbuddy.scriptSources`, then `rsbuddy/src/main/java` walking up from the client's working directory, then `src/main/java` next to the plugin's `build` folder. The field accepts `rsbuddy/src/main/java`, the `rsbuddy` module folder, or the repo root.
-2. Compiles every file in `net/runelite/rsbuddy/scripts` in-process with the JDK compiler (`javax.tools`) into a new temp folder, using the running client's classpath.
-3. Loads the selected script from that folder with a child-first class loader (scripts package only), stops it if it was running, and swaps it into the panel. Press Start to run the new code with the current settings.
+1. Finds the routine sources. It checks the **Routine source directory** panel field, then `-Drsbuddy.routineSources` (or the previous `-Drsbuddy.scriptSources`), then `rsbuddy/src/main/java` walking up from the client's working directory, then `src/main/java` next to the plugin's `build` folder. The field accepts `rsbuddy/src/main/java`, the `rsbuddy` module folder, or the repo root.
+2. Compiles every file in `net/runelite/rsbuddy/routines` in-process with the JDK compiler (`javax.tools`) into a new temp folder, using the running client's classpath.
+3. Loads the selected routine from that folder with a child-first class loader (routines package only), stops it if it was running, and swaps it into the panel. Press Start to run the new code with the current settings.
 
-Compile errors (first 3) show in the panel and the log with a `[Reload]` prefix. The client must run on a JDK, not a JRE. Only classes in the `scripts` package are reloaded. Changes to shared helpers (GameInput, Script, walker, inventory, plugin, panel, config) still need a normal build and a client restart.
+Compile errors (first 3) show in the panel and the log with a `[Reload]` prefix. The client must run on a JDK, not a JRE. Only classes in the `routines` package are reloaded. Changes to shared helpers (GameInput, Routine, walker, inventory, plugin, panel, config) still need a normal build and a client restart.
 - No hovering while running (all legs: sack, bank chest, hopper, ladder, crate, strut). While the player moves, the mouse does nothing and any aim or follow target is dropped (logged as `... dropping the X target`). After a click, the script waits about 1.3s for the walk to start rather than aiming at the same target again. The sack target is dropped as soon as the sack search finishes.
 
-Reload class loading: script classes load child-first from the fresh compile. Everything else (RuneLite API, client, shared rsbuddy code) resolves through the plugin's loader first, then the loaders that defined `Client`, `EquipmentInventorySlot`, `ConfigManager` and `Script`, then the thread's context loader. Script failures log their cause on one line: `Script X failed: <error> caused by <root> at <frame>`.
+Reload class loading: routine classes load child-first from the fresh compile. Everything else (RuneLite API, client, shared rsbuddy code) resolves through the plugin's loader first, then the loaders that defined `Client`, `EquipmentInventorySlot`, `ConfigManager` and `Routine`, then the thread's context loader. Routine failures log their cause on one line: `Routine X failed: <error> caused by <root> at <frame>`.
 
 ## Input backends (OS hardware only, no Java fallback)
 
@@ -49,4 +49,4 @@ Every mouse move, click, scroll and key goes through an OS-level backend:
 - **Linux X11 (XTest)**: libXtst via JNA (XFCE or any X11 session). Needs `DISPLAY` and the XTEST extension (`libxtst6`).
 - **Windows SendInput**: Win32 `SendInput` via JNA user32. Absolute virtual-desktop mouse coordinates (DPI-aware) and scan-code keys (`KEYEVENTF_SCANCODE`). Untested on real Windows.
 
-Detection runs when the plugin starts. Auto picks the backend by OS and runs a harmless check: X11 opens the display and queries XTEST, Windows loads user32 and reads the cursor position. The result is logged as `[Input] using <backend>`, shown in the side panel (green or red), and cached. If a backend call throws, it is dropped, and the next script Start detects again. Override it with the panel dropdown or the wrench config **Input backend** (Auto / Linux X11 / Windows SendInput); the two stay in sync. Java input (AWT Robot, synthetic AWT events) is never used. With no backend, scripts refuse to start with an `[Input]` error.
+Detection runs when the plugin starts. Auto picks the backend by OS and runs a harmless check: X11 opens the display and queries XTEST, Windows loads user32 and reads the cursor position. The result is logged as `[Input] using <backend>`, shown in the side panel (green or red), and cached. If a backend call throws, it is dropped, and the next routine Start detects again. Override it with the panel dropdown or the wrench config **Input backend** (Auto / Linux X11 / Windows SendInput); the two stay in sync. Java input (AWT Robot, synthetic AWT events) is never used. With no backend, routines refuse to start with an `[Input]` error.
