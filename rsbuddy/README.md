@@ -128,6 +128,41 @@ expanding ring at each click, so real mouse movement and clicks are always visib
 is running, a second X shows the simulated mouse position, which makes it easy to compare the two.
 Simulated clicks show the same blue/red rings as real clicks.
 
+## Routine jars
+
+Routines can be shipped as jars and loaded like sideloaded plugins.
+
+**Loading.** On startup, on every Reload and on **Rescan** (Developer section), RSBuddy scans the
+routine jar folder (`~/.runelite/rsbuddy/routines` by default; change it in the panel's
+"Routine jar folder" field or the *Routine jar folder* config). Each jar gets its own class
+loader whose parent is the plugin loader. Routines are found from
+`META-INF/services/net.runelite.rsbuddy.routine.Routine`; a jar without it is scanned for public
+concrete `Routine` subclasses with a public no-arg constructor. They show in the list as
+`Name (jar)`, get the same physical-click lock and the same `RoutineSetting` form as built-ins.
+Added, changed and removed jars are picked up on rescan; a routine running from a removed or
+changed jar is stopped and its loader closed. A broken jar is logged with `[JarRoutines]` and
+skipped. Reload on a jar routine just rescans (replace the jar, then press Reload).
+
+**Making a jar in the client (no Gradle).** Open a routine's settings, press **Export as jar**.
+RSBuddy compiles the routine sources (same source directory as Reload) and writes
+`<routines folder>/<ClassName>.jar` with the class, its nested classes and the services file,
+then rescans.
+
+**Making a jar with Gradle.**
+
+```
+./gradlew :rsbuddy:routineJar -Proutine=MyRoutine             # -> rsbuddy/build/routine-jars/MyRoutine.jar
+./gradlew :rsbuddy:routineJar -Proutine=MyRoutine -PinstallRoutine   # also copies it into ~/.runelite/rsbuddy/routines
+```
+
+`-Proutine` takes a simple name in `net.runelite.rsbuddy.routines` or a fully qualified class.
+
+**Limits.** A jar holds one routine class plus its `$` nested classes. Helper classes in other
+files must already be in the plugin (or packaged by hand). Classes in the jar load child-first, so
+they cannot use package-private members of plugin classes in the same package. A jar can not
+replace the framework (`net.runelite.rsbuddy.*` outside `routines`). The settings appear in the
+RSBuddy panel only, not RuneLite's config page.
+
 ## Custom routines
 
 `net.runelite.rsbuddy.routines.CustomScript` is a starter routine intended to be edited. Change its
