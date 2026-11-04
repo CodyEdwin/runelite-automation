@@ -138,6 +138,8 @@ public final class MotherlodeMinerScript extends Script
 	private static final int OBJECT_REACH = 5;
 	private static final int VEIN_WALK_DISTANCE = 4;
 	private static final int CLICK_COOLDOWN = 0;
+	/** After a click, wait this long for the walk to start before aiming at the same target again. */
+	private static final long POST_CLICK_GRACE_MS = 1300L;
 	private static final int ACTION_ATTEMPTS = 8;
 	private static final int SEARCH_WAIT_TICKS = 3;
 	private static final int MAX_SEARCH_CLICKS = 12;
@@ -234,6 +236,10 @@ public final class MotherlodeMinerScript extends Script
 	private long lastActionAt;
 	private Point aimTarget;
 	private boolean coverMiss;
+	/** Key and time of the last verified click, so the walk it starts is not chased with the mouse. */
+	private String lastClickKey;
+	private long lastClickAt;
+	private State lastDispatchState;
 	/** Object being hovered for a verified click; its centre is followed each frame. */
 	private TileObject verifyObject;
 	private final java.util.Set<String> menuDumped = new java.util.HashSet<>();
@@ -355,6 +361,9 @@ public final class MotherlodeMinerScript extends Script
 		specClicks = 0;
 		specWaitTicks = 0;
 		specSkipLogged = false;
+		lastClickKey = null;
+		lastClickAt = 0;
+		lastDispatchState = null;
 		specSavedLogged = false;
 		menuDumped.clear();
 		verifyKey = null;
@@ -483,6 +492,13 @@ public final class MotherlodeMinerScript extends Script
 				return;
 			}
 			boolean trigger;
+			if ((verifyHovered || verifyObject != null) && isMoving(context))
+			{
+				// Never hover or track a target while the player runs.
+				dropAim(context, "player is moving");
+				fastReadyAt = 0;
+				return;
+			}
 			if (verifyHovered && verifyObject != null)
 			{
 				Shape area = input.objectHull(verifyObject);
@@ -538,6 +554,14 @@ public final class MotherlodeMinerScript extends Script
 
 	private void dispatch(ScriptContext context)
 	{
+		if (state != lastDispatchState)
+		{
+			if (lastDispatchState == State.SACK)
+			{
+				dropAim(context, "sack search finished");
+			}
+			lastDispatchState = state;
+		}
 		switch (state)
 		{
 			case MINE:
@@ -1411,6 +1435,10 @@ public final class MotherlodeMinerScript extends Script
 		GameInput input = context.getInput();
 		if (!key.equals(verifyKey))
 		{
+			if (verifyHovered || verifyObject != null)
+			{
+				dropAim(context, "new target " + key);
+			}
 			verifyKey = key;
 			verifyHovered = false;
 			verifyMisses = 0;
@@ -1426,16 +1454,18 @@ public final class MotherlodeMinerScript extends Script
 			// The bank closes once the walk starts; do not click through it.
 			return false;
 		}
-		boolean waitForArrival = ("sack".equals(key) || "bank chest".equals(key)) && isMoving(context);
-		if (waitForArrival)
+		if (isMoving(context))
 		{
-			// Never chase the sack or chest with the mouse while walking:
-			// leave it idle and hover once the player has stopped.
-			if (verifyHovered)
-			{
-				log.info("[MotherlodeMiner] {}: player started moving, dropping the hover until arrival", key);
-			}
-			verifyHovered = false;
+			// Never chase any target with the mouse while walking: leave it
+			// idle and aim once the player has stopped.
+			dropAim(context, key + ": player moving, mouse idle until arrival");
+			setStatus("Walking to the " + key);
+			return false;
+		}
+		if (key.equals(lastClickKey) && System.currentTimeMillis() - lastClickAt < POST_CLICK_GRACE_MS)
+		{
+			// Just clicked it: the walk starts a tick later. Do not re-aim at
+			// (and then track) the same target in that gap.
 			setStatus("Walking to the " + key);
 			return false;
 		}
@@ -1503,6 +1533,8 @@ public final class MotherlodeMinerScript extends Script
 				markAction("click " + key);
 				verifyMisses = 0;
 				verifyKey = null;
+				lastClickKey = key;
+				lastClickAt = System.currentTimeMillis();
 				return true;
 			}
 			return false;
@@ -1525,6 +1557,22 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		return recoverVerify(context, object, key);
+	}
+
+	/**
+	 * Clears every hover/aim target and stops the cursor follower, logging
+	 * the reason when there was something to drop.
+	 */
+	private void dropAim(ScriptContext context, String reason)
+	{
+		if (verifyHovered || verifyObject != null || aimTarget != null)
+		{
+			log.info("[MotherlodeMiner] {}, dropping the {} target", reason, verifyKey == null ? "aim" : verifyKey);
+		}
+		verifyHovered = false;
+		verifyObject = null;
+		aimTarget = null;
+		context.getInput().follow(null);
 	}
 
 	private boolean recoverVerify(ScriptContext context, TileObject object, String key)
