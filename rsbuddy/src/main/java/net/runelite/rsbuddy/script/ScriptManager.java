@@ -118,6 +118,16 @@ public final class ScriptManager
 			stop();
 		}
 
+		// OS hardware input only: refuse to start rather than fall back to
+		// Java input when no backend works (re-detects if the cached one failed).
+		if (!context.getInput().ensureHardwareInput())
+		{
+			String reason = context.getInput().getBackendStatus();
+			log.warn("[Input] not starting {}: {}", script.getName(), reason);
+			script.setStatus("Error: [Input] no hardware input - " + reason);
+			return;
+		}
+
 		activeScript = script;
 		context.getInput().setGroundItemPickupFilter(script.getGroundItemPickupFilter());
 		context.getInput().setFastMouse(script.useFastMouse());

@@ -143,6 +143,7 @@ public class TestPlugin extends Plugin
 	protected void startUp()
 	{
 		input = new GameInput(client);
+		input.setBackendPreference(config.inputBackend());
 		ScriptContext scriptContext = new ScriptContext(client, input, new TargetLocator(client), new Inventory(client, input));
 		scriptManager = new ScriptManager(scriptContext);
 		scriptManager.register(new ObjectInteractScript(
@@ -185,6 +186,7 @@ public class TestPlugin extends Plugin
 		String customScriptError = registerCustomScript(config.customScriptClass());
 
 		panel = new TestPluginPanel(scriptManager, config, configManager, this::startScript, this::reloadScript);
+		panel.setInputStatusSupplier(input::getBackendStatus);
 		panel.setCustomScriptError(customScriptError);
 
 		BufferedImage icon = ImageUtil.loadImageResource(getClass(), "rsbuddy_icon.png");
@@ -287,6 +289,11 @@ public class TestPlugin extends Plugin
 	@Subscribe
 	public void onConfigChanged(ConfigChanged event)
 	{
+		if (TestConfig.GROUP.equals(event.getGroup()) && "inputBackend".equals(event.getKey()) && input != null)
+		{
+			input.setBackendPreference(config.inputBackend());
+		}
+
 		if (TestConfig.GROUP.equals(event.getGroup()) && panel != null)
 		{
 			// Keep the side panel's script settings in sync with the config

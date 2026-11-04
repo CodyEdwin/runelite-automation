@@ -33,7 +33,6 @@ import java.awt.Shape;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseEvent;
-import java.awt.event.MouseWheelEvent;
 import java.awt.geom.AffineTransform;
 import java.awt.geom.Point2D;
 import java.util.ArrayList;
@@ -61,6 +60,7 @@ import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.rsbuddy.input.backend.HardwareInput;
 import net.runelite.rsbuddy.input.backend.HardwareInputFactory;
+import net.runelite.rsbuddy.input.backend.InputBackendType;
 
 /**
  * Sends mouse and keyboard input to the game canvas and invokes menu actions.
@@ -102,7 +102,9 @@ public final class GameInput
 
 	private final Client client;
 	private final Random random = new Random();
-	private final HardwareInput hardwareInput;
+	private volatile HardwareInput hardwareInput;
+	private volatile InputBackendType backendPreference = InputBackendType.AUTO;
+	private volatile long lastRefusalLogAt;
 
 	private Point lastMousePoint;
 	private Timer movementTimer;
@@ -141,14 +143,84 @@ public final class GameInput
 	public GameInput(Client client)
 	{
 		this.client = client;
-		this.hardwareInput = HardwareInputFactory.create();
-		if (hardwareInput != null)
+		this.hardwareInput = HardwareInputFactory.create(backendPreference);
+	}
+
+	/**
+	 * Makes sure an OS hardware backend is ready, detecting it again if the
+	 * cached one is missing or failed. There is no Java input fallback.
+	 *
+	 * @return true when input can be sent
+	 */
+	public synchronized boolean ensureHardwareInput()
+	{
+		if (hardwareInput == null)
 		{
-			log.info("Mouse and keyboard input: {}", hardwareInput.getName());
+			hardwareInput = HardwareInputFactory.create(backendPreference);
 		}
-		else
+		return hardwareInput != null;
+	}
+
+	/** Changes the backend choice (Auto / Linux X11 / Windows SendInput) and detects again. */
+	public synchronized void setBackendPreference(InputBackendType preference)
+	{
+		InputBackendType next = preference == null ? InputBackendType.AUTO : preference;
+		if (next == backendPreference && hardwareInput != null)
 		{
-			log.info("Mouse and keyboard input: in-process AWT events");
+			return;
+		}
+		backendPreference = next;
+		closeBackend();
+		hardwareInput = HardwareInputFactory.create(next);
+	}
+
+	public InputBackendType getBackendPreference()
+	{
+		return backendPreference;
+	}
+
+	/** @return a one-line backend status for the panel */
+	public String getBackendStatus()
+	{
+		HardwareInput backend = hardwareInput;
+		return backend != null ? "using " + backend.getName()
+			: "NONE - " + HardwareInputFactory.getLastProblem();
+	}
+
+	private synchronized void closeBackend()
+	{
+		HardwareInput backend = hardwareInput;
+		hardwareInput = null;
+		if (backend != null)
+		{
+			try
+			{
+				backend.close();
+			}
+			catch (Throwable ex)
+			{
+				log.debug("[Input] closing backend failed", ex);
+			}
+		}
+	}
+
+	/** A backend call threw: drop it so the next start detects again. */
+	private void backendFailed(Throwable ex)
+	{
+		log.warn("[Input] hardware backend failed, input stopped until it is detected again: {}", ex.toString());
+		closeBackend();
+		HardwareInputFactory.setProblem("backend failed: " + ex);
+	}
+
+	/** Logs (at most every 2s) that input was refused because there is no hardware backend. */
+	private void refuseNoBackend(String what)
+	{
+		long now = System.currentTimeMillis();
+		if (now - lastRefusalLogAt > 2000)
+		{
+			lastRefusalLogAt = now;
+			log.warn("[Input] refusing {}: no hardware input backend ({}). Java input is never used.", what,
+				HardwareInputFactory.getLastProblem());
 		}
 	}
 
@@ -167,10 +239,7 @@ public final class GameInput
 	 */
 	public void shutdown()
 	{
-		if (hardwareInput != null)
-		{
-			hardwareInput.close();
-		}
+		closeBackend();
 	}
 
 	/**
@@ -1159,17 +1228,25 @@ public final class GameInput
 			return;
 		}
 
-		if (hardwareInput != null)
+		HardwareInput backend = hardwareInput;
+		if (backend == null)
+		{
+			refuseNoBackend("zoom");
+			zooming = false;
+			return;
+		}
+		try
 		{
 			Point screen = toScreenPoint(canvas, new Point(x, y));
-			hardwareInput.movePointer(screen.x, screen.y);
-			hardwareInput.scroll(1);
-			hardwareInput.flush();
+			backend.movePointer(screen.x, screen.y);
+			backend.scroll(1);
+			backend.flush();
 		}
-		else
+		catch (RuntimeException ex)
 		{
-			canvas.dispatchEvent(new MouseWheelEvent(canvas, MouseEvent.MOUSE_WHEEL,
-				System.currentTimeMillis(), 0, x, y, 0, false, MouseWheelEvent.WHEEL_UNIT_SCROLL, 3, 1));
+			backendFailed(ex);
+			zooming = false;
+			return;
 		}
 
 		Timer timer = new Timer(80 + random.nextInt(70), event -> zoomStep(canvas, x, y, remaining - 1));
@@ -1345,30 +1422,17 @@ public final class GameInput
 			return false;
 		}
 
+		if (hardwareInput == null)
+		{
+			refuseNoBackend("key " + KeyEvent.getKeyText(keyCode));
+			return false;
+		}
+
 		SwingUtilities.invokeLater(() ->
 		{
 			canvas.requestFocusInWindow();
-
-			if (hardwareInput != null)
-			{
-				dispatchKey(canvas, KeyEvent.KEY_PRESSED, keyCode);
-				dispatchKey(canvas, KeyEvent.KEY_RELEASED, keyCode);
-				return;
-			}
-
-			long when = System.currentTimeMillis();
 			dispatchKey(canvas, KeyEvent.KEY_PRESSED, keyCode);
-
-			char keyChar = keyCode == KeyEvent.VK_SPACE ? ' '
-				: keyCode >= KeyEvent.VK_0 && keyCode <= KeyEvent.VK_9 ? (char) ('0' + keyCode - KeyEvent.VK_0)
-				: KeyEvent.CHAR_UNDEFINED;
-			if (keyChar != KeyEvent.CHAR_UNDEFINED)
-			{
-				canvas.dispatchEvent(new KeyEvent(canvas, KeyEvent.KEY_TYPED, when, 0,
-					KeyEvent.VK_UNDEFINED, keyChar));
-			}
-
-			canvas.dispatchEvent(new KeyEvent(canvas, KeyEvent.KEY_RELEASED, when + 45, 0, keyCode, keyChar));
+			dispatchKey(canvas, KeyEvent.KEY_RELEASED, keyCode);
 		});
 
 		return true;
@@ -1420,24 +1484,29 @@ public final class GameInput
 
 	private void dispatchKey(Canvas canvas, int id, int keyCode)
 	{
-		if (hardwareInput != null)
+		HardwareInput backend = hardwareInput;
+		if (backend == null)
+		{
+			refuseNoBackend("key " + KeyEvent.getKeyText(keyCode));
+			return;
+		}
+		try
 		{
 			if (id == KeyEvent.KEY_PRESSED)
 			{
-				hardwareInput.pressKey(keyCode);
+				backend.pressKey(keyCode);
 			}
 			else if (id == KeyEvent.KEY_RELEASED)
 			{
-				hardwareInput.releaseKey(keyCode);
+				backend.releaseKey(keyCode);
 			}
 
-			hardwareInput.flush();
-			return;
+			backend.flush();
 		}
-
-		char keyChar = keyCode == KeyEvent.VK_SPACE ? ' ' : KeyEvent.CHAR_UNDEFINED;
-		canvas.dispatchEvent(new KeyEvent(canvas, id, System.currentTimeMillis(),
-			0, keyCode, keyChar));
+		catch (RuntimeException ex)
+		{
+			backendFailed(ex);
+		}
 	}
 
 	private static int normalizeYaw(int yaw)
@@ -1464,6 +1533,12 @@ public final class GameInput
 			return false;
 		}
 
+		if (hardwareInput == null)
+		{
+			refuseNoBackend("typing");
+			return false;
+		}
+
 		final char[] characters = text.toCharArray();
 
 		SwingUtilities.invokeLater(() ->
@@ -1481,15 +1556,23 @@ public final class GameInput
 				}
 
 				char character = characters[index[0]++];
-				if (hardwareInput != null)
+				HardwareInput backend = hardwareInput;
+				if (backend == null)
 				{
-					hardwareInput.typeCharacter(character);
-					hardwareInput.flush();
+					refuseNoBackend("typing");
+					timer.stop();
+					return;
 				}
-				else
+				try
 				{
-					canvas.dispatchEvent(new KeyEvent(canvas, KeyEvent.KEY_TYPED,
-						System.currentTimeMillis(), 0, KeyEvent.VK_UNDEFINED, character));
+					backend.typeCharacter(character);
+					backend.flush();
+				}
+				catch (RuntimeException ex)
+				{
+					backendFailed(ex);
+					timer.stop();
+					return;
 				}
 				timer.setDelay(55 + random.nextInt(45));
 			});
@@ -1511,24 +1594,17 @@ public final class GameInput
 			return false;
 		}
 
+		if (hardwareInput == null)
+		{
+			refuseNoBackend("Enter");
+			return false;
+		}
+
 		SwingUtilities.invokeLater(() ->
 		{
 			canvas.requestFocusInWindow();
-
-			if (hardwareInput != null)
-			{
-				dispatchKey(canvas, KeyEvent.KEY_PRESSED, KeyEvent.VK_ENTER);
-				dispatchKey(canvas, KeyEvent.KEY_RELEASED, KeyEvent.VK_ENTER);
-				return;
-			}
-
-			long when = System.currentTimeMillis();
-			canvas.dispatchEvent(new KeyEvent(canvas, KeyEvent.KEY_PRESSED, when, 0,
-				KeyEvent.VK_ENTER, '\n'));
-			canvas.dispatchEvent(new KeyEvent(canvas, KeyEvent.KEY_TYPED, when + 20, 0,
-				KeyEvent.VK_UNDEFINED, '\n'));
-			canvas.dispatchEvent(new KeyEvent(canvas, KeyEvent.KEY_RELEASED, when + 45, 0,
-				KeyEvent.VK_ENTER, '\n'));
+			dispatchKey(canvas, KeyEvent.KEY_PRESSED, KeyEvent.VK_ENTER);
+			dispatchKey(canvas, KeyEvent.KEY_RELEASED, KeyEvent.VK_ENTER);
 		});
 
 		return true;
@@ -2317,9 +2393,17 @@ public final class GameInput
 	{
 		stopCamera();
 		stopMovement();
-		if (hardwareInput != null)
+		HardwareInput backend = hardwareInput;
+		if (backend != null)
 		{
-			hardwareInput.releaseAll();
+			try
+			{
+				backend.releaseAll();
+			}
+			catch (RuntimeException ex)
+			{
+				backendFailed(ex);
+			}
 		}
 		busy = false;
 		fastClicking = false;
@@ -3624,11 +3708,12 @@ public final class GameInput
 		pileActive = false;
 
 		Point start = lastMousePoint;
-		if (hardwareInput != null)
+		HardwareInput backend = hardwareInput;
+		if (backend != null)
 		{
 			// Start from where the real cursor actually is, so the first
 			// movement does not jump from a stale position.
-			Point screen = hardwareInput.getPointerLocation();
+			Point screen = backend.getPointerLocation();
 			Point actual = screen == null ? null : toCanvasPointFromScreen(canvas, screen);
 			if (actual != null && canvas.contains(actual))
 			{
@@ -3944,36 +4029,42 @@ public final class GameInput
 
 	private void dispatch(Canvas canvas, int id, Point point, int button, int clickCount, int modifiers)
 	{
-		if (hardwareInput != null)
+		HardwareInput backend = hardwareInput;
+		if (backend == null)
+		{
+			// Never synthesize AWT events: no OS backend means no input.
+			refuseNoBackend("mouse input");
+			return;
+		}
+		try
 		{
 			Point screen = toScreenPoint(canvas, point);
 			switch (id)
 			{
 				case MouseEvent.MOUSE_MOVED:
-					hardwareInput.movePointer(screen.x, screen.y);
+					backend.movePointer(screen.x, screen.y);
 					break;
 				case MouseEvent.MOUSE_PRESSED:
-					hardwareInput.movePointer(screen.x, screen.y);
-					hardwareInput.mouseButton(button, true);
+					backend.movePointer(screen.x, screen.y);
+					backend.mouseButton(button, true);
 					break;
 				case MouseEvent.MOUSE_RELEASED:
-					hardwareInput.mouseButton(button, false);
+					backend.mouseButton(button, false);
 					break;
 				case MouseEvent.MOUSE_CLICKED:
-					// The X server generates the click from the press and
-					// release above, so there is nothing left to send.
+					// The OS generates the click from the press and release
+					// above, so there is nothing left to send.
 					break;
 				default:
 					break;
 			}
 
-			hardwareInput.flush();
-			return;
+			backend.flush();
 		}
-
-		MouseEvent event = new MouseEvent(canvas, id, System.currentTimeMillis(), modifiers,
-			point.x, point.y, clickCount, false, button);
-		canvas.dispatchEvent(event);
+		catch (RuntimeException ex)
+		{
+			backendFailed(ex);
+		}
 	}
 
 	/**

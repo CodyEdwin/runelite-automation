@@ -28,6 +28,7 @@ import java.awt.Color;
 import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
+import net.runelite.rsbuddy.input.backend.InputBackendType;
 import net.runelite.client.config.Range;
 import net.runelite.rsbuddy.plugin.RoofCourse;
 
@@ -418,5 +419,18 @@ public interface TestConfig extends Config
 	default String scriptSourceDirectory()
 	{
 		return "";
+	}
+
+	@ConfigItem(
+		keyName = "inputBackend",
+		name = "Input backend",
+		description = "OS hardware input used for every mouse move, click and key. Auto picks Linux X11 (XTest)"
+			+ " or Windows SendInput for the running OS. There is no Java input fallback: scripts refuse to"
+			+ " start when the backend is unavailable.",
+		position = 32
+	)
+	default InputBackendType inputBackend()
+	{
+		return InputBackendType.AUTO;
 	}
 }

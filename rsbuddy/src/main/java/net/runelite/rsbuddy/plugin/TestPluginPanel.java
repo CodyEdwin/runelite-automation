@@ -40,6 +40,7 @@ import javax.swing.DefaultListCellRenderer;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
+import net.runelite.rsbuddy.input.backend.InputBackendType;
 import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JPanel;
@@ -79,6 +80,9 @@ public final class TestPluginPanel extends PluginPanel
 	private final Function<Script, Script> startScript;
 	private final Function<Script, Script> reloadScript;
 	private final JComboBox<Script> scriptSelector;
+	private final JLabel inputStatusLabel;
+	private final JComboBox<InputBackendType> inputBackendSelector;
+	private volatile Supplier<String> inputStatus = () -> "not checked yet";
 	private final JButton startButton;
 	private final JButton stopButton;
 	private final JButton reloadButton;
@@ -178,6 +182,26 @@ public final class TestPluginPanel extends PluginPanel
 			}
 		});
 		add(sourceField);
+
+		JLabel inputTitle = new JLabel("Input backend (OS hardware only)");
+		inputTitle.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
+		inputTitle.setFont(FontManager.getRunescapeSmallFont());
+		add(inputTitle);
+		inputBackendSelector = new JComboBox<>(InputBackendType.values());
+		inputBackendSelector.setToolTipText("Auto picks Linux X11 or Windows SendInput. No Java input fallback.");
+		inputBackendSelector.setSelectedItem(config.inputBackend());
+		inputBackendSelector.addActionListener(event ->
+		{
+			Object selected = inputBackendSelector.getSelectedItem();
+			if (selected != null && selected != config.inputBackend())
+			{
+				configManager.setConfiguration(TestConfig.GROUP, "inputBackend", ((Enum<?>) selected).name());
+			}
+		});
+		add(inputBackendSelector);
+		inputStatusLabel = new JLabel();
+		inputStatusLabel.setFont(FontManager.getRunescapeSmallFont());
+		add(inputStatusLabel);
 
 		activeLabel = new JLabel();
 		activeLabel.setForeground(ColorScheme.TEXT_COLOR);
@@ -290,8 +314,18 @@ public final class TestPluginPanel extends PluginPanel
 	 * Called on the EDT when a Test Plugin config key changes (from the
 	 * wrench config or from this panel) to keep the shown controls in sync.
 	 */
+	void setInputStatusSupplier(Supplier<String> supplier)
+	{
+		inputStatus = supplier;
+		refresh();
+	}
+
 	void configChanged(String key)
 	{
+		if ("inputBackend".equals(key) && inputBackendSelector.getSelectedItem() != config.inputBackend())
+		{
+			inputBackendSelector.setSelectedItem(config.inputBackend());
+		}
 		Runnable syncer = settingSyncers.get(key);
 		if (syncer != null)
 		{
@@ -465,6 +499,11 @@ public final class TestPluginPanel extends PluginPanel
 
 	private void refresh()
 	{
+		String inputText = inputStatus.get();
+		boolean inputOk = inputText != null && inputText.startsWith("using ");
+		inputStatusLabel.setText("<html>[Input] " + (inputText == null ? "" : inputText.replace("<", "&lt;")) + "</html>");
+		inputStatusLabel.setForeground(inputOk ? ColorScheme.PROGRESS_COMPLETE_COLOR : ColorScheme.PROGRESS_ERROR_COLOR);
+
 		Script active = scriptManager.getActiveScript();
 		if (active == null)
 		{

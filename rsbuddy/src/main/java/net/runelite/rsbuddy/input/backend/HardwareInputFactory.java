@@ -24,64 +24,110 @@
  */
 package net.runelite.rsbuddy.input.backend;
 
+import java.util.Locale;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Chooses the OS level input backend.
- * <p>
- * On Linux with an X display this is XTest. Anywhere else (Windows, macOS,
- * Wayland without an X display, headless CI) this returns null and
- * {@link net.runelite.rsbuddy.input.GameInput} keeps using in-process AWT
- * events. Set {@code -Drsbuddy.input.backend=awt} to force the old behavior.
+ * Chooses the OS level input backend. There is no Java fallback: when no
+ * hardware backend works, {@link #create} returns null and scripts refuse to
+ * start. Java's own input (AWT Robot, synthetic AWT events) is never used.
  */
 public final class HardwareInputFactory
 {
 	private static final Logger log = LoggerFactory.getLogger(HardwareInputFactory.class);
-	private static final String BACKEND_PROPERTY = "rsbuddy.input.backend";
+
+	private static volatile String lastProblem = "not checked yet";
 
 	private HardwareInputFactory()
 	{
 	}
 
-	/**
-	 * @return a ready hardware backend, or null if none is available
-	 */
-	public static HardwareInput create()
+	/** @return why the last {@link #create} call found no backend */
+	public static String getLastProblem()
 	{
-		if ("awt".equalsIgnoreCase(System.getProperty(BACKEND_PROPERTY, "")))
-		{
-			log.info("Hardware input disabled by -D{}", BACKEND_PROPERTY);
-			return null;
-		}
+		return lastProblem;
+	}
 
-		String os = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT);
-		if (!os.contains("linux"))
-		{
-			return null;
-		}
+	/** Records why the current backend stopped working. */
+	public static void setProblem(String problem)
+	{
+		lastProblem = problem;
+	}
 
-		if (System.getenv("DISPLAY") == null && System.getenv("WAYLAND_DISPLAY") == null)
+	/**
+	 * @return a ready hardware backend, or null (see {@link #getLastProblem})
+	 */
+	public static HardwareInput create(InputBackendType preference)
+	{
+		InputBackendType type = preference == null ? InputBackendType.AUTO : preference;
+		String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+		if (type == InputBackendType.AUTO)
 		{
-			return null;
+			if (os.contains("win"))
+			{
+				type = InputBackendType.WINDOWS_SENDINPUT;
+			}
+			else if (os.contains("linux"))
+			{
+				type = InputBackendType.LINUX_X11;
+			}
+			else
+			{
+				return fail("no hardware input backend for OS '" + System.getProperty("os.name") + "'");
+			}
 		}
 
 		try
 		{
+			if (type == InputBackendType.WINDOWS_SENDINPUT)
+			{
+				if (!os.contains("win"))
+				{
+					return fail("Windows SendInput selected but this is " + System.getProperty("os.name"));
+				}
+				WindowsHardwareInput input = new WindowsHardwareInput();
+				if (!input.isAvailable())
+				{
+					return fail("Windows SendInput unavailable: " + input.getProblem());
+				}
+				return ok(input);
+			}
+
+			if (!os.contains("linux"))
+			{
+				return fail("Linux X11 selected but this is " + System.getProperty("os.name"));
+			}
+			if (System.getenv("DISPLAY") == null)
+			{
+				return fail("Linux X11: no DISPLAY (Wayland-only sessions are not supported; use an X11/XFCE session)");
+			}
 			X11HardwareInput input = new X11HardwareInput();
 			if (!input.isAvailable())
 			{
-				log.info("XTest is not available, falling back to AWT input");
 				input.close();
-				return null;
+				return fail("Linux X11: cannot open DISPLAY " + System.getenv("DISPLAY")
+					+ " or the XTEST extension / libXtst is missing (install libxtst6)");
 			}
-
-			return input;
+			return ok(input);
 		}
 		catch (Throwable ex)
 		{
-			log.warn("Unable to start X11 hardware input, falling back to AWT input", ex);
-			return null;
+			return fail(type + " failed to start: " + ex);
 		}
+	}
+
+	private static HardwareInput ok(HardwareInput input)
+	{
+		lastProblem = null;
+		log.info("[Input] using {}", input.getName());
+		return input;
+	}
+
+	private static HardwareInput fail(String problem)
+	{
+		lastProblem = problem;
+		log.warn("[Input] no hardware input: {}. Scripts will not start (no Java input fallback).", problem);
+		return null;
 	}
 }

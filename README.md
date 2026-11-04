@@ -41,3 +41,12 @@ Compile errors (first 3) show in the panel and the log with a `[Reload]` prefix.
 - No hovering while running (all legs: sack, bank chest, hopper, ladder, crate, strut). While the player moves, the mouse does nothing and any aim or follow target is dropped (logged as `... dropping the X target`). After a click, the script waits about 1.3s for the walk to start rather than aiming at the same target again. The sack target is dropped as soon as the sack search finishes.
 
 Reload class loading: script classes load child-first from the fresh compile. Everything else (RuneLite API, client, shared rsbuddy code) resolves through the plugin's loader first, then the loaders that defined `Client`, `EquipmentInventorySlot`, `ConfigManager` and `Script`, then the thread's context loader. Script failures log their cause on one line: `Script X failed: <error> caused by <root> at <frame>`.
+
+## Input backends (OS hardware only, no Java fallback)
+
+Every mouse move, click, scroll and key goes through an OS-level backend:
+
+- **Linux X11 (XTest)**: libXtst via JNA (XFCE or any X11 session). Needs `DISPLAY` and the XTEST extension (`libxtst6`).
+- **Windows SendInput**: Win32 `SendInput` via JNA user32. Absolute virtual-desktop mouse coordinates (DPI-aware) and scan-code keys (`KEYEVENTF_SCANCODE`). Untested on real Windows.
+
+Detection runs when the plugin starts. Auto picks the backend by OS and runs a harmless check: X11 opens the display and queries XTEST, Windows loads user32 and reads the cursor position. The result is logged as `[Input] using <backend>`, shown in the side panel (green or red), and cached. If a backend call throws, it is dropped, and the next script Start detects again. Override it with the panel dropdown or the wrench config **Input backend** (Auto / Linux X11 / Windows SendInput); the two stay in sync. Java input (AWT Robot, synthetic AWT events) is never used. With no backend, scripts refuse to start with an `[Input]` error.
