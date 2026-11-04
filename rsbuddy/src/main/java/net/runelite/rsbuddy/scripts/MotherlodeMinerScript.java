@@ -30,7 +30,10 @@ import java.awt.event.KeyEvent;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import net.runelite.api.Client;
+import net.runelite.api.EquipmentInventorySlot;
 import net.runelite.api.Item;
+import net.runelite.api.ItemContainer;
 import net.runelite.api.MenuEntry;
 import net.runelite.api.ObjectComposition;
 import net.runelite.api.Perspective;
@@ -41,8 +44,10 @@ import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.AnimationID;
 import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.gameval.InventoryID;
 import net.runelite.api.gameval.ItemID;
 import net.runelite.api.gameval.ObjectID;
+import net.runelite.api.gameval.VarPlayerID;
 import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.rsbuddy.input.GameInput;
@@ -140,6 +145,14 @@ public final class MotherlodeMinerScript extends Script
 	private static final long MINE_ANIMATION_GAP_MS = 1500L;
 	/** Hover checks on the sack before falling back to its menu option. */
 	private static final int SACK_HOVER_ATTEMPTS = 4;
+	/** Special energy varp value for 100%. */
+	private static final int SPEC_FULL = 1000;
+	private static final int SPEC_WAIT_TICKS = 3;
+	private static final int SPEC_CLICK_LIMIT = 6;
+	/** Dragon pickaxe, upgraded, (or) (Zalcano), (or) (Trailblazer). */
+	private static final java.util.Set<Integer> DRAGON_PICKAXES = java.util.Set.of(
+		ItemID.DRAGON_PICKAXE, ItemID.DRAGON_PICKAXE_PRETTY, ItemID.ZALCANO_PICKAXE,
+		ItemID.TRAILBLAZER_PICKAXE_NO_INFERNAL);
 	/** Max distance (px) from the live hull centre for a verified click. */
 	private static final double CENTER_TOLERANCE_PX = 6.0;
 	/** Camera/walk recoveries for one target before halting. */
@@ -213,6 +226,11 @@ public final class MotherlodeMinerScript extends Script
 	private int sackContents;
 	private int sackCapacity = SACK_SIZE;
 	private final boolean upstairs;
+	private final boolean dragonSpec;
+	private boolean specHovered;
+	private int specClicks;
+	private int specWaitTicks;
+	private boolean specSkipLogged;
 
 	private boolean mining;
 	private boolean miningAnimationSeen;
@@ -250,9 +268,19 @@ public final class MotherlodeMinerScript extends Script
 
 	public MotherlodeMinerScript(boolean upstairs)
 	{
+		this(upstairs, false);
+	}
+
+	/**
+	 * @param upstairs mine the upper level
+	 * @param dragonSpec use the dragon pickaxe special whenever energy is 100%
+	 */
+	public MotherlodeMinerScript(boolean upstairs, boolean dragonSpec)
+	{
 		super("Motherlode Miner",
 			"Mines pay-dirt, deposits it at the hopper, searches the sack, and banks the ores.");
 		this.upstairs = upstairs;
+		this.dragonSpec = dragonSpec;
 	}
 
 	@Override
@@ -310,6 +338,10 @@ public final class MotherlodeMinerScript extends Script
 		sackCameraTurns = 0;
 		itemsBeforeSearch = 0;
 		levelUpDismissAttempts = 0;
+		specHovered = false;
+		specClicks = 0;
+		specWaitTicks = 0;
+		specSkipLogged = false;
 		verifyKey = null;
 		droppingExtras = false;
 		dropVerified = false;
@@ -455,6 +487,10 @@ public final class MotherlodeMinerScript extends Script
 
 	private void mine(ScriptContext context)
 	{
+		if (dragonSpec && mining && maybeUseSpecial(context))
+		{
+			return;
+		}
 		Inventory inventory = context.getInventory();
 		if (upstairs)
 		{
@@ -932,6 +968,108 @@ public final class MotherlodeMinerScript extends Script
 		// Left click is confirmed as Drop: click the next pay-dirt slot.
 		input.click(item);
 		setStatus("Dropping extra pay-dirt (" + carried + " left)");
+	}
+
+	/**
+	 * Dragon pickaxe special (Rock Knocker, +3 Mining): when energy is 100%
+	 * and a vein is being mined, hover the special attack orb's centre,
+	 * verify its left click is the special attack, click it for real, then
+	 * wait for the energy to drop. Mining resumes by itself; if the
+	 * animation stopped, the normal mine logic re-clicks the vein.
+	 *
+	 * @return true while the special owns this tick
+	 */
+	private boolean maybeUseSpecial(ScriptContext context)
+	{
+		Client client = context.getClient();
+		int energy = client.getVarpValue(VarPlayerID.SA_ENERGY);
+		if (specWaitTicks > 0)
+		{
+			if (energy < SPEC_FULL)
+			{
+				log.info("[MotherlodeMiner] dragon pickaxe special used (energy now {}%), back to the vein", energy / 10);
+				specWaitTicks = 0;
+				specClicks = 0;
+				return false;
+			}
+			if (--specWaitTicks > 0)
+			{
+				return true;
+			}
+			log.info("[MotherlodeMiner] special click {} did not use energy, re-aiming", specClicks);
+		}
+		if (energy < SPEC_FULL)
+		{
+			specClicks = 0;
+			return false;
+		}
+		if (!dragonPickaxeWielded(context) || specClicks >= SPEC_CLICK_LIMIT)
+		{
+			return false;
+		}
+
+		GameInput input = context.getInput();
+		if (input.isBusy())
+		{
+			return true;
+		}
+		Widget orb = context.getTargets().findWidget(InterfaceID.Orbs.SPECBUTTON).orElse(null);
+		if (orb == null)
+		{
+			orb = context.getTargets().findWidget(InterfaceID.Orbs.ORB_SPECENERGY).orElse(null);
+		}
+		java.awt.Rectangle bounds = orb == null ? null : orb.getBounds();
+		if (bounds == null || bounds.isEmpty())
+		{
+			++specClicks;
+			log.info("[MotherlodeMiner] special attack orb not visible ({}/{})", specClicks, SPEC_CLICK_LIMIT);
+			return false;
+		}
+		Point centre = new Point((int) bounds.getCenterX(), (int) bounds.getCenterY());
+		if (!specHovered)
+		{
+			log.info("[MotherlodeMiner] spec at 100%, using dragon pickaxe special");
+			specHovered = input.moveTo(centre);
+			setStatus("Using the dragon pickaxe special");
+			return true;
+		}
+		specHovered = false;
+		MenuEntry entry = input.getLeftClickEntry();
+		String option = entry == null ? "" : GameInput.plainText(entry.getOption()).toLowerCase(Locale.ROOT);
+		String target = entry == null ? "" : GameInput.plainText(entry.getTarget()).toLowerCase(Locale.ROOT);
+		Point mouse = input.getMouseLocation();
+		boolean onOrb = mouse != null && bounds.contains(mouse);
+		++specClicks;
+		if (onOrb && (option + " " + target).contains("special") && input.click(mouse))
+		{
+			log.info("[MotherlodeMiner] special orb click {}: top='{} {}' at {},{}", specClicks, option, target,
+				mouse.x, mouse.y);
+			specWaitTicks = SPEC_WAIT_TICKS;
+			return true;
+		}
+		log.info("[MotherlodeMiner] special orb hover {}/{}: top='{} {}' onOrb={}, re-aiming", specClicks,
+			SPEC_CLICK_LIMIT, option, target, onOrb);
+		return true;
+	}
+
+	private boolean dragonPickaxeWielded(ScriptContext context)
+	{
+		ItemContainer worn = context.getClient().getItemContainer(InventoryID.WORN);
+		Item weapon = worn == null ? null : worn.getItem(EquipmentInventorySlot.WEAPON.getSlotIdx());
+		if (weapon != null && DRAGON_PICKAXES.contains(weapon.getId()))
+		{
+			return true;
+		}
+		if (!specSkipLogged)
+		{
+			specSkipLogged = true;
+			boolean inInventory = DRAGON_PICKAXES.stream().anyMatch(id -> context.getInventory().countItem(id) > 0);
+			log.info(inInventory
+				? "[MotherlodeMiner] dragon pickaxe is in the inventory, not wielded: the special only works when"
+					+ " wielded, skipping it"
+				: "[MotherlodeMiner] no dragon pickaxe wielded, skipping the special");
+		}
+		return false;
 	}
 
 	private void walkToSack(ScriptContext context)

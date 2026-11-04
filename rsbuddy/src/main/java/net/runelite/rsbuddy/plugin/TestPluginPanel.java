@@ -571,6 +571,9 @@ public final class TestPluginPanel extends PluginPanel
 			addCheckSetting("Upstairs mining",
 				"Mine the upstairs veins and use the upstairs hopper, four loads per trip.",
 				"motherlodeUpstairs", config::motherlodeUpstairs);
+			addCheckSetting("Use dragon pickaxe special",
+				"While mining, click the special attack orb every time special energy is 100% (dragon pickaxe wielded).",
+				"motherlodeDragonSpec", config::motherlodeDragonSpec);
 
 			scriptSettingsHint.setText("<html>Used the next time the script starts. The script reads this "
 				+ "when it begins, so changing it while running has no effect until the next start.</html>");
