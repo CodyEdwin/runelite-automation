@@ -131,8 +131,8 @@ Simulated clicks show the same blue/red rings as real clicks.
 ## XP overlays
 
 The XP Logger and XP Progress overlays have animated bars that are 2.5x thicker than before. The animation has
-moving energy stripes, a sheen, twirling embers, sparks with gravity off the leading edge, an edge glow and a flash on
-every XP drop. Each skill row in the XP Logger also shows **Actions to level: N**: the XP left to the next level divided
+moving energy stripes, a sheen, twirling embers, an edge glow, and a flash plus a burst of sparks off the leading edge on
+every XP drop (no sparks while idle). Each skill row in the XP Logger also shows **Actions to level: N**: the XP left to the next level divided
 by the mean XP per drop seen this session (each StatChanged gain counts as one action). It shows `--` until the first drop.
 
 - **Move:** hold **Shift** and drag either overlay. An orange outline shows while Shift is held over it. The spot is

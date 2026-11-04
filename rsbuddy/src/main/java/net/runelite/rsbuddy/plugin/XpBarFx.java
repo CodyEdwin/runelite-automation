@@ -101,7 +101,6 @@ public final class XpBarFx
 		int alive;
 		long lastNanos;
 		long pulseAt;
-		float emitDebt;
 		int pendingBurst;
 	}
 
@@ -208,8 +207,11 @@ public final class XpBarFx
 
 		if (animate && fill >= 1f)
 		{
-			drawEdgeGlow(g, x + fill, y + h / 2f, h, t, base, hot);
-			updateSparks(bar, x + fill, y, h, dt, intensity, bar.lastNanos != 0 && progress < 1);
+			// Subtle glow when idle, flaring up with the XP-drop flash.
+			long since = now - bar.pulseAt;
+			float flare = bar.pulseAt != 0 && since < PULSE_NANOS ? 1f - since / (float) PULSE_NANOS : 0f;
+			drawEdgeGlow(g, x + fill, y + h / 2f, h, t, base, hot, 0.45f + 0.55f * flare);
+			updateSparks(bar, x + fill, y, h, dt, intensity);
 			drawSparks(g, bar, base, hot, Math.max(1f, h / 10f));
 		}
 
@@ -275,28 +277,24 @@ public final class XpBarFx
 		g.setComposite(AlphaComposite.SrcOver);
 	}
 
-	private void drawEdgeGlow(Graphics2D g, float ex, float ey, int h, double t, Color base, Color hot)
+	private void drawEdgeGlow(Graphics2D g, float ex, float ey, int h, double t, Color base, Color hot, float strength)
 	{
 		float flicker = (float) (0.85 + 0.15 * Math.sin(t * 23) * Math.sin(t * 7.3));
-		float radius = h * 1.5f * flicker;
-		glowColors[0] = new Color(255, 255, 255, 230);
-		glowColors[1] = withAlpha(hot, 150);
+		float radius = h * (0.9f + 0.8f * strength) * flicker;
+		glowColors[0] = new Color(255, 255, 255, Math.round(230 * strength));
+		glowColors[1] = withAlpha(hot, Math.round(150 * strength));
 		glowColors[2] = withAlpha(base, 0);
 		g.setPaint(new RadialGradientPaint(ex, ey, radius, glowStops, glowColors));
 		g.fill(new Ellipse2D.Float(ex - radius, ey - radius, radius * 2, radius * 2));
 	}
 
-	private static void updateSparks(Bar bar, float ex, int y, int h, float dt, double intensity, boolean emit)
+	private static void updateSparks(Bar bar, float ex, int y, int h, float dt, double intensity)
 	{
 		ThreadLocalRandom rnd = ThreadLocalRandom.current();
 		int burst = bar.pendingBurst;
 		bar.pendingBurst = 0;
-		if (emit && intensity > 0)
-		{
-			bar.emitDebt += (float) (dt * 55 * intensity);
-		}
-		int spawn = (int) bar.emitDebt + (int) (burst * Math.max(0.3, intensity));
-		bar.emitDebt -= (int) bar.emitDebt;
+		// Sparks only fly on an XP drop (the burst queued by pulse); no idle emission.
+		int spawn = intensity <= 0 ? 0 : (int) Math.round(burst * intensity);
 
 		for (int s = 0; s < spawn && bar.alive < MAX_SPARKS; s++)
 		{
