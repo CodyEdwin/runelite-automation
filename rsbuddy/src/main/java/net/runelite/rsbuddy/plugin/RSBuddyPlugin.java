@@ -40,7 +40,6 @@ import net.runelite.api.events.ClientTick;
 import net.runelite.api.events.CommandExecuted;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.MenuEntryAdded;
-import net.runelite.api.events.StatChanged;
 import net.runelite.client.callback.ClientThread;
 import javax.swing.SwingUtilities;
 import net.runelite.client.config.ConfigManager;
@@ -116,9 +115,6 @@ public class RSBuddyPlugin extends Plugin
 
 	@Inject
 	private XpProgressOverlay xpProgressOverlay;
-
-	@Inject
-	private XpLoggerOverlay xpLoggerOverlay;
 
 	@Inject
 	private MouseOverlay mouseOverlay;
@@ -208,11 +204,9 @@ public class RSBuddyPlugin extends Plugin
 		clientToolbar.addNavigation(navButton);
 		overlayManager.add(overlay);
 		overlayManager.add(xpProgressOverlay);
-		overlayManager.add(xpLoggerOverlay);
 		// Shift + drag moves these overlays (reads real input only, never injects).
-		xpDragHandler = new ShiftDragHandler(overlayManager, List.of(overlay, xpLoggerOverlay, xpProgressOverlay),
+		xpDragHandler = new ShiftDragHandler(overlayManager, List.of(overlay, xpProgressOverlay),
 			client::getRealDimensions);
-		xpLoggerOverlay.setDragHandler(xpDragHandler);
 		xpProgressOverlay.setDragHandler(xpDragHandler);
 		mouseManager.registerMouseListener(0, xpDragHandler);
 		keyManager.registerKeyListener(xpDragHandler);
@@ -247,7 +241,6 @@ public class RSBuddyPlugin extends Plugin
 
 		overlayManager.remove(overlay);
 		overlayManager.remove(xpProgressOverlay);
-		overlayManager.remove(xpLoggerOverlay);
 		if (xpDragHandler != null)
 		{
 			mouseManager.unregisterMouseListener(xpDragHandler);
@@ -263,12 +256,6 @@ public class RSBuddyPlugin extends Plugin
 		}
 		input = null;
 		log.info("RSBuddy stopped");
-	}
-
-	@Subscribe
-	public void onStatChanged(StatChanged event)
-	{
-		xpLoggerOverlay.onStatChanged(event.getSkill(), event.getXp());
 	}
 
 	@Subscribe

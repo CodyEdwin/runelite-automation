@@ -32,6 +32,7 @@ project(":jshell").projectDir = file("./runelite-jshell")
 include("client")
 project(":client").projectDir = file("./runelite-client")
 include("rsbuddy")
+include("xplogger")
 apply(from = "./common.settings.gradle.kts")
 
 includeBuild("cache")

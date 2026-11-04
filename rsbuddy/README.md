@@ -11,8 +11,9 @@ sideloaded plugin directory.
 ./gradlew :client:run
 ```
 
-`:client:run` depends on `:rsbuddy:installPlugin`, so it builds the plugin and copies
-`rsbuddy.jar` to `~/.runelite/sideloaded-plugins` before starting the client. The client must run
+`:client:run` depends on `:rsbuddy:installPlugin` and `:xplogger:installPlugin`, so it builds both
+plugins and copies `rsbuddy.jar` and `xplogger.jar` to `~/.runelite/sideloaded-plugins` before starting
+the client. The client must run
 with `--developer-mode` (the `run` task already passes it) for sideloaded plugins to load.
 
 The plugin appears as **RSBuddy**. Its sidebar icon tooltip and panel title are **RSBuddy**. The
@@ -130,18 +131,12 @@ Simulated clicks show the same blue/red rings as real clicks.
 
 ## XP overlays
 
-The XP Logger and XP Progress overlays have animated bars that are 2.5x thicker than before. The animation has
-moving energy stripes and twirling embers. On every XP drop a white sheen sweeps to the end of
-the fill, then the flash, an end-of-bar glow and the spark burst fire there; the glow fades out with the sparks (no sheen, sparks or glow while idle). Each skill row in the XP Logger also shows **Actions to level: N**: the XP left to the next level divided
-by the mean XP per drop seen this session (each StatChanged gain counts as one action). It shows `--` until the first drop.
+XP Logger is a separate plugin in the `xplogger` module. RSBuddy only draws **XP Progress**, and only while the active routine reports progress bars.
 
-- **Move:** hold **Shift** and drag either overlay. An orange outline shows while Shift is held over it. The spot is
-  saved through RuneLite's overlay settings and survives restarts. RuneLite's Alt-drag still works too.
-- **XP drops:** the `+N` label (with the skill icon) arcs off the bar end, then floats up to the top of the game
-  screen over 3–4 s, swaying gently and fading near the top, so the vanilla XP drops can be hidden. Turn it off with
-  *XP drop climbs to top* to get the short arc and fade instead.
-- **Config:** *XP bar animations* (on/off), *XP bar thickness %* (100–400, default 250), *XP spark intensity %*
-  (0–200, default 100).
+Those bars are 2.5x thicker than the original. The animation has moving energy stripes and twirling embers. When progress increases, a white sheen sweeps to the end of the fill, then the flash, an end-of-bar glow and the spark burst fire there. The glow fades out with the sparks.
+
+- **Move:** hold **Shift** and drag the overlay. An orange outline shows while Shift is held over it. The spot is saved through RuneLite's overlay settings. Alt-drag works too.
+- **Config:** *XP bar animations* (on/off), *XP bar thickness %* (100–400, default 250), *XP spark intensity %* (0–200, default 100).
 
 ## Routine jars
 

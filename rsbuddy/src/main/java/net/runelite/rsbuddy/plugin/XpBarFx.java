@@ -47,7 +47,7 @@ import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
- * Draws the animated XP bars shared by the XP Logger and XP Progress overlays.
+ * Draws the animated XP bars used by the XP Progress overlay.
  * <p>
  * Everything is time based ({@link System#nanoTime()}), not tick based, so it
  * stays smooth at any frame rate. Per bar it draws: a gradient fill, moving

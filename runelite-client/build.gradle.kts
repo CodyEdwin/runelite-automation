@@ -107,6 +107,7 @@ tasks.register<JavaExec>("run") {
     group = "application"
     description = "Run the RuneLite client in developer mode"
     dependsOn(":rsbuddy:installPlugin")
+    dependsOn(":xplogger:installPlugin")
     mainClass.set("net.runelite.client.RuneLite")
     classpath = sourceSets.main.get().runtimeClasspath
     jvmArgs("-ea")
@@ -117,6 +118,7 @@ tasks.register<JavaExec>("runNorm") {
     group = "application"
     description = "Run the RuneLite client in normal mode"
     dependsOn(":rsbuddy:installPlugin")
+    dependsOn(":xplogger:installPlugin")
     mainClass.set("net.runelite.client.RuneLite")
     classpath = sourceSets.main.get().runtimeClasspath
 }
