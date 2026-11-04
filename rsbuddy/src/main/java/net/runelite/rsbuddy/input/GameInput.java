@@ -434,6 +434,13 @@ public final class GameInput
 		{
 			return null;
 		}
+		// The clickbox is the model the game actually hit-tests; the convex
+		// hull can include parts covered by neighbouring objects.
+		Shape clickbox = object.getClickbox();
+		if (clickbox != null)
+		{
+			return clickbox;
+		}
 		Shape hull = null;
 		if (object instanceof net.runelite.api.GameObject)
 		{
@@ -451,7 +458,7 @@ public final class GameInput
 		{
 			hull = ((net.runelite.api.GroundObject) object).getConvexHull();
 		}
-		return hull != null ? hull : object.getClickbox();
+		return hull;
 	}
 
 	/**
@@ -3166,14 +3173,89 @@ public final class GameInput
 	private MenuEntry leftClickEntry()
 	{
 		MenuEntry[] entries = currentMenuEntries();
+		// Last non-deprioritized entry is the left click (PR #28). On top of
+		// that, an Examine row is never the left click while the same
+		// object/NPC/item also has a real option: the raw array can list
+		// Examine last before the client's own ordering (seen at the
+		// Motherlode hopper and veins: "Examine Hopper" read as the top
+		// while the game's left click was "Deposit").
+		MenuEntry fallback = null;
 		for (int i = entries.length - 1; i >= 0; i--)
 		{
-			if (entries[i] != null && !entries[i].isDeprioritized())
+			MenuEntry entry = entries[i];
+			if (entry == null || entry.isDeprioritized())
 			{
-				return entries[i];
+				continue;
 			}
+			if (isExamine(entry) && hasRealOption(entries, entry))
+			{
+				if (fallback == null)
+				{
+					fallback = entry;
+				}
+				continue;
+			}
+			return entry;
+		}
+		if (fallback != null)
+		{
+			return fallback;
 		}
 		return entries.length == 0 ? null : entries[entries.length - 1];
+	}
+
+	private static boolean isExamine(MenuEntry entry)
+	{
+		MenuAction type = entry.getType();
+		return type == MenuAction.EXAMINE_OBJECT || type == MenuAction.EXAMINE_NPC
+			|| type == MenuAction.EXAMINE_ITEM_GROUND
+			|| "examine".equalsIgnoreCase(stripTags(entry.getOption() == null ? "" : entry.getOption()));
+	}
+
+	private static boolean hasRealOption(MenuEntry[] entries, MenuEntry examine)
+	{
+		for (MenuEntry other : entries)
+		{
+			if (other == null || other == examine || other.isDeprioritized() || isExamine(other))
+			{
+				continue;
+			}
+			MenuAction type = other.getType();
+			if (type == MenuAction.CANCEL || type == MenuAction.WALK)
+			{
+				continue;
+			}
+			if (other.getIdentifier() == examine.getIdentifier()
+				|| stripTags(String.valueOf(other.getTarget())).equalsIgnoreCase(stripTags(String.valueOf(examine.getTarget()))))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * @return the current menu in array order (index: option target type
+	 * id deprioritized), for diagnostics. Client thread only.
+	 */
+	public String describeMenuOrder()
+	{
+		MenuEntry[] entries = currentMenuEntries();
+		StringBuilder out = new StringBuilder();
+		for (int i = 0; i < entries.length; i++)
+		{
+			MenuEntry e = entries[i];
+			if (e == null)
+			{
+				continue;
+			}
+			out.append(i).append(":'").append(stripTags(String.valueOf(e.getOption()))).append(' ')
+				.append(stripTags(String.valueOf(e.getTarget()))).append("' ").append(e.getType())
+				.append(" id=").append(e.getIdentifier()).append(e.isDeprioritized() ? " deprio" : "").append("; ");
+		}
+		MenuEntry top = leftClickEntry();
+		return out.append("-> left click '").append(top == null ? "none"
+			: stripTags(String.valueOf(top.getOption())) + " " + stripTags(String.valueOf(top.getTarget()))).append('\'').toString();
 	}
 
 	/**

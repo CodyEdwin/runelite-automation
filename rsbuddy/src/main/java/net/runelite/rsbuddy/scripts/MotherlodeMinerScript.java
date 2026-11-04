@@ -230,6 +230,7 @@ public final class MotherlodeMinerScript extends Script
 	private final boolean upstairs;
 	private final boolean dragonSpec;
 	private long lastActionAt;
+	private final java.util.Set<String> menuDumped = new java.util.HashSet<>();
 	private long fastReadyAt;
 	private String lastAction = "start";
 	private boolean specHovered;
@@ -347,6 +348,7 @@ public final class MotherlodeMinerScript extends Script
 		specClicks = 0;
 		specWaitTicks = 0;
 		specSkipLogged = false;
+		menuDumped.clear();
 		verifyKey = null;
 		droppingExtras = false;
 		dropVerified = false;
@@ -801,6 +803,7 @@ public final class MotherlodeMinerScript extends Script
 		{
 			if (depositClickSent)
 			{
+				log.info("[MotherlodeMiner] hopper took all {} pay-dirt", payDirtAtClick);
 				depositedSinceEmpty += Math.max(0, lastPayDirtCount);
 				// Pay-dirt actually went into the hopper, so the sack is no
 				// longer empty.
@@ -918,8 +921,15 @@ public final class MotherlodeMinerScript extends Script
 
 		input.stopCamera();
 		int carriedNow = inventory.countItem(ItemID.PAYDIRT);
+		if (!verifyHovered)
+		{
+			Point centre = input.objectCenter(hopper);
+			log.info("[MotherlodeMiner] hopper id={} at {} centre={} pay-dirt={} attempt {}", hopper.getId(),
+				hopperLocation, centre == null ? "-" : centre.x + "," + centre.y, carriedNow, actionAttempts + 1);
+		}
 		if (verifiedObjectClick(context, hopper, "hopper", new String[]{"deposit"}, "hopper"))
 		{
+			log.info("[MotherlodeMiner] hopper deposit click sent with {} pay-dirt", carriedNow);
 			++actionAttempts;
 			payDirtAtClick = carriedNow;
 			depositClickSent = true;
@@ -1374,13 +1384,24 @@ public final class MotherlodeMinerScript extends Script
 		}
 		if (!verifyHovered)
 		{
-			if (input.hoverCenter(object))
+			// First aim at the dead centre; after a miss try another point
+			// inside the clickable model (the centre can sit on a part that
+			// another object covers).
+			boolean moved = verifyMisses == 0 ? input.hoverCenter(object) : input.hover(object);
+			if (moved)
 			{
 				verifyHovered = true;
 			}
 			else
 			{
-				log.info("[MotherlodeMiner] {}: no clickable centre on screen", key);
+				++verifyMisses;
+				log.info("[MotherlodeMiner] {}: no clickable point on screen (miss {}/{})", key, verifyMisses,
+					SACK_HOVER_ATTEMPTS);
+				if (verifyMisses >= SACK_HOVER_ATTEMPTS)
+				{
+					verifyMisses = SACK_HOVER_ATTEMPTS - 1;
+					return recoverVerify(context, object, key);
+				}
 			}
 			setStatus("Moving mouse to the " + key);
 			return false;
@@ -1396,7 +1417,7 @@ public final class MotherlodeMinerScript extends Script
 		boolean onHull = mouse != null && hull != null && hull.contains(mouse);
 		// While running the centre slides, so being on the hull is enough.
 		boolean centred = mouse != null && center != null
-			&& (mouse.distance(center) <= CENTER_TOLERANCE_PX || isMoving(context));
+			&& (mouse.distance(center) <= CENTER_TOLERANCE_PX || isMoving(context) || verifyMisses > 0);
 		boolean optionOk = target.contains(targetWord);
 		boolean prefixOk = false;
 		for (String prefix : optionPrefixes)
@@ -1418,6 +1439,12 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		++verifyMisses;
+		if (menuDumped.add(key))
+		{
+			// Once per start and target: the full menu ordering, to check
+			// which entry the game treats as the left click.
+			log.info("[MotherlodeMiner] {} menu order: {}", key, input.describeMenuOrder());
+		}
 		log.info("[MotherlodeMiner] {} hover miss {}/{}: top='{} {}' onHull={} centred={} -> re-aiming", key,
 			verifyMisses, SACK_HOVER_ATTEMPTS, option, target, onHull, centred);
 		if (verifyMisses < SACK_HOVER_ATTEMPTS)
@@ -1426,6 +1453,12 @@ public final class MotherlodeMinerScript extends Script
 			return false;
 		}
 
+		return recoverVerify(context, object, key);
+	}
+
+	private boolean recoverVerify(ScriptContext context, TileObject object, String key)
+	{
+		GameInput input = context.getInput();
 		// Never act invisibly. Turn the camera toward it and walk a step
 		// closer (a real tile/minimap click), then re-aim; halt after a few
 		// recoveries with a clear log.
