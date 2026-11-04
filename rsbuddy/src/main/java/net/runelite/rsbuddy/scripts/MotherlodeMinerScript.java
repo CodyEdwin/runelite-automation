@@ -137,7 +137,7 @@ public final class MotherlodeMinerScript extends Script
 	private static final int HOPPER_STOP_DISTANCE = 1;
 	private static final int OBJECT_REACH = 5;
 	private static final int VEIN_WALK_DISTANCE = 4;
-	private static final int CLICK_COOLDOWN = 1;
+	private static final int CLICK_COOLDOWN = 0;
 	private static final int ACTION_ATTEMPTS = 8;
 	private static final int SEARCH_WAIT_TICKS = 3;
 	private static final int MAX_SEARCH_CLICKS = 12;
@@ -145,6 +145,8 @@ public final class MotherlodeMinerScript extends Script
 	private static final long MINE_ANIMATION_GAP_MS = 1500L;
 	/** Hover checks on the sack before falling back to its menu option. */
 	private static final int SACK_HOVER_ATTEMPTS = 4;
+	/** Start aiming at the sack (and click it) once within this many tiles and on screen. */
+	private static final int SACK_PREHOVER_DISTANCE = 8;
 	/** Special energy varp value for 100%. */
 	private static final int SPEC_FULL = 1000;
 	private static final int SPEC_WAIT_TICKS = 3;
@@ -227,6 +229,9 @@ public final class MotherlodeMinerScript extends Script
 	private int sackCapacity = SACK_SIZE;
 	private final boolean upstairs;
 	private final boolean dragonSpec;
+	private long lastActionAt;
+	private long fastReadyAt;
+	private String lastAction = "start";
 	private boolean specHovered;
 	private int specClicks;
 	private int specWaitTicks;
@@ -441,6 +446,70 @@ public final class MotherlodeMinerScript extends Script
 			setStatus("Climbing up the ladder");
 		}
 
+		dispatch(context);
+	}
+
+	/**
+	 * Per-frame (client thread) fast path: run the current step the moment
+	 * its trigger is met instead of on the next game tick - a verified
+	 * hover has arrived (after a short 80-200 ms human pause), the bank just
+	 * opened, the deposit just emptied the inventory, or ores just came out
+	 * of the sack. Tick caps stay in the game-tick path as timeouts.
+	 */
+	@Override
+	protected void onClientTick()
+	{
+		ScriptContext context = getContext();
+		if (context == null || state == null || state == State.HALTED || walker == null || !context.isLoggedIn())
+		{
+			return;
+		}
+		try
+		{
+			GameInput input = context.getInput();
+			if (input.isBusy())
+			{
+				fastReadyAt = 0;
+				return;
+			}
+			boolean trigger;
+			if (verifyHovered)
+			{
+				long now = System.currentTimeMillis();
+				if (fastReadyAt == 0)
+				{
+					fastReadyAt = now + java.util.concurrent.ThreadLocalRandom.current().nextLong(80, 201);
+					return;
+				}
+				trigger = now >= fastReadyAt;
+			}
+			else if (state == State.BANK)
+			{
+				boolean open = context.getTargets().findWidget(InterfaceID.Bankmain.UNIVERSE).isPresent();
+				trigger = open && (bankStage == null
+					|| bankStage == BankStage.WAIT_DEPOSIT && countInventoryItems(context.getInventory()) == 0);
+			}
+			else
+			{
+				trigger = state == State.SACK && searchWait > 0
+					&& countInventoryItems(context.getInventory()) > itemsBeforeSearch;
+			}
+			if (trigger)
+			{
+				fastReadyAt = 0;
+				cooldown = 0;
+				dispatch(context);
+			}
+		}
+		catch (RuntimeException ex)
+		{
+			log.error("[MotherlodeMiner] fast step failed in state={}", state, ex);
+			fastReadyAt = 0;
+		}
+	}
+
+	private void dispatch(ScriptContext context)
+	{
 		switch (state)
 		{
 			case MINE:
@@ -609,7 +678,7 @@ public final class MotherlodeMinerScript extends Script
 				: VEIN_AREA;
 			if (location != null && location.distanceTo(area) > VEIN_WALK_DISTANCE)
 			{
-				walker.walkTo(area, true, WALK_STOP_DISTANCE);
+				walkLogged(area, true, WALK_STOP_DISTANCE);
 				setStatus("Walking to the veins");
 			}
 			else
@@ -622,7 +691,7 @@ public final class MotherlodeMinerScript extends Script
 		WorldPoint location = context.getPlayerLocation();
 		if (location != null && location.distanceTo2D(vein.getWorldLocation()) > VEIN_WALK_DISTANCE)
 		{
-			walker.walkTo(vein.getWorldLocation(), true, WALK_STOP_DISTANCE);
+			walkLogged(vein.getWorldLocation(), true, WALK_STOP_DISTANCE);
 			setStatus("Walking to a vein");
 			return;
 		}
@@ -665,7 +734,7 @@ public final class MotherlodeMinerScript extends Script
 		}
 		else
 		{
-			cooldown = 1;
+			cooldown = 0;
 			setStatus("Waiting for a vein");
 		}
 	}
@@ -698,12 +767,12 @@ public final class MotherlodeMinerScript extends Script
 			// player ends up beside it instead of stopping a few tiles short.
 			// The hopper tile is solid, so the path ends on the closest
 			// walkable tile next to it.
-			walker.walkTo(hopperLocation, true, HOPPER_STOP_DISTANCE);
+			walkLogged(hopperLocation, true, HOPPER_STOP_DISTANCE);
 			setStatus("Walking to the hopper");
 			return;
 		}
 
-		walker.walkTo(area, true, HOPPER_STOP_DISTANCE);
+		walkLogged(area, true, HOPPER_STOP_DISTANCE);
 		setStatus("Walking to the hopper");
 	}
 
@@ -840,12 +909,6 @@ public final class MotherlodeMinerScript extends Script
 			return;
 		}
 
-		if (isMoving(context))
-		{
-			setStatus("Waiting to stop");
-			return;
-		}
-
 		if (!input.isVisible(hopper))
 		{
 			input.turnCameraToward(hopper.getWorldLocation());
@@ -867,7 +930,7 @@ public final class MotherlodeMinerScript extends Script
 		}
 		else
 		{
-			cooldown = 1;
+			cooldown = 0;
 		}
 	}
 
@@ -1072,6 +1135,27 @@ public final class MotherlodeMinerScript extends Script
 		return false;
 	}
 
+	/** Walker click with a gap log, so Cody can see the time between actions. */
+	private boolean walkLogged(WorldPoint target, boolean minimap, int stopDistance)
+	{
+		boolean sent = walker.walkTo(target, minimap, stopDistance);
+		if (sent)
+		{
+			markAction("walk " + state + " -> " + target.getX() + "," + target.getY());
+		}
+		return sent;
+	}
+
+	/** Logs an action and the time since the previous one. */
+	private void markAction(String action)
+	{
+		long now = System.currentTimeMillis();
+		log.info("[MotherlodeMiner] +{}ms {} (after {})", lastActionAt == 0 ? 0 : now - lastActionAt, action,
+			lastAction);
+		lastActionAt = now;
+		lastAction = action;
+	}
+
 	private void walkToSack(ScriptContext context)
 	{
 		if (sackKnownEmpty)
@@ -1089,7 +1173,11 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		TileObject sack = findSack(context);
-		if ((sack != null && location.distanceTo2D(sack.getWorldLocation()) <= WALK_STOP_DISTANCE)
+		boolean bankOpen = context.getTargets().findWidget(InterfaceID.Bankmain.UNIVERSE).isPresent();
+		boolean nearAndVisible = sack != null && !bankOpen
+			&& location.distanceTo2D(sack.getWorldLocation()) <= SACK_PREHOVER_DISTANCE
+			&& context.getInput().isVisible(sack);
+		if (nearAndVisible || (sack != null && location.distanceTo2D(sack.getWorldLocation()) <= WALK_STOP_DISTANCE)
 			|| location.distanceTo(SACK_AREA) <= WALK_STOP_DISTANCE)
 		{
 			state = State.SACK;
@@ -1100,10 +1188,13 @@ public final class MotherlodeMinerScript extends Script
 			itemsBeforeSearch = 0;
 			verifyKey = null;
 			setStatus("Searching the sack");
+			// Aim at the sack while still running and click as soon as the
+			// hover verifies.
+			sack(context);
 			return;
 		}
 
-		walker.walkTo(SACK_AREA, true, WALK_STOP_DISTANCE);
+		walkLogged(SACK_AREA, true, WALK_STOP_DISTANCE);
 		setStatus("Walking to the sack");
 	}
 
@@ -1119,6 +1210,16 @@ public final class MotherlodeMinerScript extends Script
 
 		if (searchWait > 0)
 		{
+			// Act on the tick the ores arrive; the wait is only a timeout.
+			if (countInventoryItems(inventory) > itemsBeforeSearch)
+			{
+				searchWait = 1;
+			}
+			else if (searchWait == 1 && isMoving(context))
+			{
+				// Clicked the sack while running: still on the way to it.
+				searchWait = 2;
+			}
 			if (--searchWait > 0)
 			{
 				return;
@@ -1136,7 +1237,7 @@ public final class MotherlodeMinerScript extends Script
 				if (lastLiveSack > 0 && inventory.getEmptySlots() > 0)
 				{
 					searchClicks = 0;
-					cooldown = 1;
+					cooldown = 0;
 					setStatus("Emptying the sack");
 					return;
 				}
@@ -1213,12 +1314,6 @@ public final class MotherlodeMinerScript extends Script
 			return;
 		}
 
-		if (isMoving(context))
-		{
-			setStatus("Waiting to stop");
-			return;
-		}
-
 		if (!input.isVisible(sack))
 		{
 			if (++sackCameraTurns <= 3)
@@ -1235,7 +1330,7 @@ public final class MotherlodeMinerScript extends Script
 			itemsBeforeSearch = countInventoryItems(inventory);
 			++searchClicks;
 			searchWait = SEARCH_WAIT_TICKS;
-			cooldown = 1;
+			cooldown = 0;
 			setStatus("Searching the sack");
 		}
 	}
@@ -1272,6 +1367,11 @@ public final class MotherlodeMinerScript extends Script
 			// The mouse is still travelling to the centre.
 			return false;
 		}
+		if (!"bank chest".equals(key) && context.getTargets().findWidget(InterfaceID.Bankmain.UNIVERSE).isPresent())
+		{
+			// The bank closes once the walk starts; do not click through it.
+			return false;
+		}
 		if (!verifyHovered)
 		{
 			if (input.hoverCenter(object))
@@ -1294,7 +1394,9 @@ public final class MotherlodeMinerScript extends Script
 		Point center = input.objectCenter(object);
 		Shape hull = input.objectHull(object);
 		boolean onHull = mouse != null && hull != null && hull.contains(mouse);
-		boolean centred = mouse != null && center != null && mouse.distance(center) <= CENTER_TOLERANCE_PX;
+		// While running the centre slides, so being on the hull is enough.
+		boolean centred = mouse != null && center != null
+			&& (mouse.distance(center) <= CENTER_TOLERANCE_PX || isMoving(context));
 		boolean optionOk = target.contains(targetWord);
 		boolean prefixOk = false;
 		for (String prefix : optionPrefixes)
@@ -1307,6 +1409,7 @@ public final class MotherlodeMinerScript extends Script
 			{
 				log.info("[MotherlodeMiner] {} click: top='{} {}' at {},{} (centre {},{})", key, option, target,
 					mouse.x, mouse.y, center.x, center.y);
+				markAction("click " + key);
 				verifyMisses = 0;
 				verifyKey = null;
 				return true;
@@ -1319,7 +1422,7 @@ public final class MotherlodeMinerScript extends Script
 			verifyMisses, SACK_HOVER_ATTEMPTS, option, target, onHull, centred);
 		if (verifyMisses < SACK_HOVER_ATTEMPTS)
 		{
-			cooldown = 1;
+			cooldown = 0;
 			return false;
 		}
 
@@ -1338,7 +1441,7 @@ public final class MotherlodeMinerScript extends Script
 		log.info("[MotherlodeMiner] {}: recovery {}/{} - turning camera and walking closer, then re-aiming", key,
 			verifyRecoveries, VERIFY_RECOVERIES);
 		input.turnCameraToward(object.getWorldLocation());
-		walker.walkTo(onPlayerPlane(context, object.getWorldLocation()), true, 1);
+		walkLogged(onPlayerPlane(context, object.getWorldLocation()), true, 1);
 		cooldown = 2;
 		return false;
 	}
@@ -1391,6 +1494,8 @@ public final class MotherlodeMinerScript extends Script
 			walker.reset();
 			actionAttempts = 0;
 			setStatus("Walking to the bank");
+			markAction("sack trip done, walking to the bank");
+			walkToBank(context);
 		}
 		else
 		{
@@ -1420,7 +1525,7 @@ public final class MotherlodeMinerScript extends Script
 			GameInput input = context.getInput();
 			if (!input.isBusy() && dropOnePayDirt(context))
 			{
-				cooldown = 1;
+				cooldown = 0;
 			}
 			setStatus("Dropping pay-dirt to make room for the hammer");
 			return;
@@ -1438,7 +1543,7 @@ public final class MotherlodeMinerScript extends Script
 			return;
 		}
 
-		walker.walkTo(BANK_AREA, true, WALK_STOP_DISTANCE);
+		walkLogged(BANK_AREA, true, WALK_STOP_DISTANCE);
 		setStatus("Walking to the bank");
 	}
 
@@ -1456,7 +1561,7 @@ public final class MotherlodeMinerScript extends Script
 		{
 			if (!input.isBusy() && dropOnePayDirt(context))
 			{
-				cooldown = 1;
+				cooldown = 0;
 			}
 			setStatus("Dropping pay-dirt to make room for the hammer");
 			return;
@@ -1464,17 +1569,8 @@ public final class MotherlodeMinerScript extends Script
 
 		if (bankStage == BankStage.LEAVE)
 		{
-			if (bank != null)
-			{
-				if (!input.isBusy())
-				{
-					input.pressKey(KeyEvent.VK_ESCAPE);
-					cooldown = 1;
-				}
-				setStatus("Closing bank");
-				return;
-			}
-
+			// No Escape: the next minimap click closes the bank by itself.
+			markAction("bank done, leaving without Escape");
 			bankStage = null;
 			actionAttempts = 0;
 			payDirtDeposited = false;
@@ -1506,6 +1602,7 @@ public final class MotherlodeMinerScript extends Script
 				sackKnownEmpty = false;
 				state = State.WALK_TO_SACK;
 				setStatus("Walking back to the sack");
+				walkToSack(context);
 				return;
 			}
 			log.info("[MotherlodeMiner] banked, sack empty -> back to mining");
@@ -1536,16 +1633,10 @@ public final class MotherlodeMinerScript extends Script
 				return;
 			}
 
-			if (isMoving(context))
-			{
-				setStatus("Waiting to stop");
-				return;
-			}
-
 			TileObject chest = context.getTargets().findTileObject(BANK_CHEST_ID, OBJECT_REACH + 3).orElse(null);
 			if (chest == null)
 			{
-				walker.walkTo(BANK_AREA, true, WALK_STOP_DISTANCE);
+				walkLogged(BANK_AREA, true, WALK_STOP_DISTANCE);
 				setStatus("Looking for the bank chest");
 				return;
 			}
@@ -1553,7 +1644,7 @@ public final class MotherlodeMinerScript extends Script
 			WorldPoint location = context.getPlayerLocation();
 			if (location != null && location.distanceTo2D(chest.getWorldLocation()) > OBJECT_REACH)
 			{
-				walker.walkTo(chest.getWorldLocation(), true, WALK_STOP_DISTANCE);
+				walkLogged(chest.getWorldLocation(), true, WALK_STOP_DISTANCE);
 				setStatus("Walking to the bank chest");
 				return;
 			}
@@ -1585,6 +1676,7 @@ public final class MotherlodeMinerScript extends Script
 
 		if (bankStage == null)
 		{
+			markAction("bank open");
 			bankStage = bankPurpose == BankPurpose.HAMMER
 				? BankStage.WITHDRAW
 				: BankStage.DEPOSIT;
@@ -1611,20 +1703,21 @@ public final class MotherlodeMinerScript extends Script
 				Widget deposit = context.getTargets().findWidget(InterfaceID.Bankmain.DEPOSITINV).orElse(null);
 				if (deposit == null)
 				{
-					cooldown = 1;
+					cooldown = 0;
 					setStatus("Waiting for bank");
 					return;
 				}
 
 				if (input.click(deposit))
 				{
+					markAction("click deposit inventory");
 					bankStage = BankStage.WAIT_DEPOSIT;
 					actionAttempts = 0;
 					cooldown = CLICK_COOLDOWN;
 				}
 				else
 				{
-					cooldown = 1;
+					cooldown = 0;
 				}
 				setStatus("Depositing ores");
 				return;
@@ -1633,7 +1726,9 @@ public final class MotherlodeMinerScript extends Script
 			{
 				if (countInventoryItems(inventory) == 0)
 				{
+					markAction("deposit done");
 					bankStage = BankStage.LEAVE;
+					bank(context);
 					return;
 				}
 
@@ -1652,7 +1747,7 @@ public final class MotherlodeMinerScript extends Script
 					bankStage = BankStage.WITHDRAW;
 					actionAttempts = 0;
 					hammerHovered = false;
-					cooldown = 1;
+					cooldown = 0;
 					return;
 				}
 
@@ -1673,7 +1768,7 @@ public final class MotherlodeMinerScript extends Script
 					}
 					else
 					{
-						cooldown = 1;
+						cooldown = 0;
 					}
 					setStatus("Dropping pay-dirt to make room for the hammer");
 					return;
@@ -1683,7 +1778,7 @@ public final class MotherlodeMinerScript extends Script
 				Widget deposit = context.getTargets().findWidget(InterfaceID.Bankmain.DEPOSITINV).orElse(null);
 				if (deposit == null)
 				{
-					cooldown = 1;
+					cooldown = 0;
 					setStatus("Waiting for bank");
 					return;
 				}
@@ -1694,7 +1789,7 @@ public final class MotherlodeMinerScript extends Script
 				}
 				else
 				{
-					cooldown = 1;
+					cooldown = 0;
 				}
 				setStatus("Depositing ores to make room for the hammer");
 				return;
@@ -1714,7 +1809,7 @@ public final class MotherlodeMinerScript extends Script
 					// of dropping items or bouncing back to the veins.
 					bankStage = BankStage.MAKE_ROOM;
 					actionAttempts = 0;
-					cooldown = 1;
+					cooldown = 0;
 					setStatus("Making room for the hammer");
 					return;
 				}
@@ -1793,7 +1888,7 @@ public final class MotherlodeMinerScript extends Script
 			{
 				if (dropOnePayDirt(context))
 				{
-					cooldown = 1;
+					cooldown = 0;
 					setStatus("Dropping pay-dirt for the hammer");
 				}
 				else
@@ -1822,7 +1917,7 @@ public final class MotherlodeMinerScript extends Script
 
 		if (location.distanceTo2D(strut.getWorldLocation()) > STRUT_REACH)
 		{
-			walker.walkTo(strut.getWorldLocation(), true, WALK_STOP_DISTANCE);
+			walkLogged(strut.getWorldLocation(), true, WALK_STOP_DISTANCE);
 			setStatus("Walking to the broken water wheel");
 			return;
 		}
@@ -1869,7 +1964,7 @@ public final class MotherlodeMinerScript extends Script
 		}
 		else
 		{
-			cooldown = 1;
+			cooldown = 0;
 		}
 	}
 
@@ -1978,7 +2073,7 @@ public final class MotherlodeMinerScript extends Script
 			return;
 		}
 
-		walker.walkTo(area, true, WALK_STOP_DISTANCE);
+		walkLogged(area, true, WALK_STOP_DISTANCE);
 		setStatus("Walking back to the veins");
 	}
 
@@ -2024,7 +2119,7 @@ public final class MotherlodeMinerScript extends Script
 		TileObject ladder = findLadder(context, LADDER_UP_AREA, true);
 		if (ladder == null)
 		{
-			walker.walkTo(onPlayerPlane(context, LADDER_UP_AREA), true, WALK_STOP_DISTANCE);
+			walkLogged(onPlayerPlane(context, LADDER_UP_AREA), true, WALK_STOP_DISTANCE);
 			setStatus("Walking to the ladder");
 			return;
 		}
@@ -2032,7 +2127,7 @@ public final class MotherlodeMinerScript extends Script
 		WorldPoint ladderLocation = ladder.getWorldLocation();
 		if (location.distanceTo2D(ladderLocation) > WALK_STOP_DISTANCE)
 		{
-			walker.walkTo(onPlayerPlane(context, ladderLocation), true, WALK_STOP_DISTANCE);
+			walkLogged(onPlayerPlane(context, ladderLocation), true, WALK_STOP_DISTANCE);
 			setStatus("Walking to the ladder");
 			return;
 		}
@@ -2054,7 +2149,7 @@ public final class MotherlodeMinerScript extends Script
 		}
 		else
 		{
-			cooldown = 1;
+			cooldown = 0;
 		}
 	}
 
@@ -2094,7 +2189,7 @@ public final class MotherlodeMinerScript extends Script
 		TileObject ladder = findLadder(context, LADDER_DOWN_AREA, false);
 		if (ladder == null)
 		{
-			walker.walkTo(onPlayerPlane(context, LADDER_DOWN_AREA), true, WALK_STOP_DISTANCE);
+			walkLogged(onPlayerPlane(context, LADDER_DOWN_AREA), true, WALK_STOP_DISTANCE);
 			setStatus("Walking to the ladder");
 			return;
 		}
@@ -2102,7 +2197,7 @@ public final class MotherlodeMinerScript extends Script
 		WorldPoint ladderLocation = ladder.getWorldLocation();
 		if (location.distanceTo2D(ladderLocation) > WALK_STOP_DISTANCE)
 		{
-			walker.walkTo(onPlayerPlane(context, ladderLocation), true, WALK_STOP_DISTANCE);
+			walkLogged(onPlayerPlane(context, ladderLocation), true, WALK_STOP_DISTANCE);
 			setStatus("Walking to the ladder");
 			return;
 		}
@@ -2124,7 +2219,7 @@ public final class MotherlodeMinerScript extends Script
 		}
 		else
 		{
-			cooldown = 1;
+			cooldown = 0;
 		}
 	}
 
@@ -2385,14 +2480,14 @@ public final class MotherlodeMinerScript extends Script
 		TileObject crate = findObjectAt(context, CRATE_ID, CRATE_AREA, 2);
 		if (crate == null)
 		{
-			walker.walkTo(onPlayerPlane(context, CRATE_AREA), true, WALK_STOP_DISTANCE);
+			walkLogged(onPlayerPlane(context, CRATE_AREA), true, WALK_STOP_DISTANCE);
 			setStatus("Walking to the crate");
 			return;
 		}
 
 		if (location.distanceTo2D(crate.getWorldLocation()) > WALK_STOP_DISTANCE)
 		{
-			walker.walkTo(crate.getWorldLocation(), true, WALK_STOP_DISTANCE);
+			walkLogged(crate.getWorldLocation(), true, WALK_STOP_DISTANCE);
 			setStatus("Walking to the crate");
 			return;
 		}
@@ -2420,7 +2515,7 @@ public final class MotherlodeMinerScript extends Script
 		}
 		else
 		{
-			cooldown = 1;
+			cooldown = 0;
 		}
 	}
 
