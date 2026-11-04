@@ -151,6 +151,8 @@ public final class MotherlodeMinerScript extends Script
 	private static final int SPEC_FULL = 1000;
 	private static final int SPEC_WAIT_TICKS = 3;
 	private static final int SPEC_CLICK_LIMIT = 6;
+	/** Skip the special on a run when the sack has room for this many pay-dirt or fewer. */
+	private static final int SPEC_SAVE_FREE_SPACE = 12;
 	/** Dragon pickaxe, upgraded, (or) (Zalcano), (or) (Trailblazer). */
 	private static final java.util.Set<Integer> DRAGON_PICKAXES = java.util.Set.of(
 		ItemID.DRAGON_PICKAXE, ItemID.DRAGON_PICKAXE_PRETTY, ItemID.ZALCANO_PICKAXE,
@@ -241,6 +243,7 @@ public final class MotherlodeMinerScript extends Script
 	private int specClicks;
 	private int specWaitTicks;
 	private boolean specSkipLogged;
+	private boolean specSavedLogged;
 
 	private boolean mining;
 	private boolean miningAnimationSeen;
@@ -352,6 +355,7 @@ public final class MotherlodeMinerScript extends Script
 		specClicks = 0;
 		specWaitTicks = 0;
 		specSkipLogged = false;
+		specSavedLogged = false;
 		menuDumped.clear();
 		verifyKey = null;
 		droppingExtras = false;
@@ -1104,6 +1108,21 @@ public final class MotherlodeMinerScript extends Script
 		{
 			return false;
 		}
+		// Free sack space without this inventory: sackContents is the sack
+		// varbit plus pay-dirt deposited and still washing, and only changes
+		// at the hopper, so it is fixed for the whole run.
+		int free = Math.max(0, sackCapacity - sackContents);
+		if (free <= SPEC_SAVE_FREE_SPACE)
+		{
+			if (!specSavedLogged)
+			{
+				specSavedLogged = true;
+				log.info("[MotherlodeMiner] sack has room for only {} pay-dirt (12 or fewer), saving dragon pickaxe"
+					+ " special for next run", free);
+			}
+			return false;
+		}
+		specSavedLogged = false;
 
 		GameInput input = context.getInput();
 		if (input.isBusy())
