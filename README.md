@@ -23,3 +23,8 @@ RuneLite is licensed under the BSD 2-clause license. See the license header in t
 ## Contribute and Develop
 
 Please view our [Developer Guide](https://github.com/runelite/runelite/wiki/Developer-Guide) on the RuneLite Wiki.
+
+## Motherlode Miner notes
+
+- Dragon pickaxe special: skipped for a whole run when the sack has room for 12 or fewer pay-dirt (capacity minus sack contents and pay-dirt still washing; the current inventory is not counted). Normal use comes back on the run after the sack is emptied.
+- Water wheel repair: as soon as the crate hammer lands in the inventory, the crate hover is cleared and the mouse goes straight to the broken strut. If the strut is clickable on screen it is clicked once and the mouse stays still while walking; otherwise the script walks via the minimap and clicks on arrival.

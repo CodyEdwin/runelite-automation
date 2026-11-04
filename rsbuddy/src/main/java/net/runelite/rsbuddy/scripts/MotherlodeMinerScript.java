@@ -2544,6 +2544,19 @@ public final class MotherlodeMinerScript extends Script
 		Inventory inventory = context.getInventory();
 		if (inventory.countItem(ItemID.HAMMER) > 0)
 		{
+			// The hammer is in: drop the crate hover at once. Otherwise the
+			// per-frame hook keeps following the crate centre (a re-aim
+			// started while the search was resolving) all the way to the wheel.
+			if (verifyHovered || verifyObject != null)
+			{
+				log.info("[MotherlodeMiner] hammer received, dropping the crate hover and heading to the strut");
+			}
+			verifyHovered = false;
+			verifyObject = null;
+			verifyKey = null;
+			aimTarget = null;
+			context.getInput().follow(null);
+			walker.reset();
 			state = State.FIX_WHEEL;
 			wheelAttempts = 0;
 			repairAfterDescent = true;
