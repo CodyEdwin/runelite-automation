@@ -192,6 +192,12 @@ public final class BowFletcherScript extends Script
 	}
 
 	@Override
+	public boolean physicalInputOnly()
+	{
+		return true;
+	}
+
+	@Override
 	public boolean useFastMouse()
 	{
 		return true;
@@ -440,15 +446,17 @@ public final class BowFletcherScript extends Script
 				return;
 			}
 			String action = bankAction(context, object);
-			HoverResult result = hoverClick(context, "bank@" + object.getWorldLocation(), () -> input.hover(object),
+			HoverResult result = hoverClick(context, "bank@" + object.getWorldLocation(), () -> input.hoverCenter(object),
 				entry -> optionIs(entry, action), action);
 			if (result == HoverResult.GAVE_UP)
 			{
-				// Left click kept showing something else: run the exact
-				// object action instead.
-				log.info("[BowFletcher bank] top option never '{}', using the exact {} action", action, action);
-				input.interact(object, action);
-				result = HoverResult.CLICKED;
+				// Left click kept showing something else: never act
+				// invisibly. Turn the camera toward it and re-aim.
+				++attempts;
+				log.info("[BowFletcher bank] top option never '{}' on the booth (try {}/{}), turning camera and re-aiming",
+					action, attempts, BANK_OPEN_ATTEMPTS);
+				input.turnCameraToward(object.getWorldLocation());
+				return;
 			}
 			if (result == HoverResult.CLICKED)
 			{
@@ -470,8 +478,11 @@ public final class BowFletcherScript extends Script
 			entry -> optionIs(entry, "Bank"), "Bank");
 		if (result == HoverResult.GAVE_UP)
 		{
-			input.interact(banker, "Bank");
-			result = HoverResult.CLICKED;
+			++attempts;
+			log.info("[BowFletcher bank] top option never 'Bank' on the banker (try {}/{}), turning camera and re-aiming",
+				attempts, BANK_OPEN_ATTEMPTS);
+			input.turnCameraToward(banker.getWorldLocation());
+			return;
 		}
 		if (result == HoverResult.CLICKED)
 		{

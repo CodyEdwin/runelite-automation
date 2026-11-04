@@ -403,7 +403,8 @@ pay-dirt, deposits it in the hopper, empties the sack and banks the ores.
 - **Clicks:** the sack and ladder use a verified left click: curved move onto the dead centre of the
   object's hull, then (next tick) the centre is recomputed and the click is sent only if the cursor
   is still on the hull, within 6 px of the centre, and the top option is `Search … Sack` /
-  `Climb … Ladder`. After 4 misses it uses the object's own option. Ladder: up to 8 clicks, each
+  `Climb … Ladder`. After 4 misses it turns the camera and walks a step closer, then re-aims; after 3 such
+  recoveries it halts with a log. It never runs an action without a visible click. Ladder: up to 8 clicks, each
   waits for the floor change before re-clicking. Veins, hopper, strut, crate and bank chest are
   clicked at their hull centre too (no random offset).
 - **Sack full:** sack space = 108 (189 with the bigger sack) minus the sack varbit and pay-dirt
@@ -411,6 +412,11 @@ pay-dirt, deposits it in the hopper, empties the sack and banks the ores.
   the pay-dirt is dropped (first drop verified as `Drop Pay-dirt`, left-click Drop) and it goes
   to empty the sack (`[MotherlodeMiner] sack full, dropping N extra pay-dirt`).
 - **Camera:** no random camera nudges; it only turns when a target is off screen.
+- **Physical clicks only:** Motherlode Miner, Bow Fletcher and Gem Cutter run with
+  `GameInput.setPhysicalOnly(true)`: every helper that would run a menu action directly
+  (`client.menuAction`) refuses and logs `[GameInput] refused direct menu action`. Bank chest,
+  hammer withdraw, sack, ladder, hopper, veins, strut and crate are all hover → verify top
+  option → real click; each bank-open attempt logs the cursor vs the hull centre.
 - Log lines start with `[MotherlodeMiner]`.
 
 ## Panel and commands
