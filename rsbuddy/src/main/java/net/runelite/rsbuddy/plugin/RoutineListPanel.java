@@ -162,10 +162,7 @@ public final class RoutineListPanel extends PluginPanel
 		overlayToggle = new JCheckBox("Show routine overlay");
 		overlayToggle.setOpaque(false);
 		overlayToggle.setForeground(ColorScheme.TEXT_COLOR);
-		overlayToggle.setFont(FontManager.getRunescapeSmallFont());
-		overlayToggle.setFocusPainted(false);
 		overlayToggle.setSelected(config.showRoutineOverlay());
-		overlayToggle.setToolTipText("Draw the running routine's overlay. Saved between restarts.");
 		overlayToggle.addActionListener(event ->
 			preferences.set(RSBuddyConfig.SHOW_ROUTINE_OVERLAY, overlayToggle.isSelected()));
 

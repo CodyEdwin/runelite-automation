@@ -26,51 +26,41 @@ package net.runelite.rsbuddy.plugin;
 
 import java.awt.Color;
 import java.awt.Dimension;
+import java.awt.FontMetrics;
 import java.awt.Graphics2D;
+import java.util.List;
 import javax.inject.Inject;
+import net.runelite.client.ui.FontManager;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
-import net.runelite.rsbuddy.routine.LineRoutineOverlay;
 import net.runelite.rsbuddy.routine.Routine;
 import net.runelite.rsbuddy.routine.RoutineManager;
-import net.runelite.rsbuddy.routine.RoutineOverlay;
 
 /**
- * Draws the running routine's overlay, and nothing else.
- * <p>
- * Routines opt in with {@link Routine#getOverlay()} (text routines get one
- * from {@link Routine#getOverlayLines()}). No routine, no overlay from that
- * routine, or the side-panel toggle off: this draws nothing.
- * <p>
- * The overlay is free-floating ({@link OverlayPosition#DYNAMIC} and movable)
- * so it can be dragged with Shift, and with RuneLite's overlay drag hotkey.
+ * Draws the running routine's overlay, or nothing.
  */
 public class RSBuddyOverlay extends Overlay
 {
-	private static final Color DRAG_OUTLINE = new Color(255, 170, 60, 200);
+	private static final int PADDING = 6;
+	private static final int LINE_GAP = 2;
+	private static final int PANEL_WIDTH = 280;
+	private static final Color BACKGROUND = new Color(56, 43, 28, 96);
+	private static final Color BORDER = new Color(120, 95, 62, 140);
 
 	private final RSBuddyConfig config;
 	private final RSBuddyPlugin plugin;
 
-	private ShiftDragHandler dragHandler;
-
 	@Inject
-	RSBuddyOverlay(RSBuddyConfig config, RSBuddyPlugin plugin)
+	private RSBuddyOverlay(RSBuddyConfig config, RSBuddyPlugin plugin)
 	{
 		this.config = config;
 		this.plugin = plugin;
 
-		// DYNAMIC clears movable. Turn it back on or RuneLite drops the saved spot.
+		// DYNAMIC clears movable; set it again so Shift-drag and the drag hotkey keep the saved spot.
 		setPosition(OverlayPosition.DYNAMIC);
 		setMovable(true);
 		setLayer(OverlayLayer.ABOVE_WIDGETS);
-	}
-
-	/** Lets the Shift-drag handler draw its hover outline on this overlay. */
-	void setDragHandler(ShiftDragHandler dragHandler)
-	{
-		this.dragHandler = dragHandler;
 	}
 
 	@Override
@@ -88,31 +78,66 @@ public class RSBuddyOverlay extends Overlay
 			return null;
 		}
 
-		RoutineOverlay routineOverlay = active.getOverlay();
-		if (routineOverlay == null)
+		Dimension custom = active.renderOverlay(graphics);
+		if (custom != null)
+		{
+			return custom;
+		}
+
+		List<String> lines = active.getOverlayLines();
+		if (lines == null || lines.isEmpty())
 		{
 			return null;
 		}
 
-		if (routineOverlay instanceof LineRoutineOverlay)
+		graphics.setFont(FontManager.getRunescapeSmallFont());
+		FontMetrics metrics = graphics.getFontMetrics();
+
+		int width = PANEL_WIDTH;
+		int textWidth = width - PADDING * 2;
+		int lineHeight = metrics.getHeight() + LINE_GAP;
+		int height = lines.size() * lineHeight - LINE_GAP + PADDING * 2;
+
+		graphics.setColor(BACKGROUND);
+		graphics.fillRoundRect(0, 0, width, height, 6, 6);
+		graphics.setColor(BORDER);
+		graphics.drawRoundRect(0, 0, width - 1, height - 1, 6, 6);
+
+		Color textColor = config.textColor() == null ? Color.WHITE : config.textColor();
+		int y = PADDING + metrics.getAscent();
+		for (String line : lines)
 		{
-			Color textColor = config.textColor();
-			((LineRoutineOverlay) routineOverlay).setTextColor(textColor == null ? Color.WHITE : textColor);
+			String text = fitText(metrics, line, textWidth);
+			graphics.setColor(Color.BLACK);
+			graphics.drawString(text, PADDING + 1, y + 1);
+			graphics.setColor(textColor);
+			graphics.drawString(text, PADDING, y);
+			y += lineHeight;
 		}
 
-		Dimension dimension = routineOverlay.render(graphics);
-		if (dimension == null || dimension.width <= 0 || dimension.height <= 0)
+		return new Dimension(width, height);
+	}
+
+	private static String fitText(FontMetrics metrics, String text, int maxWidth)
+	{
+		if (text == null)
 		{
-			return null;
+			return "";
 		}
 
-		if (dragHandler != null && dragHandler.isHighlighted(this)
-			&& dimension.width > 4 && dimension.height > 4)
+		if (metrics.stringWidth(text) <= maxWidth)
 		{
-			graphics.setColor(DRAG_OUTLINE);
-			graphics.drawRoundRect(1, 1, dimension.width - 3, dimension.height - 3, 6, 6);
+			return text;
 		}
 
-		return dimension;
+		String ellipsis = "...";
+		int ellipsisWidth = metrics.stringWidth(ellipsis);
+		int end = text.length();
+		while (end > 0 && metrics.stringWidth(text.substring(0, end)) + ellipsisWidth > maxWidth)
+		{
+			--end;
+		}
+
+		return text.substring(0, end) + ellipsis;
 	}
 }

@@ -38,7 +38,7 @@ import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayManager;
 
 /**
- * Shift + drag to move the routine overlay and the XP overlays.
+ * Shift + drag to move the XP overlays.
  * <p>
  * Only listens to the user's real mouse and keyboard through RuneLite's
  * MouseManager/KeyManager; it never injects input. A press is taken (consumed)

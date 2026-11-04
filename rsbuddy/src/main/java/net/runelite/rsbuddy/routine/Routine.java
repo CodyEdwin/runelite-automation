@@ -25,10 +25,11 @@
 package net.runelite.rsbuddy.routine;
 
 import java.awt.Color;
+import java.awt.Dimension;
+import java.awt.Graphics2D;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
-import javax.annotation.Nullable;
 
 /**
  * Base class for RSBuddy routines.
@@ -177,30 +178,19 @@ public abstract class Routine
 		return false;
 	}
 
-	/**
-	 * Text lines for this routine's overlay while it is running.
-	 * <p>
-	 * The default {@link #getOverlay()} shows these lines. Return an empty list
-	 * when there is nothing to draw. Override {@link #getOverlay()} to draw
-	 * something other than text.
-	 */
+	/** Lines drawn while this routine is running. Empty means no text overlay. */
 	public List<String> getOverlayLines()
 	{
 		return Collections.emptyList();
 	}
 
 	/**
-	 * Overlay drawn while this routine is the running one.
-	 * <p>
-	 * Return null to draw nothing. The default builds a text overlay from
-	 * {@link #getOverlayLines()} when that list has visible text. The host
-	 * hides the overlay when this returns null, when no routine is running,
-	 * and when the side-panel overlay toggle is off.
+	 * Custom overlay for this routine. Draw into {@code graphics} and return the
+	 * size, or return null to fall back to {@link #getOverlayLines()}.
 	 */
-	@Nullable
-	public RoutineOverlay getOverlay()
+	public Dimension renderOverlay(Graphics2D graphics)
 	{
-		return LineRoutineOverlay.of(getOverlayLines());
+		return null;
 	}
 
 	/**

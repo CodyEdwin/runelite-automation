@@ -36,8 +36,6 @@ import net.runelite.rsbuddy.plugin.RoofCourse;
 public interface RSBuddyConfig extends Config
 {
 	String GROUP = "testplugin";
-
-	/** Config key for the side-panel overlay toggle. */
 	String SHOW_ROUTINE_OVERLAY = "showRoutineOverlay";
 
 	@ConfigItem(
