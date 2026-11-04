@@ -109,35 +109,12 @@ public interface RSBuddyConfig extends Config
 	}
 
 	@ConfigItem(
-		keyName = "showXpLogger",
-		name = "Show XP logger",
-		description = "Display XP gained, XP per hour, XP to next level and time to level",
-		position = 7
-	)
-	default boolean showXpLogger()
-	{
-		return true;
-	}
-
-	@ConfigItem(
 		keyName = "xpBarAnimations",
 		name = "XP bar animations",
 		description = "Animated XP bars: energy stripes, sheen, twirling embers, sparks and a flash on XP drops",
 		position = 34
 	)
 	default boolean xpBarAnimations()
-	{
-		return true;
-	}
-
-	@ConfigItem(
-		keyName = "xpDropClimb",
-		name = "XP drop climbs to top",
-		description = "The +N xp label flies off the bar and climbs to the top of the screen like the vanilla XP drops"
-			+ " (so the vanilla XP drops can be hidden). Off: a short arc and fade by the bar.",
-		position = 37
-	)
-	default boolean xpDropClimb()
 	{
 		return true;
 	}
