@@ -691,7 +691,8 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		WorldPoint location = context.getPlayerLocation();
-		if (location != null && location.distanceTo2D(vein.getWorldLocation()) > VEIN_WALK_DISTANCE)
+		if (location != null && location.distanceTo2D(vein.getWorldLocation()) > VEIN_WALK_DISTANCE
+			&& !clickableOnScreen(context, vein))
 		{
 			walkLogged(vein.getWorldLocation(), true, WALK_STOP_DISTANCE);
 			setStatus("Walking to a vein");
@@ -756,7 +757,7 @@ public final class MotherlodeMinerScript extends Script
 		if (hopper != null)
 		{
 			WorldPoint hopperLocation = hopper.getWorldLocation();
-			if (location.distanceTo2D(hopperLocation) <= HOPPER_STOP_DISTANCE)
+			if (location.distanceTo2D(hopperLocation) <= HOPPER_STOP_DISTANCE || clickableOnScreen(context, hopper))
 			{
 				state = State.HOPPER;
 				actionAttempts = 0;
@@ -898,7 +899,8 @@ public final class MotherlodeMinerScript extends Script
 		// first only wastes time. Downstairs, close the last few tiles.
 		WorldPoint hopperLocation = hopper.getWorldLocation();
 		if (!upstairs && location != null && hopperLocation != null
-			&& location.distanceTo2D(hopperLocation) > HOPPER_STOP_DISTANCE)
+			&& location.distanceTo2D(hopperLocation) > HOPPER_STOP_DISTANCE
+			&& !clickableOnScreen(context, hopper))
 		{
 			state = State.WALK_TO_HOPPER;
 			setStatus("Walking closer to the hopper");
@@ -1565,7 +1567,8 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		TileObject chest = context.getTargets().findTileObject(BANK_CHEST_ID, OBJECT_REACH + 3).orElse(null);
-		if (chest != null && location.distanceTo2D(chest.getWorldLocation()) <= OBJECT_REACH)
+		if (chest != null && location.distanceTo2D(chest.getWorldLocation()) <= OBJECT_REACH
+			|| chest != null && clickableOnScreen(context, chest))
 		{
 			state = State.BANK;
 			bankStage = null;
@@ -1675,7 +1678,8 @@ public final class MotherlodeMinerScript extends Script
 			}
 
 			WorldPoint location = context.getPlayerLocation();
-			if (location != null && location.distanceTo2D(chest.getWorldLocation()) > OBJECT_REACH)
+			if (location != null && location.distanceTo2D(chest.getWorldLocation()) > OBJECT_REACH
+				&& !clickableOnScreen(context, chest))
 			{
 				walkLogged(chest.getWorldLocation(), true, WALK_STOP_DISTANCE);
 				setStatus("Walking to the bank chest");
@@ -1948,7 +1952,7 @@ public final class MotherlodeMinerScript extends Script
 			return;
 		}
 
-		if (location.distanceTo2D(strut.getWorldLocation()) > STRUT_REACH)
+		if (location.distanceTo2D(strut.getWorldLocation()) > STRUT_REACH && !clickableOnScreen(context, strut))
 		{
 			walkLogged(strut.getWorldLocation(), true, WALK_STOP_DISTANCE);
 			setStatus("Walking to the broken water wheel");
@@ -2158,7 +2162,7 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		WorldPoint ladderLocation = ladder.getWorldLocation();
-		if (location.distanceTo2D(ladderLocation) > WALK_STOP_DISTANCE)
+		if (location.distanceTo2D(ladderLocation) > WALK_STOP_DISTANCE && !clickableOnScreen(context, ladder))
 		{
 			walkLogged(onPlayerPlane(context, ladderLocation), true, WALK_STOP_DISTANCE);
 			setStatus("Walking to the ladder");
@@ -2228,7 +2232,7 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		WorldPoint ladderLocation = ladder.getWorldLocation();
-		if (location.distanceTo2D(ladderLocation) > WALK_STOP_DISTANCE)
+		if (location.distanceTo2D(ladderLocation) > WALK_STOP_DISTANCE && !clickableOnScreen(context, ladder))
 		{
 			walkLogged(onPlayerPlane(context, ladderLocation), true, WALK_STOP_DISTANCE);
 			setStatus("Walking to the ladder");
@@ -2513,12 +2517,18 @@ public final class MotherlodeMinerScript extends Script
 		TileObject crate = findObjectAt(context, CRATE_ID, CRATE_AREA, 2);
 		if (crate == null)
 		{
+			crate = context.getTargets().findTileObject(CRATE_ID, OBJECT_REACH + 5).orElse(null);
+		}
+		if (crate == null)
+		{
 			walkLogged(onPlayerPlane(context, CRATE_AREA), true, WALK_STOP_DISTANCE);
 			setStatus("Walking to the crate");
 			return;
 		}
 
-		if (location.distanceTo2D(crate.getWorldLocation()) > WALK_STOP_DISTANCE)
+		// The crate is right by the ladder: click it directly (which walks
+		// there by itself); only walk when it is genuinely off screen.
+		if (location.distanceTo2D(crate.getWorldLocation()) > WALK_STOP_DISTANCE && !clickableOnScreen(context, crate))
 		{
 			walkLogged(crate.getWorldLocation(), true, WALK_STOP_DISTANCE);
 			setStatus("Walking to the crate");
@@ -2526,7 +2536,7 @@ public final class MotherlodeMinerScript extends Script
 		}
 
 		GameInput input = context.getInput();
-		if (input.isBusy() || isMoving(context))
+		if (input.isBusy())
 		{
 			setStatus("Waiting to search the crate");
 			return;
@@ -2550,6 +2560,16 @@ public final class MotherlodeMinerScript extends Script
 		{
 			cooldown = 0;
 		}
+	}
+
+	/**
+	 * @return true when the object has a clickable point on screen (not off
+	 * the viewport or under an interface), so it can be clicked directly
+	 * instead of walking to it first
+	 */
+	private static boolean clickableOnScreen(ScriptContext context, TileObject object)
+	{
+		return object != null && context.getInput().objectCenter(object) != null;
 	}
 
 	private static WorldPoint onPlayerPlane(ScriptContext context, WorldPoint point)
