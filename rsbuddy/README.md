@@ -406,6 +406,10 @@ pay-dirt, deposits it in the hopper, empties the sack and banks the ores.
   `Climb … Ladder`. After 4 misses it uses the object's own option. Ladder: up to 8 clicks, each
   waits for the floor change before re-clicking. Veins, hopper, strut, crate and bank chest are
   clicked at their hull centre too (no random offset).
+- **Sack full:** sack space = 108 (189 with the bigger sack) minus the sack varbit and pay-dirt
+  still washing. If the hopper takes only part of a load, or the sack is already full, the rest of
+  the pay-dirt is dropped (first drop verified as `Drop Pay-dirt`, left-click Drop) and it goes
+  to empty the sack (`[MotherlodeMiner] sack full, dropping N extra pay-dirt`).
 - **Camera:** no random camera nudges; it only turns when a target is off screen.
 - Log lines start with `[MotherlodeMiner]`.
 

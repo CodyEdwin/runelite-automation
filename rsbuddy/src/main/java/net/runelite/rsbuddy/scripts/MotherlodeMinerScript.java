@@ -230,6 +230,10 @@ public final class MotherlodeMinerScript extends Script
 	private int itemsBeforeSearch;
 	private int levelUpDismissAttempts;
 	private String verifyKey;
+	private boolean droppingExtras;
+	private boolean dropVerified;
+	private boolean dropHovered;
+	private int payDirtAtClick;
 	private boolean verifyHovered;
 	private int verifyMisses;
 	private int sackZeroTicks;
@@ -297,6 +301,10 @@ public final class MotherlodeMinerScript extends Script
 		itemsBeforeSearch = 0;
 		levelUpDismissAttempts = 0;
 		verifyKey = null;
+		droppingExtras = false;
+		dropVerified = false;
+		dropHovered = false;
+		payDirtAtClick = 0;
 		verifyHovered = false;
 		verifyMisses = 0;
 		sackZeroTicks = 0;
@@ -661,35 +669,16 @@ public final class MotherlodeMinerScript extends Script
 		// downstairs and empty it, then come back up. This is the only
 		// reason to leave the upper level.
 		int carriedPayDirt = inventory.countItem(ItemID.PAYDIRT);
+		if (droppingExtras)
+		{
+			dropExtras(context, carriedPayDirt);
+			return;
+		}
 		if (carriedPayDirt > 0 && sackContents >= sackCapacity && !sackKnownEmpty)
 		{
-			depositClickSent = false;
-			payDirtDeposited = false;
-			actionAttempts = 0;
-			searchClicks = 0;
-			walker.reset();
-			if (inventory.getEmptySlots() == 0)
-			{
-				// The sack has to be emptied, but the inventory is full of
-				// pay-dirt, so free one slot first (the search needs a place
-				// to put the ores).
-				if (dropOnePayDirt(context))
-				{
-					cooldown = CLICK_COOLDOWN;
-				}
-				setStatus("Dropping pay-dirt to empty the sack");
-			}
-			else if (upstairs)
-			{
-				state = State.CLIMB_DOWN;
-				climbAttempts = 0;
-				setStatus("Climbing down to empty the sack");
-			}
-			else
-			{
-				state = State.WALK_TO_SACK;
-				setStatus("Walking to the sack");
-			}
+			// The sack (plus what is still washing) cannot take this load:
+			// drop it so the sack/bank loop is not blocked.
+			startDroppingExtras(carriedPayDirt, "sack full before the hopper");
 			return;
 		}
 
@@ -737,6 +726,18 @@ public final class MotherlodeMinerScript extends Script
 			&& System.currentTimeMillis() - depositClickedAt < DEPOSIT_SETTLE_MS)
 		{
 			setStatus("Depositing pay-dirt");
+			return;
+		}
+
+		// The hopper took only part of the load: the sack is full. Drop the
+		// rest and go empty the sack.
+		if (depositClickSent && payDirtAtClick > 0 && lastPayDirtCount < payDirtAtClick)
+		{
+			depositedSinceEmpty += payDirtAtClick - lastPayDirtCount;
+			sackKnownEmpty = false;
+			payDirtDeposited = true;
+			startDroppingExtras(lastPayDirtCount, "hopper took " + (payDirtAtClick - lastPayDirtCount)
+				+ " of " + payDirtAtClick);
 			return;
 		}
 
@@ -809,8 +810,10 @@ public final class MotherlodeMinerScript extends Script
 		input.stopCamera();
 		++actionAttempts;
 
+		int carriedNow = inventory.countItem(ItemID.PAYDIRT);
 		if (input.clickCenter(hopper) || input.interact(hopper, "Deposit"))
 		{
+			payDirtAtClick = carriedNow;
 			depositClickSent = true;
 			washXpAtDeposit = context.getClient().getSkillExperience(Skill.MINING);
 			depositClickedAt = System.currentTimeMillis();
@@ -821,6 +824,105 @@ public final class MotherlodeMinerScript extends Script
 		{
 			cooldown = 1;
 		}
+	}
+
+	private void startDroppingExtras(int count, String reason)
+	{
+		log.info("[MotherlodeMiner] sack full, dropping {} extra pay-dirt ({}; sack {}/{})", count, reason,
+			sackContents, sackCapacity);
+		droppingExtras = true;
+		dropHovered = false;
+		depositClickSent = false;
+		payDirtAtClick = 0;
+		actionAttempts = 0;
+		setStatus("Sack full: dropping " + count + " extra pay-dirt");
+	}
+
+	/**
+	 * Drops every pay-dirt left after the hopper is full, then goes to empty
+	 * the sack. The first drop is a verified left click ("Drop Pay-dirt" on
+	 * top); after that the slots are clicked directly. Capped per load.
+	 */
+	private void dropExtras(ScriptContext context, int carried)
+	{
+		if (carried == 0)
+		{
+			log.info("[MotherlodeMiner] extra pay-dirt dropped, going to empty the sack");
+			droppingExtras = false;
+			payDirtDeposited = true;
+			walker.reset();
+			actionAttempts = 0;
+			searchClicks = 0;
+			if (upstairs)
+			{
+				state = State.CLIMB_DOWN;
+				climbAttempts = 0;
+				setStatus("Climbing down to empty the sack");
+			}
+			else
+			{
+				state = State.WALK_TO_SACK;
+				setStatus("Walking to the sack");
+			}
+			return;
+		}
+
+		GameInput input = context.getInput();
+		if (input.isBusy())
+		{
+			return;
+		}
+		if (++actionAttempts > 28 * 3)
+		{
+			log.info("[MotherlodeMiner] could not drop the extra pay-dirt ({} left), emptying the sack anyway", carried);
+			droppingExtras = false;
+			state = upstairs ? State.CLIMB_DOWN : State.WALK_TO_SACK;
+			climbAttempts = 0;
+			walker.reset();
+			return;
+		}
+
+		Inventory inventory = context.getInventory();
+		if (!inventory.isOpen())
+		{
+			inventory.open();
+			return;
+		}
+		int slot = inventory.findSlot(ItemID.PAYDIRT);
+		Widget item = slot < 0 ? null : inventory.getSlotWidget(slot);
+		if (item == null || item.isHidden())
+		{
+			return;
+		}
+
+		if (!dropVerified)
+		{
+			if (!dropHovered)
+			{
+				dropHovered = input.hover(item);
+				return;
+			}
+			dropHovered = false;
+			MenuEntry entry = input.getLeftClickEntry();
+			String option = entry == null ? "" : GameInput.plainText(entry.getOption()).toLowerCase(Locale.ROOT);
+			String target = entry == null ? "" : GameInput.plainText(entry.getTarget()).toLowerCase(Locale.ROOT);
+			if (!"drop".equals(option) || !target.contains("pay-dirt"))
+			{
+				log.info("[MotherlodeMiner] pay-dirt left click is '{} {}', not 'Drop' - re-aiming", option, target);
+				return;
+			}
+			Point mouse = input.getMouseLocation();
+			if (mouse != null && input.click(mouse))
+			{
+				dropVerified = true;
+			}
+			setStatus("Dropping extra pay-dirt (" + carried + " left)");
+			return;
+		}
+
+		// Left click is confirmed as Drop: click the next pay-dirt slot.
+		input.click(item);
+		setStatus("Dropping extra pay-dirt (" + carried + " left)");
 	}
 
 	private void walkToSack(ScriptContext context)
