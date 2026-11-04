@@ -997,11 +997,11 @@ public final class MotherlodeMinerScript extends Script
 		input.stopCamera();
 		itemsBeforeSearch = countInventoryItems(inventory);
 
-		// The sack is sometimes hidden behind the water wheel. If a normal
-		// click did not collect anything, invoke its Search option directly.
-		boolean clicked = searchMisses > 0 || sackCameraTurns > 3
-			? input.invokeObjectAction(sack, "Search")
-			: input.interact(sack, "Search") || input.click(sack);
+		// Run the sack's exact Search option. A raw click can land on the
+		// water wheel or a neighbouring object and walk instead of searching.
+		boolean clicked = input.invokeObjectAction(sack, "Search")
+			|| input.interact(sack, "Search")
+			|| input.click(sack);
 
 		if (clicked)
 		{
@@ -1020,6 +1020,10 @@ public final class MotherlodeMinerScript extends Script
 	{
 		payDirtDeposited = false;
 		searchClicks = 0;
+		// The descent collection is done once we leave the sack. If this flag
+		// stays set, the bank-exit path walks straight back to the sack and
+		// repeatedly searches an already empty sack.
+		collectingSack = false;
 		// The sack is emptied (or left with only what is still in it), so
 		// the local deposit count starts again from the live value.
 		sackBase = lastLiveSack;
