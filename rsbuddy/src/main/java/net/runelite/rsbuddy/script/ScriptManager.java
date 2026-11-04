@@ -131,7 +131,10 @@ public final class ScriptManager
 		activeScript = script;
 		context.getInput().setGroundItemPickupFilter(script.getGroundItemPickupFilter());
 		context.getInput().setFastMouse(script.useFastMouse());
-		context.getInput().setPhysicalOnly(script.physicalInputOnly());
+		// Real visible clicks only for every script. The GE flipper is being
+		// rebuilt as an input-free window and is left as it was.
+		boolean exempt = "net.runelite.rsbuddy.scripts.GrandExchangeFlipperScript".equals(script.getClass().getName());
+		context.getInput().setPhysicalOnly(!exempt);
 
 		try
 		{

@@ -40,6 +40,7 @@ import javax.swing.DefaultListCellRenderer;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
+import net.runelite.rsbuddy.script.ScriptSetting;
 import net.runelite.rsbuddy.input.backend.InputBackendType;
 import javax.swing.JLabel;
 import javax.swing.JList;
@@ -647,6 +648,46 @@ public final class TestPluginPanel extends PluginPanel
 
 			scriptSettingsHint.setText("<html>Choose the course before pressing Start. The script reads it "
 				+ "when it begins, so changing it while running has no effect until the next start.</html>");
+			hasSettings = true;
+		}
+
+		if (!hasSettings && script != null && !script.getScriptSettings().isEmpty())
+		{
+			// Settings a script declares itself (ScriptSetting).
+			for (ScriptSetting setting : script.getScriptSettings())
+			{
+				String key = setting.getKey();
+				Supplier<String> stored = () ->
+				{
+					String value = configManager.getConfiguration(TestConfig.GROUP, key);
+					return value == null ? setting.getDefaultValue() : value;
+				};
+				switch (setting.getType())
+				{
+					case BOOLEAN:
+						addCheckSetting(setting.getLabel(), setting.getTooltip(), key,
+							() -> Boolean.parseBoolean(stored.get()));
+						break;
+					case INTEGER:
+						addSpinnerSetting(setting.getLabel(), setting.getTooltip(), key, () ->
+						{
+							try
+							{
+								return Integer.parseInt(stored.get().trim());
+							}
+							catch (NumberFormatException ex)
+							{
+								return 0;
+							}
+						});
+						break;
+					default:
+						addTextSetting(setting.getLabel(), stored.get(),
+							value -> configManager.setConfiguration(TestConfig.GROUP, key, value));
+						break;
+				}
+			}
+			scriptSettingsHint.setText("");
 			hasSettings = true;
 		}
 

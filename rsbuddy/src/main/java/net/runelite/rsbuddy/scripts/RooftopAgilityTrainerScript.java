@@ -1441,6 +1441,18 @@ public final class RooftopAgilityTrainerScript extends Script
 		int sceneX = local.getSceneX();
 		int sceneY = local.getSceneY();
 
+		if (context.getClient().isMenuOpen())
+		{
+			// Our right-click on the mark is open: click its exact Take row
+			// (closes the menu and returns false when there is none).
+			if (context.getInput().clickGroundItemMenuRow(ItemID.GRACE, sceneX, sceneY))
+			{
+				markTaken();
+				return true;
+			}
+			return false;
+		}
+
 		// Keep the cursor on the mark and read the game's own hover menu.
 		// When the item's Take is the left-click option, clicking the cursor
 		// is a real click on the item instead of a guessed menu action.
@@ -1457,11 +1469,12 @@ public final class RooftopAgilityTrainerScript extends Script
 		{
 			// Something else is on top of the mark in the menu. Run the
 			// item's own Take row so the click cannot pick the wrong thing.
-			MenuEntry take = context.getInput().findMenuEntry("Take", ItemID.GRACE);
-			if (take != null && context.getInput().invokeMenu(take))
+			// Real clicks only: right-click on the mark, then click its
+			// exact Take row once the menu is open.
+			if (mouse != null)
 			{
-				markTaken();
-				return true;
+				context.getInput().rightClick(mouse);
+				return false;
 			}
 		}
 

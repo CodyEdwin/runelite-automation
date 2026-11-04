@@ -100,7 +100,17 @@ public abstract class Script
 	 */
 	public boolean physicalInputOnly()
 	{
-		return false;
+		// Every script acts through real, visible clicks only.
+		return true;
+	}
+
+	/**
+	 * Settings this script declares. They appear automatically in the side
+	 * panel under Script settings.
+	 */
+	public List<ScriptSetting> getScriptSettings()
+	{
+		return Collections.emptyList();
 	}
 
 	protected abstract void onGameTick();

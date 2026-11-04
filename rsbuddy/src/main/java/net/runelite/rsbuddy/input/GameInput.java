@@ -1632,6 +1632,10 @@ public final class GameInput
 		{
 			if (actions[i] != null && stripTags(actions[i]).equalsIgnoreCase(stripTags(action)))
 			{
+				if (physicalOnly)
+				{
+					return widgetViaMenu(widget, i, actions[i]);
+				}
 				if (!directActionAllowed("interactStripped"))
 				{
 					return false;
@@ -1698,6 +1702,12 @@ public final class GameInput
 			return false;
 		}
 
+		if (physicalOnly)
+		{
+			// Real clicks only: right-click it, then click the option's row.
+			return interactViaMenu(object, actions);
+		}
+
 		long hash = object.getHash();
 		int sceneX = (int) (hash & 0x7F);
 		int sceneY = (int) ((hash >>> 7) & 0x7F);
@@ -1736,6 +1746,11 @@ public final class GameInput
 		if (type == null)
 		{
 			return false;
+		}
+
+		if (physicalOnly)
+		{
+			return interactViaMenu(object, actions);
 		}
 
 		long hash = object.getHash();
@@ -1848,6 +1863,11 @@ public final class GameInput
 			return click(npc);
 		}
 
+		if (physicalOnly)
+		{
+			return interactViaMenu(npc, action);
+		}
+
 		MenuAction type = npcMenuAction(actionIndex);
 		if (type == null)
 		{
@@ -1904,12 +1924,38 @@ public final class GameInput
 			return false;
 		}
 
+		if (physicalOnly)
+		{
+			return widgetViaMenu(widget, actionIndex, action);
+		}
+
 		if (!directActionAllowed("interact"))
 		{
 			return false;
 		}
 		client.menuAction(-1, widget.getId(), MenuAction.CC_OP, actionIndex + 1, -1, action, "");
 		return true;
+	}
+
+	/**
+	 * Physical widget option: left click when it is the first option,
+	 * otherwise right-click the widget and click the option's row next call.
+	 */
+	private boolean widgetViaMenu(Widget widget, int actionIndex, String action)
+	{
+		if (client.isMenuOpen())
+		{
+			for (MenuEntry entry : currentMenuEntries())
+			{
+				if (entry != null && entry.getParam1() == widget.getId() && matchesOption(entry.getOption(), action))
+				{
+					return clickOpenMenuRow(entry);
+				}
+			}
+			closeMenu();
+			return false;
+		}
+		return actionIndex == 0 ? click(widget) : click(widget, MouseEvent.BUTTON3);
 	}
 
 	/**
@@ -2004,6 +2050,17 @@ public final class GameInput
 		String option = actions != null && actionIndex < actions.length
 			? actions[actionIndex]
 			: withdrawOption;
+
+		if (physicalOnly)
+		{
+			// Real clicks on the visible slot only.
+			if (widget == null || widget.isHidden())
+			{
+				log.info("[GameInput] withdraw {}: item not visible in the open bank tab", itemId);
+				return false;
+			}
+			return widgetViaMenu(widget, actionIndex, option);
+		}
 
 		if (!directActionAllowed("withdrawBankItem"))
 		{
@@ -2154,11 +2211,43 @@ public final class GameInput
 			return false;
 		}
 
+		if (!client.isMenuOpen() || client.isMenuScrollable() || !menuContains(entry))
+		{
+			return invokeMenuEntry(entry);
+		}
+		return clickOpenMenuRow(entry);
+	}
+
+	private boolean menuContains(MenuEntry entry)
+	{
+		net.runelite.api.Menu menu = client.getMenu();
+		MenuEntry[] entries = menu == null ? null : menu.getMenuEntries();
+		if (entries != null)
+		{
+			for (MenuEntry e : entries)
+			{
+				if (e == entry)
+				{
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Visible click on an entry's row in the open context menu. Refuses (and
+	 * logs) when the menu is closed, scrollable or lacks the entry.
+	 */
+	private boolean clickOpenMenuRow(MenuEntry entry)
+	{
 		net.runelite.api.Menu menu = client.getMenu();
 		MenuEntry[] entries = menu == null ? null : menu.getMenuEntries();
 		if (!client.isMenuOpen() || entries == null || entries.length == 0)
 		{
-			return invokeMenuEntry(entry);
+			log.info("[GameInput] refused '{}': no open menu to click (physical clicks only)",
+				entry == null ? "" : plainText(entry.getOption()));
+			return false;
 		}
 
 		int index = -1;
@@ -2173,7 +2262,8 @@ public final class GameInput
 
 		if (index < 0 || client.isMenuScrollable())
 		{
-			return invokeMenuEntry(entry);
+			log.info("[GameInput] refused '{}': entry not clickable in the open menu", plainText(entry.getOption()));
+			return false;
 		}
 
 		int row = entries.length - 1 - index;
@@ -2184,6 +2274,11 @@ public final class GameInput
 
 	private boolean invokeMenuEntry(MenuEntry entry)
 	{
+		if (physicalOnly)
+		{
+			// Real clicks only: click the entry's row in the open menu.
+			return clickOpenMenuRow(entry);
+		}
 		if (!directActionAllowed("invokeMenuEntry"))
 		{
 			return false;
@@ -2376,6 +2471,14 @@ public final class GameInput
 			}
 		}
 
+		if (physicalOnly)
+		{
+			// No Cancel row: move the cursor off the menu, which closes it.
+			net.runelite.api.Menu menu = client.getMenu();
+			int x = menu.getMenuX() > 40 ? menu.getMenuX() - 25 : menu.getMenuX() + menu.getMenuWidth() + 25;
+			int y = menu.getMenuY() + Math.max(10, menu.getMenuHeight() / 2);
+			return moveTo(new Point(x, y));
+		}
 		// Some menus do not include a Cancel row. Run the action directly.
 		if (!directActionAllowed("closeMenu"))
 		{
@@ -2553,7 +2656,7 @@ public final class GameInput
 	public boolean takeGroundItem(int sceneX, int sceneY, int itemId, String itemName)
 	{
 		MenuEntry entry = findGroundItemMenuEntry(itemId, sceneX, sceneY);
-		if (entry != null)
+		if (entry != null && (!physicalOnly || client.isMenuOpen()))
 		{
 			return invokeMenuEntry(entry);
 		}
@@ -2664,6 +2767,10 @@ public final class GameInput
 	 */
 	public boolean invokeGroundItemTake(int sceneX, int sceneY, int itemId, String itemName)
 	{
+		if (physicalOnly)
+		{
+			return takeGroundItem(sceneX, sceneY, itemId, itemName);
+		}
 		if (!directActionAllowed("invokeGroundItemTake"))
 		{
 			return false;

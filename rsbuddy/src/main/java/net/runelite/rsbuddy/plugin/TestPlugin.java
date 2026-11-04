@@ -145,6 +145,7 @@ public class TestPlugin extends Plugin
 		input = new GameInput(client);
 		input.setBackendPreference(config.inputBackend());
 		ScriptContext scriptContext = new ScriptContext(client, input, new TargetLocator(client), new Inventory(client, input));
+		scriptContext.setSettingsSource(key -> configManager.getConfiguration(TestConfig.GROUP, key));
 		scriptManager = new ScriptManager(scriptContext);
 		scriptManager.register(new ObjectInteractScript(
 			config.targetObjectName(),

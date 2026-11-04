@@ -85,4 +85,18 @@ public final class ScriptContext
 	{
 		return client.getGameState() == GameState.LOGGED_IN && getPlayer() != null;
 	}
+
+	private volatile java.util.function.Function<String, String> settings = key -> null;
+
+	/** Where declared script settings are read from (the RSBuddy config group). */
+	public void setSettingsSource(java.util.function.Function<String, String> source)
+	{
+		settings = source == null ? key -> null : source;
+	}
+
+	/** @return the stored value of a declared script setting, or null for the default */
+	public String getSetting(String key)
+	{
+		return settings.apply(key);
+	}
 }
