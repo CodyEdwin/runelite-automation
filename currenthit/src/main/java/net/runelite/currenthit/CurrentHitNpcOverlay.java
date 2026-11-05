@@ -31,10 +31,10 @@ import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
-import java.awt.Point;
 import java.awt.geom.AffineTransform;
 import javax.inject.Inject;
 import net.runelite.api.NPC;
+import net.runelite.api.Point;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
@@ -127,7 +127,7 @@ class CurrentHitNpcOverlay extends Overlay
 		AffineTransform oldTransform = graphics.getTransform();
 		Color oldColor = graphics.getColor();
 
-		graphics.translate(anchor.x, anchor.y - rise);
+		graphics.translate(anchor.getX(), anchor.getY() - rise);
 		graphics.scale(scale, scale);
 		graphics.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, alpha));
 		graphics.setFont(hitFont);

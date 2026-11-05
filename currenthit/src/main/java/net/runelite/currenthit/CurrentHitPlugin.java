@@ -48,9 +48,6 @@ public class CurrentHitPlugin extends Plugin
 	private OverlayManager overlayManager;
 
 	@Inject
-	private CurrentHitConfig config;
-
-	@Inject
 	private CurrentHitOverlay overlay;
 
 	@Inject
