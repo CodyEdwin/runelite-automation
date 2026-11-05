@@ -191,6 +191,8 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 		CLIMB_UP,
 		CLIMB_DOWN,
 		SEARCH_CRATE,
+		DROP_HAMMER,
+		PICKUP_PAYDIRT,
 		HALTED
 	}
 
@@ -223,6 +225,13 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 	private boolean hammerHovered;
 	private boolean repairAfterDescent;
 	private boolean collectingSack;
+	private boolean repairFromUpstairs;
+	private boolean repairReturn;
+	private boolean upperDropPending;
+	private WorldPoint droppedPayDirtAt;
+	private int upperRepairAttempts;
+	private int pickupAttempts;
+	private int pickupStartCount;
 	private int crateAttempts;
 	private int climbAttempts;
 	private int climbWaitTicks;
@@ -251,6 +260,7 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 	private TileObject currentVein;
 	private int miningLevel = -1;
 	private long lastMineClickAt;
+	private long mineFastUntil;
 
 	private boolean depositClickSent;
 	private boolean sackKnownEmpty;
@@ -313,6 +323,13 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 		hammerHovered = false;
 		repairAfterDescent = false;
 		collectingSack = false;
+		repairFromUpstairs = false;
+		repairReturn = false;
+		upperDropPending = false;
+		droppedPayDirtAt = null;
+		upperRepairAttempts = 0;
+		pickupAttempts = 0;
+		pickupStartCount = 0;
 		crateAttempts = 0;
 		climbAttempts = 0;
 		climbWaitTicks = 0;
@@ -330,6 +347,7 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 		currentVein = null;
 		miningLevel = -1;
 		lastMineClickAt = 0;
+		mineFastUntil = 0;
 		depositClickSent = false;
 		sackKnownEmpty = false;
 		payDirtDeposited = false;
@@ -484,6 +502,10 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 				trigger = open && (bankStage == null
 					|| bankStage == BankStage.WAIT_DEPOSIT && countInventoryItems(context.getInventory()) == 0);
 			}
+			else if (state == State.MINE && System.currentTimeMillis() < mineFastUntil)
+			{
+				trigger = true;
+			}
 			else
 			{
 				trigger = state == State.SACK && searchWait > 0
@@ -548,6 +570,12 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 				break;
 			case SEARCH_CRATE:
 				searchCrate(context);
+				break;
+			case DROP_HAMMER:
+				dropHammer(context);
+				break;
+			case PICKUP_PAYDIRT:
+				pickUpPayDirt(context);
 				break;
 			case HALTED:
 			default:
@@ -782,6 +810,22 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 	{
 		Inventory inventory = context.getInventory();
 
+		// A broken water wheel makes the hopper refuse pay-dirt. Go down,
+		// fetch a hammer, fix the wheels, then come back up for the dropped
+		// pay-dirt instead of retrying an unresponsive hopper forever.
+		if (upstairs && !repairFromUpstairs)
+		{
+			if (findBrokenStrut(context) == null)
+			{
+				upperRepairAttempts = 0;
+			}
+			else if (upperRepairAttempts < 3)
+			{
+				beginUpperRepair(context, inventory);
+				return;
+			}
+		}
+
 		// The sack is full: the hopper cannot take any more pay-dirt. Go
 		// downstairs and empty it, then come back up. This is the only
 		// reason to leave the upper level.
@@ -826,8 +870,9 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 				}
 				else
 				{
-					state = State.WALK_TO_VEIN;
-					setStatus("Walking back to the veins");
+					state = State.MINE;
+					mineFastUntil = System.currentTimeMillis() + 2000L;
+					setStatus("Mining pay-dirt");
 				}
 			}
 			else
@@ -943,6 +988,46 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 		{
 			cooldown = 0;
 		}
+	}
+
+	private void beginUpperRepair(RoutineContext context, Inventory inventory)
+	{
+		GameInput input = context.getInput();
+		if (inventory.getEmptySlots() == 0)
+		{
+			if (upperDropPending)
+			{
+				if (++actionAttempts > 10)
+				{
+					upperDropPending = false;
+					actionAttempts = 0;
+				}
+				setStatus("Waiting for pay-dirt to drop");
+				return;
+			}
+
+			WorldPoint location = context.getPlayerLocation();
+			if (inventory.countItem(ItemID.PAYDIRT) > 0 && dropOnePayDirt(context))
+			{
+				upperDropPending = true;
+				droppedPayDirtAt = location;
+				cooldown = CLICK_COOLDOWN;
+			}
+			setStatus("Dropping pay-dirt to make room for a hammer");
+			return;
+		}
+
+		upperDropPending = false;
+		actionAttempts = 0;
+		++upperRepairAttempts;
+		repairFromUpstairs = true;
+		repairAfterDescent = true;
+		collectingSack = false;
+		state = State.CLIMB_DOWN;
+		climbAttempts = 0;
+		climbWaitTicks = 0;
+		walker.reset();
+		setStatus("Climbing down to fix the water wheels");
 	}
 
 	private void startDroppingExtras(int count, String reason)
@@ -1897,6 +1982,14 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 		wheelAttempts = 0;
 		bankPurpose = BankPurpose.DEPOSIT;
 
+		if (repairFromUpstairs)
+		{
+			repairAfterDescent = false;
+			state = State.DROP_HAMMER;
+			setStatus("Dropping the hammer");
+			return;
+		}
+
 		if (repairAfterDescent)
 		{
 			repairAfterDescent = false;
@@ -1937,6 +2030,107 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 		// Pay-dirt's left-click option is set to Drop, so a plain click on the
 		// slot drops it, just like a player would.
 		return input.click(item);
+	}
+
+	private void dropHammer(RoutineContext context)
+	{
+		Inventory inventory = context.getInventory();
+		if (inventory.countItem(ItemID.HAMMER) == 0 || ++actionAttempts > 20)
+		{
+			actionAttempts = 0;
+			repairFromUpstairs = false;
+			repairReturn = true;
+			state = State.CLIMB_UP;
+			climbAttempts = 0;
+			climbWaitTicks = 0;
+			walker.reset();
+			setStatus("Climbing up to pick up the dropped pay-dirt");
+			return;
+		}
+
+		GameInput input = context.getInput();
+		if (input.isBusy())
+		{
+			setStatus("Moving mouse");
+			return;
+		}
+		if (!inventory.isOpen())
+		{
+			inventory.open();
+			return;
+		}
+
+		int slot = inventory.findSlot(ItemID.HAMMER);
+		Widget hammer = slot < 0 ? null : inventory.getSlotWidget(slot);
+		if (hammer == null || hammer.isHidden())
+		{
+			return;
+		}
+
+		// The hammer's left-click option is Drop, so a plain click frees the
+		// slot without a menu.
+		if (input.click(hammer))
+		{
+			cooldown = CLICK_COOLDOWN;
+		}
+		setStatus("Dropping the hammer");
+	}
+
+	private void pickUpPayDirt(RoutineContext context)
+	{
+		Inventory inventory = context.getInventory();
+		if (droppedPayDirtAt == null
+			|| inventory.countItem(ItemID.PAYDIRT) > pickupStartCount
+			|| ++pickupAttempts > 30)
+		{
+			droppedPayDirtAt = null;
+			pickupAttempts = 0;
+			state = State.HOPPER;
+			setStatus("Depositing pay-dirt");
+			return;
+		}
+
+		GameInput input = context.getInput();
+		if (input.isBusy())
+		{
+			setStatus("Moving mouse");
+			return;
+		}
+
+		WorldPoint location = context.getPlayerLocation();
+		if (location == null)
+		{
+			return;
+		}
+
+		if (location.distanceTo2D(droppedPayDirtAt) > 1)
+		{
+			walkLogged(droppedPayDirtAt, true, 1);
+			setStatus("Walking to the dropped pay-dirt");
+			return;
+		}
+
+		LocalPoint local = LocalPoint.fromWorld(context.getClient(), droppedPayDirtAt);
+		if (local == null)
+		{
+			droppedPayDirtAt = null;
+			state = State.HOPPER;
+			setStatus("Depositing pay-dirt");
+			return;
+		}
+
+		if (!input.takeGroundItem(local.getSceneX(), local.getSceneY(), ItemID.PAYDIRT, "Pay-dirt"))
+		{
+			if (!input.isCameraBusy())
+			{
+				input.turnCameraToward(droppedPayDirtAt);
+			}
+			setStatus("Looking for the dropped pay-dirt");
+			return;
+		}
+
+		cooldown = 1;
+		setStatus("Picking up the dropped pay-dirt");
 	}
 
 	private TileObject findBrokenStrut(RoutineContext context)
@@ -1999,6 +2193,33 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 		setStatus("Walking back to the veins");
 	}
 
+	private void arriveUpstairs(RoutineContext context)
+	{
+		walker.reset();
+		climbAttempts = 0;
+		climbWaitTicks = 0;
+
+		if (repairReturn)
+		{
+			repairReturn = false;
+			Inventory inventory = context.getInventory();
+			if (droppedPayDirtAt != null)
+			{
+				pickupStartCount = inventory.countItem(ItemID.PAYDIRT);
+				pickupAttempts = 0;
+				state = State.PICKUP_PAYDIRT;
+				setStatus("Picking up the dropped pay-dirt");
+				return;
+			}
+			state = State.HOPPER;
+			setStatus("Depositing pay-dirt");
+			return;
+		}
+
+		state = State.MINE;
+		setStatus("Mining pay-dirt");
+	}
+
 	private void climbUp(RoutineContext context)
 	{
 		WorldPoint location = context.getPlayerLocation();
@@ -2009,11 +2230,7 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 
 		if (isUpstairs(context))
 		{
-			walker.reset();
-			climbAttempts = 0;
-			climbWaitTicks = 0;
-			state = State.MINE;
-			setStatus("Mining pay-dirt");
+			arriveUpstairs(context);
 			return;
 		}
 
@@ -2022,11 +2239,7 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 			--climbWaitTicks;
 			if (isUpstairs(context))
 			{
-				walker.reset();
-				climbAttempts = 0;
-				climbWaitTicks = 0;
-				state = State.MINE;
-				setStatus("Mining pay-dirt");
+				arriveUpstairs(context);
 				return;
 			}
 
@@ -2314,7 +2527,8 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 		return state == State.MINE
 			|| state == State.WALK_TO_VEIN
 			|| state == State.WALK_TO_HOPPER
-			|| state == State.HOPPER;
+			|| state == State.HOPPER
+			|| state == State.PICKUP_PAYDIRT;
 	}
 
 	private void beginAfterDescent(RoutineContext context)
@@ -2325,13 +2539,25 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 		wheelAttempts = 0;
 		hammerUnavailable = false;
 		repairAfterDescent = true;
-		collectingSack = true;
+		collectingSack = !repairFromUpstairs;
 
 		if (findBrokenStrut(context) == null)
 		{
 			repairAfterDescent = false;
-			state = State.WALK_TO_SACK;
-			setStatus("Walking to the sack");
+			if (repairFromUpstairs)
+			{
+				repairReturn = true;
+				repairFromUpstairs = false;
+				state = State.CLIMB_UP;
+				climbAttempts = 0;
+				climbWaitTicks = 0;
+				setStatus("Climbing back up");
+			}
+			else
+			{
+				state = State.WALK_TO_SACK;
+				setStatus("Walking to the sack");
+			}
 			return;
 		}
 
@@ -2392,6 +2618,17 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 		if (crateAttempts > ACTION_ATTEMPTS * 2)
 		{
 			repairAfterDescent = false;
+			if (repairFromUpstairs)
+			{
+				repairFromUpstairs = false;
+				repairReturn = true;
+				state = State.CLIMB_UP;
+				climbAttempts = 0;
+				climbWaitTicks = 0;
+				walker.reset();
+				setStatus("Climbing back up");
+				return;
+			}
 			state = State.WALK_TO_SACK;
 			walker.reset();
 			actionAttempts = 0;
@@ -2669,6 +2906,15 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 	private static boolean hasBankableItems(Inventory inventory)
 	{
 		return countInventoryItems(inventory) > 0;
+	}
+
+	@Override
+	public java.util.Set<Integer> getGroundItemPickupFilter()
+	{
+		// The only ground item this script ever drops on purpose is the
+		// pay-dirt used to make room for a hammer. Keeping Take as its
+		// left-click lets the repair trip pick it back up with one click.
+		return java.util.Collections.singleton(ItemID.PAYDIRT);
 	}
 
 	@Override
