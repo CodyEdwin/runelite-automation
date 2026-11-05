@@ -33,6 +33,7 @@ include("client")
 project(":client").projectDir = file("./runelite-client")
 include("rsbuddy")
 include("xplogger")
+include("fullscreen")
 apply(from = "./common.settings.gradle.kts")
 
 includeBuild("cache")
