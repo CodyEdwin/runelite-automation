@@ -835,14 +835,6 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 			dropExtras(context, carriedPayDirt);
 			return;
 		}
-		if (carriedPayDirt > 0 && sackContents >= sackCapacity && !sackKnownEmpty)
-		{
-			// The sack (plus what is still washing) cannot take this load:
-			// drop it so the sack/bank loop is not blocked.
-			startDroppingExtras(carriedPayDirt, "sack full before the hopper");
-			return;
-		}
-
 		if (inventory.countItem(ItemID.PAYDIRT) == 0)
 		{
 			if (depositClickSent)
@@ -914,10 +906,11 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 			searchClicks = 0;
 			if (upstairs)
 			{
-				// Only reached when clicking from the veins did not deposit
-				// anything, so close the gap instead of leaving the level.
-				state = State.WALK_TO_HOPPER;
-				setStatus("Walking closer to the hopper");
+				// The hopper refused the load even after several attempts,
+				// so the sack really is full. Go down and empty it.
+				state = State.CLIMB_DOWN;
+				climbAttempts = 0;
+				setStatus("Climbing down to empty the sack");
 			}
 			else
 			{
