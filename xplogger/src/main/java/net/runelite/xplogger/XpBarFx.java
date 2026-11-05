@@ -293,7 +293,6 @@ public final class XpBarFx
 	private final float[] webPulse = new float[WEB_MAX_NODES];
 	private final Path2D.Float webPath = new Path2D.Float();
 	private final Path2D.Float webBrightPath = new Path2D.Float();
-	private final RoundRectangle2D.Float webClip = new RoundRectangle2D.Float();
 	private final float[] glowStops = {0f, 0.35f, 1f};
 	private final Color[] glowColors = new Color[3];
 	private final float[] sheenStops = {0f, 0.5f, 1f};
@@ -497,7 +496,7 @@ public final class XpBarFx
 					? 1f - (now - bar.pulseAt) / (float) PULSE_NANOS : 0f;
 				Color webBase = quantumWebColor != null ? quantumWebColor : base;
 				Color webHot = quantumWebColor != null ? mix(quantumWebColor, Color.WHITE, 0.6f) : hot;
-				drawQuantumWeb(g, x, y, fill, h, t, key, webBase, webHot, quantumWebStrength, webFlare);
+				drawQuantumWeb(g, x, y, w, h, t, key, webBase, webHot, quantumWebStrength, webFlare);
 			}
 			updateSparks(bar, x + fill, y, h, dt, intensity);
 			// Glow only while the spark burst is flying: full when it fires,
@@ -653,61 +652,86 @@ public final class XpBarFx
 		g.setComposite(AlphaComposite.SrcOver);
 	}
 
-	/** Dense animated web of filaments and glowing nodes inside the fill. */
-	private void drawQuantumWeb(Graphics2D g, int x, int y, float fill, int h, double t, String key,
+	/** Random, organic web of filaments and glowing motes wrapping around the bar. */
+	private void drawQuantumWeb(Graphics2D g, int x, int y, int w, int h, double t, String key,
 		Color base, Color hot, float strength, float flare)
 	{
-		int cols = Math.max(4, Math.round(fill / 16f));
-		int rows = Math.max(2, Math.round(h / 7f));
-		int n = Math.min(WEB_MAX_NODES, cols * rows);
+		int seed = key.hashCode();
+		int n = Math.min(WEB_MAX_NODES, Math.max(26, Math.round((w + h * 2f) / 7f)));
 		if (n < 4)
 		{
 			return;
 		}
-		float cw = fill / cols;
-		float ch = (float) h / rows;
-		int seed = key.hashCode();
+		float padX = h * 0.9f;
+		float padY = h * 0.65f;
 		for (int i = 0; i < n; i++)
 		{
-			int c = i % cols;
-			int r = i / cols;
-			double ph = seed * 0.001 + c * 0.7 + r * 1.3;
-			webX[i] = x + (c + 0.5f) * cw + (float) Math.sin(t * 1.3 + ph) * cw * 0.3f;
-			webY[i] = y + (r + 0.5f) * ch + (float) Math.cos(t * 1.7 + ph * 1.1) * ch * 0.3f;
-			webPulse[i] = (float) (0.5 + 0.5 * Math.sin(t * (2.0 + (i % 5) * 0.25) + ph));
+			float rx = hash01(seed + i * 7919);
+			float ry = hash01(seed + i * 104729 + 17);
+			double ph = hash01(seed + i * 1543 + 3) * Math.PI * 2;
+			webX[i] = x - padX + rx * (w + padX * 2f)
+				+ (float) Math.sin(t * (0.5 + rx) + ph) * h * 0.18f;
+			webY[i] = y - padY + ry * (h + padY * 2f)
+				+ (float) Math.cos(t * (0.6 + ry) + ph * 1.3) * h * 0.18f;
+			webPulse[i] = (float) (0.5 + 0.5 * Math.sin(t * (1.6 + ph * 0.2) + ph));
 		}
 		webPath.reset();
 		webBrightPath.reset();
 		for (int i = 0; i < n; i++)
 		{
-			int c = i % cols;
-			for (int k = 0; k < 4; k++)
+			// Join each node to its three nearest neighbours: organic, never a grid.
+			float best = Float.MAX_VALUE;
+			float second = Float.MAX_VALUE;
+			float third = Float.MAX_VALUE;
+			int bi = -1;
+			int si = -1;
+			int ti = -1;
+			for (int j = 0; j < n; j++)
 			{
-				int j = k == 0 ? (c < cols - 1 ? i + 1 : -1)
-					: k == 1 ? (i + cols < n ? i + cols : -1)
-					: k == 2 ? (c < cols - 1 && i + cols + 1 < n ? i + cols + 1 : -1)
-					: (c > 0 && i + cols - 1 < n ? i + cols - 1 : -1);
-				if (j < 0)
+				if (j == i)
 				{
 					continue;
 				}
-				Path2D.Float path = webPulse[i] + webPulse[j] > 1.25f ? webBrightPath : webPath;
-				path.moveTo(webX[i], webY[i]);
-				path.lineTo(webX[j], webY[j]);
+				float dx = webX[j] - webX[i];
+				float dy = webY[j] - webY[i];
+				float d = dx * dx + dy * dy;
+				if (d < best)
+				{
+					third = second;
+					ti = si;
+					second = best;
+					si = bi;
+					best = d;
+					bi = j;
+				}
+				else if (d < second)
+				{
+					third = second;
+					ti = si;
+					second = d;
+					si = j;
+				}
+				else if (d < third)
+				{
+					third = d;
+					ti = j;
+				}
 			}
-			if ((i * 37 + seed) % 11 == 0)
+			connectWeb(i, bi, seed);
+			connectWeb(i, si, seed);
+			connectWeb(i, ti, seed);
+			if ((i * 37 + seed) % 9 == 0)
 			{
 				int j = ((i * 53 + seed) & 0x7fffffff) % n;
-				webBrightPath.moveTo(webX[i], webY[i]);
-				webBrightPath.lineTo(webX[j], webY[j]);
+				if (j != i)
+				{
+					connectWeb(i, j, seed);
+				}
 			}
 		}
 		float boost = strength * (1f + 0.75f * flare);
-		Shape oldClip = g.getClip();
-		webClip.setRoundRect(x, y, fill, h, Math.min(h, 14), Math.min(h, 14));
-		g.clip(webClip);
-		float glowW = Math.max(2f, h * 0.28f);
-		float coreW = Math.max(1f, h * 0.055f);
+		float glowW = Math.max(2f, h * 0.25f);
+		float coreW = Math.max(1f, h * 0.05f);
 		if (webGlowStroke == null || webGlowStroke.getLineWidth() != glowW)
 		{
 			webGlowStroke = new BasicStroke(glowW, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND);
@@ -717,37 +741,80 @@ public final class XpBarFx
 			webCoreStroke = new BasicStroke(coreW, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND);
 		}
 		g.setStroke(webGlowStroke);
-		g.setComposite(alpha(Math.min(1f, 0.10f * boost)));
+		g.setComposite(alpha(Math.min(1f, 0.07f * boost)));
 		g.setColor(base);
 		g.draw(webPath);
-		g.setComposite(alpha(Math.min(1f, 0.16f * boost)));
+		g.setComposite(alpha(Math.min(1f, 0.12f * boost)));
 		g.setColor(hot);
 		g.draw(webBrightPath);
 		g.setStroke(webCoreStroke);
-		g.setComposite(alpha(Math.min(1f, 0.34f * boost)));
+		g.setComposite(alpha(Math.min(1f, 0.28f * boost)));
 		g.setColor(base);
 		g.draw(webPath);
-		g.setComposite(alpha(Math.min(1f, 0.85f * boost)));
+		g.setComposite(alpha(Math.min(1f, 0.7f * boost)));
 		g.setColor(hot);
 		g.draw(webBrightPath);
 		for (int i = 0; i < n; i++)
 		{
 			float p = webPulse[i];
-			float r = Math.max(0.7f, h * 0.05f) * (0.6f + p * 0.9f) * (1f + 0.35f * flare);
-			g.setComposite(alpha(Math.min(1f, (0.18f + 0.65f * p) * boost)));
+			float r = Math.max(0.6f, h * 0.045f) * (0.6f + p * 0.9f) * (1f + 0.35f * flare);
+			g.setComposite(alpha(Math.min(1f, (0.15f + 0.6f * p) * boost)));
 			g.setColor(p > 0.78f ? Color.WHITE : hot);
 			dot.setFrame(webX[i] - r, webY[i] - r, r * 2, r * 2);
 			g.fill(dot);
-			if (p > 0.86f)
+			if (p > 0.84f)
 			{
 				float rs = r * 2.6f;
-				g.setComposite(alpha(Math.min(1f, 0.16f * boost)));
+				g.setComposite(alpha(Math.min(1f, 0.14f * boost)));
 				dot.setFrame(webX[i] - rs, webY[i] - rs, rs * 2, rs * 2);
 				g.fill(dot);
 			}
+			// A tiny mote drifting off each node keeps the web feeling alive.
+			double ma = t * 1.4 + i * 1.7;
+			float mx = webX[i] + (float) Math.sin(ma) * h * 0.35f;
+			float my = webY[i] + (float) Math.cos(ma * 1.3) * h * 0.3f;
+			float mr = Math.max(0.4f, h * 0.022f);
+			g.setComposite(alpha(Math.min(1f, (0.12f + 0.3f * p) * boost)));
+			g.setColor(base);
+			dot.setFrame(mx - mr, my - mr, mr * 2, mr * 2);
+			g.fill(dot);
 		}
-		g.setClip(oldClip);
 		g.setComposite(AlphaComposite.SrcOver);
+	}
+
+	private void connectWeb(int i, int j, int seed)
+	{
+		if (j < 0 || j == i)
+		{
+			return;
+		}
+		float ax = webX[i];
+		float ay = webY[i];
+		float bx = webX[j];
+		float by = webY[j];
+		float dx = bx - ax;
+		float dy = by - ay;
+		float len = (float) Math.sqrt(dx * dx + dy * dy);
+		if (len < 0.5f)
+		{
+			return;
+		}
+		float bow = (hash01(seed + i * 313 + j * 97) - 0.5f) * len * 0.35f;
+		float cx = (ax + bx) / 2f - dy / len * bow;
+		float cy = (ay + by) / 2f + dx / len * bow;
+		Path2D.Float path = webPulse[i] + webPulse[j] > 1.2f ? webBrightPath : webPath;
+		path.moveTo(ax, ay);
+		path.quadTo(cx, cy, bx, by);
+	}
+
+	private static float hash01(int v)
+	{
+		v ^= v >>> 16;
+		v *= 0x7feb352d;
+		v ^= v >>> 15;
+		v *= 0x846ca68b;
+		v ^= v >>> 16;
+		return (v & 0xffffff) / 16777215f;
 	}
 
 	private void drawEdgeGlow(Graphics2D g, float ex, float ey, int h, double t, Color base, Color hot, float strength)	{
