@@ -218,6 +218,7 @@ public final class XpBarFx
 	private boolean quantumWeb = true;
 	private Color quantumWebColor;
 	private float quantumWebStrength = 1f;
+	private int quantumWebMaxLine = 32;
 
 	/** Null fill keeps the per-skill palette. Null track/flash keep the defaults. */
 	public void setColors(Color track, Color fill, Color flash)
@@ -246,11 +247,12 @@ public final class XpBarFx
 		strandStrength = (float) Math.max(0, Math.min(2, strength));
 	}
 
-	public void setQuantumWeb(boolean enabled, Color color, double strength)
+	public void setQuantumWeb(boolean enabled, Color color, double strength, int maxLine)
 	{
 		quantumWeb = enabled;
 		quantumWebColor = color;
 		quantumWebStrength = (float) Math.max(0, Math.min(2, strength));
+		quantumWebMaxLine = Math.max(0, maxLine);
 	}
 
 	private final Map<String, Bar> bars = new HashMap<>();
@@ -795,7 +797,7 @@ public final class XpBarFx
 		float dx = bx - ax;
 		float dy = by - ay;
 		float len = (float) Math.sqrt(dx * dx + dy * dy);
-		if (len < 0.5f)
+		if (len < 0.5f || quantumWebMaxLine > 0 && len > quantumWebMaxLine)
 		{
 			return;
 		}

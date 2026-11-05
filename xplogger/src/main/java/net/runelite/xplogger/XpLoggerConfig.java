@@ -248,6 +248,13 @@ public interface XpLoggerConfig extends Config
 		return 100;
 	}
 
+	@Range(min = 0, max = 400)
+	@ConfigItem(keyName = "quantumWebMaxLine", name = "Quantum web line length", description = "Longest line drawn between web dots in pixels; 0 removes the limit", position = 43)
+	default int quantumWebMaxLine()
+	{
+		return 32;
+	}
+
 	@ConfigItem(keyName = "showSession", name = "Session time", description = "Show how long this session has run", position = 29)
 	default boolean showSession()
 	{

@@ -220,7 +220,8 @@ public class XpLoggerOverlay extends Overlay
 
 		fx.setColors(config.barTrack(), config.skillColors() ? null : config.barFill(), config.barFlash());
 		fx.setStrands(config.lightStrands(), config.strandColor(), config.strandIntensity() / 100.0);
-		fx.setQuantumWeb(config.quantumWeb(), config.quantumWebColor(), config.quantumWebIntensity() / 100.0);
+		fx.setQuantumWeb(config.quantumWeb(), config.quantumWebColor(), config.quantumWebIntensity() / 100.0,
+			config.quantumWebMaxLine());
 		long nanos = System.nanoTime();
 		double intensity = config.spark() / 100.0;
 		for (int i = 0; i < shown; i++)

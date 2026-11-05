@@ -105,6 +105,7 @@ public class XpLoggerPanel extends PluginPanel
 		bool("quantumWeb", "Quantum web inside the bar", config.quantumWeb());
 		color("quantumWebColor", "Quantum web color", config.quantumWebColor());
 		number("quantumWebIntensity", "Quantum web intensity %", config.quantumWebIntensity(), 0, 200);
+		number("quantumWebMaxLine", "Quantum web line length", config.quantumWebMaxLine(), 0, 400);
 		number("spark", "Spark intensity %", config.spark(), 0, 200);
 		bool("climb", "XP drops climb to the top", config.climb());
 		bool("showDrops", "XP drop labels", config.showDrops());
