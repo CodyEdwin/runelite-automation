@@ -272,9 +272,6 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 	private int sackCameraTurns;
 	private int itemsBeforeSearch;
 	private int levelUpDismissAttempts;
-	private boolean droppingExtras;
-	private boolean dropVerified;
-	private boolean dropHovered;
 	private int payDirtAtClick;
 	private int sackZeroTicks;
 	private int sackFruitlessTrips;
@@ -365,9 +362,6 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 		lastDispatchState = null;
 		actions = null;
 		specSavedLogged = false;
-		droppingExtras = false;
-		dropVerified = false;
-		dropHovered = false;
 		payDirtAtClick = 0;
 		sackZeroTicks = 0;
 		sackFruitlessTrips = 0;
@@ -829,23 +823,24 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 		// The sack is full: the hopper cannot take any more pay-dirt. Go
 		// downstairs and empty it, then come back up. This is the only
 		// reason to leave the upper level.
-		int carriedPayDirt = inventory.countItem(ItemID.PAYDIRT);
-		if (droppingExtras)
-		{
-			dropExtras(context, carriedPayDirt);
-			return;
-		}
 		if (inventory.countItem(ItemID.PAYDIRT) == 0)
 		{
-			if (depositClickSent)
+			boolean tookAll = depositClickSent;
+			if (tookAll)
 			{
 				log.info("[MotherlodeMiner] hopper took all {} pay-dirt", payDirtAtClick);
-				depositedSinceEmpty += Math.max(0, lastPayDirtCount);
+				// The whole load left the inventory, so that is exactly what
+				// went into the sack. Do not use lastPayDirtCount here: the
+				// count can tick down in steps during the deposit and would
+				// leave the sack estimate short.
+				depositedSinceEmpty += Math.max(0, payDirtAtClick);
+				depositClickSent = false;
+				payDirtAtClick = 0;
 				// Pay-dirt actually went into the hopper, so the sack is no
 				// longer empty.
 				sackKnownEmpty = false;
 			}
-			payDirtDeposited = depositClickSent;
+			payDirtDeposited = tookAll;
 			walker.reset();
 			actionAttempts = 0;
 			searchClicks = 0;
@@ -884,15 +879,34 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 			return;
 		}
 
-		// The hopper took only part of the load: the sack is full. Drop the
-		// rest and go empty the sack.
+		// The hopper took only part of the load: the sack is full. Keep the
+		// rest in the inventory and go empty the sack; never drop it here.
+		// (A short settle window can also catch a deposit that is still being
+		// processed, so dropping the "rest" could throw away the whole load.)
 		if (depositClickSent && payDirtAtClick > 0 && lastPayDirtCount < payDirtAtClick)
 		{
-			depositedSinceEmpty += payDirtAtClick - lastPayDirtCount;
+			int remaining = lastPayDirtCount;
+			int taken = payDirtAtClick - remaining;
+			depositedSinceEmpty += taken;
 			sackKnownEmpty = false;
 			payDirtDeposited = true;
-			startDroppingExtras(lastPayDirtCount, "hopper took " + (payDirtAtClick - lastPayDirtCount)
-				+ " of " + payDirtAtClick);
+			depositClickSent = false;
+			payDirtAtClick = 0;
+			actionAttempts = 0;
+			walker.reset();
+			log.info("[MotherlodeMiner] hopper took {} of {} pay-dirt; keeping the {} left and emptying the sack",
+				taken, remaining + taken, remaining);
+			if (upstairs)
+			{
+				state = State.CLIMB_DOWN;
+				climbAttempts = 0;
+				setStatus("Sack full: climbing down to empty it");
+			}
+			else
+			{
+				state = State.WALK_TO_SACK;
+				setStatus("Sack full: walking to the sack");
+			}
 			return;
 		}
 
@@ -1021,105 +1035,6 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 		climbWaitTicks = 0;
 		walker.reset();
 		setStatus("Climbing down to fix the water wheels");
-	}
-
-	private void startDroppingExtras(int count, String reason)
-	{
-		log.info("[MotherlodeMiner] sack full, dropping {} extra pay-dirt ({}; sack {}/{})", count, reason,
-			sackContents, sackCapacity);
-		droppingExtras = true;
-		dropHovered = false;
-		depositClickSent = false;
-		payDirtAtClick = 0;
-		actionAttempts = 0;
-		setStatus("Sack full: dropping " + count + " extra pay-dirt");
-	}
-
-	/**
-	 * Drops every pay-dirt left after the hopper is full, then goes to empty
-	 * the sack. The first drop is a verified left click ("Drop Pay-dirt" on
-	 * top); after that the slots are clicked directly. Capped per load.
-	 */
-	private void dropExtras(RoutineContext context, int carried)
-	{
-		if (carried == 0)
-		{
-			log.info("[MotherlodeMiner] extra pay-dirt dropped, going to empty the sack");
-			droppingExtras = false;
-			payDirtDeposited = true;
-			walker.reset();
-			actionAttempts = 0;
-			searchClicks = 0;
-			if (upstairs)
-			{
-				state = State.CLIMB_DOWN;
-				climbAttempts = 0;
-				setStatus("Climbing down to empty the sack");
-			}
-			else
-			{
-				state = State.WALK_TO_SACK;
-				setStatus("Walking to the sack");
-			}
-			return;
-		}
-
-		GameInput input = context.getInput();
-		if (input.isBusy())
-		{
-			return;
-		}
-		if (++actionAttempts > 28 * 3)
-		{
-			log.info("[MotherlodeMiner] could not drop the extra pay-dirt ({} left), emptying the sack anyway", carried);
-			droppingExtras = false;
-			state = upstairs ? State.CLIMB_DOWN : State.WALK_TO_SACK;
-			climbAttempts = 0;
-			walker.reset();
-			return;
-		}
-
-		Inventory inventory = context.getInventory();
-		if (!inventory.isOpen())
-		{
-			inventory.open();
-			return;
-		}
-		int slot = inventory.findSlot(ItemID.PAYDIRT);
-		Widget item = slot < 0 ? null : inventory.getSlotWidget(slot);
-		if (item == null || item.isHidden())
-		{
-			return;
-		}
-
-		if (!dropVerified)
-		{
-			if (!dropHovered)
-			{
-				dropHovered = input.hover(item);
-				return;
-			}
-			dropHovered = false;
-			MenuEntry entry = input.getLeftClickEntry();
-			String option = entry == null ? "" : GameInput.plainText(entry.getOption()).toLowerCase(Locale.ROOT);
-			String target = entry == null ? "" : GameInput.plainText(entry.getTarget()).toLowerCase(Locale.ROOT);
-			if (!"drop".equals(option) || !target.contains("pay-dirt"))
-			{
-				log.info("[MotherlodeMiner] pay-dirt left click is '{} {}', not 'Drop' - re-aiming", option, target);
-				return;
-			}
-			Point mouse = input.getMouseLocation();
-			if (mouse != null && input.click(mouse))
-			{
-				dropVerified = true;
-			}
-			setStatus("Dropping extra pay-dirt (" + carried + " left)");
-			return;
-		}
-
-		// Left click is confirmed as Drop: click the next pay-dirt slot.
-		input.click(item);
-		setStatus("Dropping extra pay-dirt (" + carried + " left)");
 	}
 
 	/**
