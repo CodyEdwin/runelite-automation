@@ -815,7 +815,7 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 		// pay-dirt instead of retrying an unresponsive hopper forever.
 		if (upstairs && !repairFromUpstairs)
 		{
-			if (findBrokenStrut(context) == null)
+			if (!bothWheelsStopped(context))
 			{
 				upperRepairAttempts = 0;
 			}
@@ -2133,9 +2133,25 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 		setStatus("Picking up the dropped pay-dirt");
 	}
 
-	private TileObject findBrokenStrut(RoutineContext context)
+	private static boolean bothWheelsStopped(RoutineContext context)
 	{
-		Player player = context.getPlayer();
+		return hasBrokenStrutNear(context, STRUT_WEST) && hasBrokenStrutNear(context, STRUT_EAST);
+	}
+
+	private static boolean hasBrokenStrutNear(RoutineContext context, WorldPoint area)
+	{
+		for (TileObject object : context.getTargets().getTileObjectsNear(area, STRUT_RADIUS))
+		{
+			if (object.getId() == STRUT_BROKEN_ID)
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private TileObject findBrokenStrut(RoutineContext context)
+	{		Player player = context.getPlayer();
 		WorldPoint location = player == null ? null : player.getWorldLocation();
 		if (location == null)
 		{
