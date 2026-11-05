@@ -60,9 +60,10 @@ import net.runelite.rsbuddy.walk.Walker;
  * Mines pay-dirt at the upper level of the Motherlode Mine, deposits it into
  * the hopper, collects the washed ores from the sack, banks them, and returns.
  * <p>
- * Walking always uses minimap left clicks. The sack is only searched after the
- * bonus experience arrives (roughly eight seconds after the hopper click),
- * which is when the pay-dirt has reached the sack.
+ * Walking uses minimap left clicks. After the sack, the bank chest is clicked
+ * directly when it is on screen (camera north keeps it in view). The sack is
+ * only searched after the bonus experience arrives (roughly eight seconds after
+ * the hopper click), which is when the pay-dirt has reached the sack.
  */
 public final class MotherlodeMinerScript extends Routine implements Actions.Host
 {
@@ -136,6 +137,8 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 	// Stand beside the hopper instead of a couple of tiles away.
 	private static final int HOPPER_STOP_DISTANCE = 1;
 	private static final int OBJECT_REACH = 5;
+	/** Sack to bank chest is ~15 tiles; a north camera still leaves the chest on screen. */
+	private static final int BANK_VIEW_DISTANCE = 24;
 	private static final int VEIN_WALK_DISTANCE = 4;
 	private static final int CLICK_COOLDOWN = 0;
 	/** After a click, wait this long for the walk to start before aiming at the same target again. */
@@ -1439,7 +1442,7 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 			return;
 		}
 
-		TileObject chest = context.getTargets().findTileObject(BANK_CHEST_ID, OBJECT_REACH + 3).orElse(null);
+		TileObject chest = findBankChest(context);
 		if (chest != null && location.distanceTo2D(chest.getWorldLocation()) <= OBJECT_REACH
 			|| chest != null && clickableOnScreen(context, chest))
 		{
@@ -1449,6 +1452,7 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 			bankClicks = 0;
 			chestHovered = false;
 			setStatus("Banking ores");
+			bank(context);
 			return;
 		}
 
@@ -1550,7 +1554,7 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 				return;
 			}
 
-			TileObject chest = context.getTargets().findTileObject(BANK_CHEST_ID, OBJECT_REACH + 3).orElse(null);
+			TileObject chest = findBankChest(context);
 			if (chest == null)
 			{
 				walkLogged(BANK_AREA, true, WALK_STOP_DISTANCE);
@@ -2615,6 +2619,12 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 			}
 		}
 		return best;
+	}
+
+	/** Bank chest from the sack: far enough to see it, then the on-screen click walks there. */
+	private TileObject findBankChest(RoutineContext context)
+	{
+		return context.getTargets().findTileObject(BANK_CHEST_ID, BANK_VIEW_DISTANCE).orElse(null);
 	}
 
 	private TileObject findSack(RoutineContext context)
