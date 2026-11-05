@@ -54,6 +54,7 @@ import net.runelite.rsbuddy.inventory.Inventory;
 import net.runelite.rsbuddy.routine.Actions;
 import net.runelite.rsbuddy.routine.Routine;
 import net.runelite.rsbuddy.routine.RoutineContext;
+import net.runelite.rsbuddy.routine.RoutineSetting;
 import net.runelite.rsbuddy.walk.Walker;
 
 /**
@@ -300,6 +301,14 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 	}
 
 	@Override
+	public List<RoutineSetting> getRoutineSettings()
+	{
+		return List.of(RoutineSetting.integer("motherlodeSackCapacity",
+			"Sack capacity",
+			"Pay-dirt the sack holds: 108, 189, or 0 to auto-detect from the bigger-sack varbit", 189));
+	}
+
+	@Override
 	protected void onStart()
 	{
 		// Do not read the player or varbits here: onStart runs on the panel
@@ -389,10 +398,55 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 			// Fresh pay-dirt reached the sack, so it is no longer empty.
 			sackKnownEmpty = false;
 		}
+		else if (liveSack < lastLiveSack)
+		{
+			// The sack was emptied (or lost pay-dirt) outside the script's
+			// own sack trip. Re-anchor the estimate instead of assuming the
+			// old contents are still there.
+			sackBase = liveSack;
+			depositedSinceEmpty = 0;
+		}
 		lastLiveSack = liveSack;
 		sackZeroTicks = liveSack == 0 ? sackZeroTicks + 1 : 0;
-		sackCapacity = context.getClient().getVarbitValue(VarbitID.MOTHERLODE_BIGGERSACK) == 1
-			? SACK_LARGE_SIZE : SACK_SIZE;
+		int biggerSack = context.getClient().getVarbitValue(VarbitID.MOTHERLODE_BIGGERSACK);
+		// The script setting defaults to the large sack, so it works even if
+		// the upgrade varbit is missing or late; set it to 108 for a normal
+		// sack, or 0 to auto-detect.
+		int requested = SACK_LARGE_SIZE;
+		String sackSetting = context.getSetting("motherlodeSackCapacity");
+		if (sackSetting != null && !sackSetting.trim().isEmpty())
+		{
+			try
+			{
+				requested = Integer.parseInt(sackSetting.trim());
+			}
+			catch (NumberFormatException ignored)
+			{
+				requested = SACK_LARGE_SIZE;
+			}
+		}
+		int capacity;
+		if (requested == SACK_SIZE || requested == SACK_LARGE_SIZE)
+		{
+			capacity = requested;
+		}
+		else
+		{
+			capacity = biggerSack == 1 ? SACK_LARGE_SIZE : SACK_SIZE;
+			if (liveSack > SACK_SIZE)
+			{
+				// The upgrade varbit can arrive a tick late (or be missing
+				// right after buying the upgrade); the live sack is
+				// authoritative once it is above the normal capacity.
+				capacity = SACK_LARGE_SIZE;
+			}
+		}
+		if (capacity != sackCapacity)
+		{
+			log.info("[MotherlodeMiner] sack capacity {} (setting {}, bigger-sack varbit {}, live {})",
+				capacity, requested, biggerSack, liveSack);
+			sackCapacity = capacity;
+		}
 		if (!sackBaseInit)
 		{
 			sackBase = liveSack;
@@ -1379,7 +1433,7 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 			countInventoryItems(inventory), collectingSack ? "coming back for the rest" : "sack done");
 		// The sack is emptied (or left with only what is still in it), so
 		// the local deposit count starts again from the live value.
-		sackBase = lastLiveSack;
+		sackBase = sackKnownEmpty ? 0 : lastLiveSack;
 		depositedSinceEmpty = 0;
 		lastPayDirtCount = 0;
 		bankPurpose = BankPurpose.DEPOSIT;
