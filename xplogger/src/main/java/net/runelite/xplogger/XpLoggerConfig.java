@@ -229,6 +229,25 @@ public interface XpLoggerConfig extends Config
 		return 100;
 	}
 
+	@ConfigItem(keyName = "quantumWeb", name = "Quantum web", description = "A dense web of living light and particles inside each bar", position = 40)
+	default boolean quantumWeb()
+	{
+		return true;
+	}
+
+	@ConfigItem(keyName = "quantumWebColor", name = "Quantum web color", description = "Color of the quantum web", position = 41)
+	default Color quantumWebColor()
+	{
+		return new Color(0x7DF9FF);
+	}
+
+	@Range(min = 0, max = 200)
+	@ConfigItem(keyName = "quantumWebIntensity", name = "Quantum web intensity %", description = "Quantum web brightness, 0 is none and 100 is default", position = 42)
+	default int quantumWebIntensity()
+	{
+		return 100;
+	}
+
 	@ConfigItem(keyName = "showSession", name = "Session time", description = "Show how long this session has run", position = 29)
 	default boolean showSession()
 	{

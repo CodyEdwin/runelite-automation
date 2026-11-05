@@ -40,6 +40,7 @@ import java.awt.Shape;
 import java.awt.Stroke;
 import java.awt.geom.Ellipse2D;
 import java.awt.geom.Line2D;
+import java.awt.geom.Path2D;
 import java.awt.geom.RoundRectangle2D;
 import java.util.HashMap;
 import java.util.Locale;
@@ -214,6 +215,9 @@ public final class XpBarFx
 	private boolean strands = true;
 	private Color strandColor;
 	private float strandStrength = 1f;
+	private boolean quantumWeb = true;
+	private Color quantumWebColor;
+	private float quantumWebStrength = 1f;
 
 	/** Null fill keeps the per-skill palette. Null track/flash keep the defaults. */
 	public void setColors(Color track, Color fill, Color flash)
@@ -242,12 +246,21 @@ public final class XpBarFx
 		strandStrength = (float) Math.max(0, Math.min(2, strength));
 	}
 
+	public void setQuantumWeb(boolean enabled, Color color, double strength)
+	{
+		quantumWeb = enabled;
+		quantumWebColor = color;
+		quantumWebStrength = (float) Math.max(0, Math.min(2, strength));
+	}
+
 	private final Map<String, Bar> bars = new HashMap<>();
 	private final RoundRectangle2D.Float round = new RoundRectangle2D.Float();
 	private final Line2D.Float line = new Line2D.Float();
 	private BasicStroke sparkStroke;
 	private BasicStroke strandCoreStroke;
 	private BasicStroke strandGlowStroke;
+	private BasicStroke webCoreStroke;
+	private BasicStroke webGlowStroke;
 	private Font labelFont;
 
 	// Flying "+N xp" labels for all bars, pooled (see drawLabels).
@@ -274,6 +287,13 @@ public final class XpBarFx
 	private final int[] polyY = new int[4];
 	private final int[] strandX = new int[STRAND_POINTS + 1];
 	private final int[] strandY = new int[STRAND_POINTS + 1];
+	private static final int WEB_MAX_NODES = 192;
+	private final float[] webX = new float[WEB_MAX_NODES];
+	private final float[] webY = new float[WEB_MAX_NODES];
+	private final float[] webPulse = new float[WEB_MAX_NODES];
+	private final Path2D.Float webPath = new Path2D.Float();
+	private final Path2D.Float webBrightPath = new Path2D.Float();
+	private final RoundRectangle2D.Float webClip = new RoundRectangle2D.Float();
 	private final float[] glowStops = {0f, 0.35f, 1f};
 	private final Color[] glowColors = new Color[3];
 	private final float[] sheenStops = {0f, 0.5f, 1f};
@@ -471,6 +491,14 @@ public final class XpBarFx
 				Color strandHot = strandColor != null ? mix(strandColor, Color.WHITE, 0.55f) : hot;
 				drawLightStrands(g, x, y, fill, h, t, strandBase, strandHot, strandStrength);
 			}
+			if (quantumWeb && quantumWebStrength > 0.01f && fill > 8f)
+			{
+				float webFlare = bar.pulseAt != 0 && now - bar.pulseAt < PULSE_NANOS
+					? 1f - (now - bar.pulseAt) / (float) PULSE_NANOS : 0f;
+				Color webBase = quantumWebColor != null ? quantumWebColor : base;
+				Color webHot = quantumWebColor != null ? mix(quantumWebColor, Color.WHITE, 0.6f) : hot;
+				drawQuantumWeb(g, x, y, fill, h, t, key, webBase, webHot, quantumWebStrength, webFlare);
+			}
 			updateSparks(bar, x + fill, y, h, dt, intensity);
 			// Glow only while the spark burst is flying: full when it fires,
 			// fading with the flash and the live sparks, zero otherwise.
@@ -625,8 +653,104 @@ public final class XpBarFx
 		g.setComposite(AlphaComposite.SrcOver);
 	}
 
-	private void drawEdgeGlow(Graphics2D g, float ex, float ey, int h, double t, Color base, Color hot, float strength)
+	/** Dense animated web of filaments and glowing nodes inside the fill. */
+	private void drawQuantumWeb(Graphics2D g, int x, int y, float fill, int h, double t, String key,
+		Color base, Color hot, float strength, float flare)
 	{
+		int cols = Math.max(4, Math.round(fill / 16f));
+		int rows = Math.max(2, Math.round(h / 7f));
+		int n = Math.min(WEB_MAX_NODES, cols * rows);
+		if (n < 4)
+		{
+			return;
+		}
+		float cw = fill / cols;
+		float ch = (float) h / rows;
+		int seed = key.hashCode();
+		for (int i = 0; i < n; i++)
+		{
+			int c = i % cols;
+			int r = i / cols;
+			double ph = seed * 0.001 + c * 0.7 + r * 1.3;
+			webX[i] = x + (c + 0.5f) * cw + (float) Math.sin(t * 1.3 + ph) * cw * 0.3f;
+			webY[i] = y + (r + 0.5f) * ch + (float) Math.cos(t * 1.7 + ph * 1.1) * ch * 0.3f;
+			webPulse[i] = (float) (0.5 + 0.5 * Math.sin(t * (2.0 + (i % 5) * 0.25) + ph));
+		}
+		webPath.reset();
+		webBrightPath.reset();
+		for (int i = 0; i < n; i++)
+		{
+			int c = i % cols;
+			for (int k = 0; k < 4; k++)
+			{
+				int j = k == 0 ? (c < cols - 1 ? i + 1 : -1)
+					: k == 1 ? (i + cols < n ? i + cols : -1)
+					: k == 2 ? (c < cols - 1 && i + cols + 1 < n ? i + cols + 1 : -1)
+					: (c > 0 && i + cols - 1 < n ? i + cols - 1 : -1);
+				if (j < 0)
+				{
+					continue;
+				}
+				Path2D.Float path = webPulse[i] + webPulse[j] > 1.25f ? webBrightPath : webPath;
+				path.moveTo(webX[i], webY[i]);
+				path.lineTo(webX[j], webY[j]);
+			}
+			if ((i * 37 + seed) % 11 == 0)
+			{
+				int j = ((i * 53 + seed) & 0x7fffffff) % n;
+				webBrightPath.moveTo(webX[i], webY[i]);
+				webBrightPath.lineTo(webX[j], webY[j]);
+			}
+		}
+		float boost = strength * (1f + 0.75f * flare);
+		Shape oldClip = g.getClip();
+		webClip.setRoundRect(x, y, fill, h, Math.min(h, 14), Math.min(h, 14));
+		g.clip(webClip);
+		float glowW = Math.max(2f, h * 0.28f);
+		float coreW = Math.max(1f, h * 0.055f);
+		if (webGlowStroke == null || webGlowStroke.getLineWidth() != glowW)
+		{
+			webGlowStroke = new BasicStroke(glowW, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND);
+		}
+		if (webCoreStroke == null || webCoreStroke.getLineWidth() != coreW)
+		{
+			webCoreStroke = new BasicStroke(coreW, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND);
+		}
+		g.setStroke(webGlowStroke);
+		g.setComposite(alpha(Math.min(1f, 0.10f * boost)));
+		g.setColor(base);
+		g.draw(webPath);
+		g.setComposite(alpha(Math.min(1f, 0.16f * boost)));
+		g.setColor(hot);
+		g.draw(webBrightPath);
+		g.setStroke(webCoreStroke);
+		g.setComposite(alpha(Math.min(1f, 0.34f * boost)));
+		g.setColor(base);
+		g.draw(webPath);
+		g.setComposite(alpha(Math.min(1f, 0.85f * boost)));
+		g.setColor(hot);
+		g.draw(webBrightPath);
+		for (int i = 0; i < n; i++)
+		{
+			float p = webPulse[i];
+			float r = Math.max(0.7f, h * 0.05f) * (0.6f + p * 0.9f) * (1f + 0.35f * flare);
+			g.setComposite(alpha(Math.min(1f, (0.18f + 0.65f * p) * boost)));
+			g.setColor(p > 0.78f ? Color.WHITE : hot);
+			dot.setFrame(webX[i] - r, webY[i] - r, r * 2, r * 2);
+			g.fill(dot);
+			if (p > 0.86f)
+			{
+				float rs = r * 2.6f;
+				g.setComposite(alpha(Math.min(1f, 0.16f * boost)));
+				dot.setFrame(webX[i] - rs, webY[i] - rs, rs * 2, rs * 2);
+				g.fill(dot);
+			}
+		}
+		g.setClip(oldClip);
+		g.setComposite(AlphaComposite.SrcOver);
+	}
+
+	private void drawEdgeGlow(Graphics2D g, float ex, float ey, int h, double t, Color base, Color hot, float strength)	{
 		float flicker = (float) (0.85 + 0.15 * Math.sin(t * 23) * Math.sin(t * 7.3));
 		float radius = h * (0.9f + 0.8f * strength) * flicker;
 		glowColors[0] = withAlpha(hot, Math.round(230 * strength));
