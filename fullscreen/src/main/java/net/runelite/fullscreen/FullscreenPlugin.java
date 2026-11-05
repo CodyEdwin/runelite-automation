@@ -25,11 +25,16 @@
 package net.runelite.fullscreen;
 
 import com.google.inject.Provides;
+import java.awt.BasicStroke;
 import java.awt.Canvas;
+import java.awt.Color;
 import java.awt.Frame;
+import java.awt.Graphics2D;
 import java.awt.GraphicsDevice;
 import java.awt.Rectangle;
+import java.awt.RenderingHints;
 import java.awt.Window;
+import java.awt.image.BufferedImage;
 import javax.inject.Inject;
 import javax.swing.SwingUtilities;
 import net.runelite.api.Client;
@@ -38,6 +43,8 @@ import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
+import net.runelite.client.ui.ClientToolbar;
+import net.runelite.client.ui.NavigationButton;
 
 @PluginDescriptor(
 	name = "Fullscreen",
@@ -52,6 +59,13 @@ public class FullscreenPlugin extends Plugin
 	@Inject
 	private FullscreenConfig config;
 
+	@Inject
+	private ClientToolbar clientToolbar;
+
+	@Inject
+	private ConfigManager configManager;
+
+	private NavigationButton navButton;
 	private GraphicsDevice device;
 	private Rectangle previousBounds;
 	private int previousState;
@@ -65,12 +79,20 @@ public class FullscreenPlugin extends Plugin
 	@Override
 	protected void startUp()
 	{
+		navButton = NavigationButton.builder()
+			.tooltip("Toggle Fullscreen")
+			.icon(createIcon())
+			.priority(-1)
+			.onClick(this::toggle)
+			.build();
+		clientToolbar.addNavigation(navButton);
 		apply();
 	}
 
 	@Override
 	protected void shutDown()
 	{
+		clientToolbar.removeNavigation(navButton);
 		SwingUtilities.invokeLater(() ->
 		{
 			Frame frame = frame();
@@ -88,6 +110,30 @@ public class FullscreenPlugin extends Plugin
 		{
 			apply();
 		}
+	}
+
+	private void toggle()
+	{
+		configManager.setConfiguration(FullscreenConfig.GROUP, "fullscreen", !config.fullscreen());
+	}
+
+	private static BufferedImage createIcon()
+	{
+		BufferedImage icon = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
+		Graphics2D graphics = icon.createGraphics();
+		graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+		graphics.setColor(Color.WHITE);
+		graphics.setStroke(new BasicStroke(1.8f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+		graphics.drawLine(2, 6, 2, 2);
+		graphics.drawLine(2, 2, 6, 2);
+		graphics.drawLine(10, 2, 14, 2);
+		graphics.drawLine(14, 2, 14, 6);
+		graphics.drawLine(14, 10, 14, 14);
+		graphics.drawLine(14, 14, 10, 14);
+		graphics.drawLine(6, 14, 2, 14);
+		graphics.drawLine(2, 14, 2, 10);
+		graphics.dispose();
+		return icon;
 	}
 
 	private void apply()
