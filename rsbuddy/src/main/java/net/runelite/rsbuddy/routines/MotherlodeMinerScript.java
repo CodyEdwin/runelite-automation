@@ -2218,15 +2218,6 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 		if (repairReturn)
 		{
 			repairReturn = false;
-			Inventory inventory = context.getInventory();
-			if (droppedPayDirtAt != null)
-			{
-				pickupStartCount = inventory.countItem(ItemID.PAYDIRT);
-				pickupAttempts = 0;
-				state = State.PICKUP_PAYDIRT;
-				setStatus("Picking up the dropped pay-dirt");
-				return;
-			}
 			state = State.HOPPER;
 			setStatus("Depositing pay-dirt");
 			return;
@@ -2922,15 +2913,6 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 	private static boolean hasBankableItems(Inventory inventory)
 	{
 		return countInventoryItems(inventory) > 0;
-	}
-
-	@Override
-	public java.util.Set<Integer> getGroundItemPickupFilter()
-	{
-		// The only ground item this script ever drops on purpose is the
-		// pay-dirt used to make room for a hammer. Keeping Take as its
-		// left-click lets the repair trip pick it back up with one click.
-		return java.util.Collections.singleton(ItemID.PAYDIRT);
 	}
 
 	@Override
