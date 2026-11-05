@@ -462,7 +462,9 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 
 		if (actions == null || walker == null)
 		{
-			actions = new Actions(context, this, "[MotherlodeMiner]").allowWithBankOpen("bank chest");
+			actions = new Actions(context, this, "[MotherlodeMiner]")
+				.allowWithBankOpen("bank chest")
+				.allowWithBankOpen("sack");
 			walker = actions.walker();
 		}
 
@@ -1237,6 +1239,29 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 
 		TileObject sack = findSack(context);
 		boolean bankOpen = context.getTargets().findWidget(InterfaceID.Bankmain.UNIVERSE).isPresent();
+		GameInput input = context.getInput();
+		// The bank window does not cover the whole world. When the sack is
+		// visible outside it, click the sack itself: that closes the bank and
+		// starts the walk (and search) without a separate minimap walk.
+		if (bankOpen && sack != null && location.distanceTo2D(sack.getWorldLocation()) > WALK_STOP_DISTANCE)
+		{
+			Point sackPoint = input.objectCenter(sack);
+			if (sackPoint != null && !bankCoversPoint(context, sackPoint))
+			{
+				if (Actions.isMoving(context) || input.isBusy())
+				{
+					setStatus("Walking to the sack");
+					return;
+				}
+				if (input.click(sackPoint))
+				{
+					cooldown = CLICK_COOLDOWN;
+					markAction("clicked the visible sack through the open bank");
+				}
+				setStatus("Clicking the visible sack through the bank");
+				return;
+			}
+		}
 		// Standing still with the sack clickable on screen: click it
 		// directly (the click walks there). While a minimap walk is running
 		// the mouse stays idle until the player arrives.
@@ -2672,6 +2697,18 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 	private boolean clickableOnScreen(RoutineContext context, TileObject object)
 	{
 		return actions.clickableOnScreen(object);
+	}
+
+	/** @return true when the open bank window covers this canvas point */
+	private boolean bankCoversPoint(RoutineContext context, Point point)
+	{
+		Widget bank = context.getTargets().findWidget(InterfaceID.Bankmain.UNIVERSE).orElse(null);
+		if (bank == null || bank.isHidden() || point == null)
+		{
+			return false;
+		}
+		java.awt.Rectangle bounds = bank.getBounds();
+		return bounds != null && bounds.contains(point);
 	}
 
 	private static WorldPoint onPlayerPlane(RoutineContext context, WorldPoint point)
