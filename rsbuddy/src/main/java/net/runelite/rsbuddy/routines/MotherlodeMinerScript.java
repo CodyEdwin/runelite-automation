@@ -2391,8 +2391,6 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 			input.stopCamera();
 		}
 
-		// Verified left click on the ladder's hull centre ("Climb..." on
-		// "Ladder"); its own Climb option only after repeated misses.
 		if (climbAttempts >= CLIMB_ATTEMPT_LIMIT)
 		{
 			log.info("[MotherlodeMiner] ladder: {} clicks without changing floor, halting", climbAttempts);
@@ -2400,8 +2398,20 @@ public final class MotherlodeMinerScript extends Routine implements Actions.Host
 			setStatus("Stopped: could not climb the ladder");
 			return false;
 		}
-		boolean sent = this.actions.clickObject(ladder, up ? "ladder up" : "ladder down",
-			new String[]{"climb"}, "ladder");
+
+		// One movement click on the ladder itself. The verified hover path
+		// used to make a near miss and then glide/correct onto the centre,
+		// which looked like two separate mouse movements on every climb.
+		boolean sent;
+		if (climbAttempts < 2 && input.isVisible(ladder) && input.click(ladder))
+		{
+			sent = true;
+		}
+		else
+		{
+			sent = this.actions.clickObject(ladder, up ? "ladder up" : "ladder down",
+				new String[]{"climb"}, "ladder");
+		}
 		if (sent)
 		{
 			log.info("[MotherlodeMiner] ladder {} attempt {}: waiting {} ticks for the floor change", up ? "up" : "down",
