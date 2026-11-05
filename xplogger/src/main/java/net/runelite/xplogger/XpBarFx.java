@@ -287,7 +287,7 @@ public final class XpBarFx
 	private final int[] polyY = new int[4];
 	private final int[] strandX = new int[STRAND_POINTS + 1];
 	private final int[] strandY = new int[STRAND_POINTS + 1];
-	private static final int WEB_MAX_NODES = 192;
+	private static final int WEB_MAX_NODES = 768;
 	private final float[] webX = new float[WEB_MAX_NODES];
 	private final float[] webY = new float[WEB_MAX_NODES];
 	private final float[] webPulse = new float[WEB_MAX_NODES];
@@ -657,7 +657,7 @@ public final class XpBarFx
 		Color base, Color hot, float strength, float flare)
 	{
 		int seed = key.hashCode();
-		int n = Math.min(WEB_MAX_NODES, Math.max(26, Math.round((w + h * 2f) / 7f)));
+		int n = Math.min(WEB_MAX_NODES, Math.max(104, Math.round((w + h * 2f) / 1.75f)));
 		if (n < 4)
 		{
 			return;
