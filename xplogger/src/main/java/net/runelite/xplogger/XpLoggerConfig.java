@@ -111,8 +111,14 @@ public interface XpLoggerConfig extends Config
 		return new Color(255, 222, 170);
 	}
 
+	@ConfigItem(keyName = "overlayFont", name = "Overlay font", description = "Font used for overlay text", position = 12)
+	default String overlayFont()
+	{
+		return XpFonts.FAMILY;
+	}
+
 	@Range(min = 10, max = 28)
-	@ConfigItem(keyName = "fontSize", name = "Font size", description = "Overlay font size", position = 12)
+	@ConfigItem(keyName = "fontSize", name = "Font size", description = "Overlay font size", position = 13)
 	default int fontSize()
 	{
 		return 16;
@@ -179,10 +185,10 @@ public interface XpLoggerConfig extends Config
 		return true;
 	}
 
-	@ConfigItem(keyName = "skillColors", name = "Skill bar colors", description = "Use the built-in color for each skill", position = 22)
+	@ConfigItem(keyName = "skillColors", name = "Skill bar colors", description = "Use each skill's built-in color instead of the bar fill", position = 22)
 	default boolean skillColors()
 	{
-		return true;
+		return false;
 	}
 
 	@Alpha
@@ -192,13 +198,13 @@ public interface XpLoggerConfig extends Config
 		return new Color(8, 10, 18, 238);
 	}
 
-	@ConfigItem(keyName = "barFill", name = "Bar fill", description = "Fill color when skill colors are off", position = 24)
+	@ConfigItem(keyName = "barFill", name = "Bar fill", description = "XP bar fill color", position = 24)
 	default Color barFill()
 	{
 		return new Color(0, 230, 255);
 	}
 
-	@ConfigItem(keyName = "barFlash", name = "Bar flash", description = "Flash and glow color on an XP drop", position = 25)
+	@ConfigItem(keyName = "barFlash", name = "Bar flash", description = "Sheen, flash and edge glow color on an XP drop", position = 25)
 	default Color barFlash()
 	{
 		return Color.WHITE;

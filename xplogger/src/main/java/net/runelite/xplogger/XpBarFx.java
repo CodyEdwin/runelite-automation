@@ -53,8 +53,8 @@ import java.util.concurrent.ThreadLocalRandom;
  * stays smooth at any frame rate. Per bar it draws: a gradient fill, moving
  * diagonal energy stripes, a sheen sweeping across, embers spiralling along the
  * fill, a glow on the leading edge, sparks shooting off that edge (gravity and
- * fade) and a white flash plus spark burst when {@link #pulse} is called on an
- * XP gain.
+ * fade) and a flash plus spark burst when {@link #pulse} is called on an
+ * XP gain. The flash and glow use {@link #setColors}.
  * <p>
  * Performance: sparks live in a fixed pool of {@value #MAX_SPARKS} per bar
  * (parallel float arrays, reused), embers are computed from time with no
@@ -68,7 +68,7 @@ public final class XpBarFx
 	private static final int EMBERS = 14;
 	private static final float GRAVITY = 260f;
 	private static final long PULSE_NANOS = 650_000_000L;
-	/** How long the white sheen takes to run from the left edge to the end of the fill. */
+	/** How long the sheen takes to run from the left edge to the end of the fill. */
 	private static final long SWEEP_NANOS = 380_000_000L;
 	private static final long FORGET_NANOS = 30_000_000_000L;
 
@@ -215,7 +215,12 @@ public final class XpBarFx
 	{
 		trackColor = track != null ? track : TRACK;
 		fillColor = fill;
-		flashColor = flash != null ? flash : Color.WHITE;
+		Color next = flash != null ? flash : Color.WHITE;
+		if (!next.equals(flashColor))
+		{
+			flashColor = next;
+			sheenColors[1] = new Color(next.getRed(), next.getGreen(), next.getBlue(), 140);
+		}
 	}
 
 	private final Map<String, Bar> bars = new HashMap<>();
@@ -252,7 +257,7 @@ public final class XpBarFx
 	private final Color[] sheenColors = {CLEAR, new Color(255, 255, 255, 110), CLEAR};
 
 	/**
-	 * Starts an XP-drop sweep: the white sheen runs to the end of the fill, then
+	 * Starts an XP-drop sweep: the sheen runs to the end of the fill, then
 	 * the flash, glow flare and spark burst fire there.
 	 *
 	 * @param key the same key passed to {@link #draw}
@@ -328,7 +333,7 @@ public final class XpBarFx
 	 * @param w         full track width
 	 * @param h         bar thickness
 	 * @param progress  0..1 fill
-	 * @param color     ignored: the colours come from the bar's palette ({@link #paletteFor}); kept for callers
+	 * @param color     unused; the fill comes from {@link #setColors} (null fill keeps the skill palette)
 	 * @param now       {@link System#nanoTime()} for this frame
 	 * @param animate   false draws a plain gradient bar with no effects
 	 * @param intensity spark amount, 0 (none) .. 2 (double); 1 is the default
@@ -340,10 +345,10 @@ public final class XpBarFx
 		float dt = bar.lastNanos == 0 ? 0f : Math.min(0.05f, (now - bar.lastNanos) / 1e9f);
 		bar.lastNanos = now;
 
-		// The bar's own neon palette; the caller's colour is no longer used.
+		// Skill palette, unless a fill colour was configured.
 		Palette palette = bar.palette;
-		Color base = palette.accent;
-		Color hot = palette.hot;
+		Color base = fillColor != null ? fillColor : palette.accent;
+		Color hot = fillColor != null ? mix(fillColor, Color.WHITE, 0.55f) : palette.hot;
 		Object oldAa = g.getRenderingHint(RenderingHints.KEY_ANTIALIASING);
 		Composite oldComposite = g.getComposite();
 		Paint oldPaint = g.getPaint();
@@ -445,9 +450,7 @@ public final class XpBarFx
 			float glow = Math.min(1f, Math.max(flare, bar.alive / 26f));
 			if (glow > 0.01f)
 			{
-				Color edge = fillColor != null ? flashColor : base;
-				Color edgeHot = fillColor != null ? flashColor : hot;
-				drawEdgeGlow(g, x + fill, y + h / 2f, h, t, edge, edgeHot, glow);
+				drawEdgeGlow(g, x + fill, y + h / 2f, h, t, flashColor, mix(flashColor, Color.WHITE, 0.45f), glow);
 			}
 			drawSparks(g, bar, base, hot, Math.max(1f, h / 10f));
 		}
@@ -518,8 +521,8 @@ public final class XpBarFx
 	{
 		float flicker = (float) (0.85 + 0.15 * Math.sin(t * 23) * Math.sin(t * 7.3));
 		float radius = h * (0.9f + 0.8f * strength) * flicker;
-		glowColors[0] = new Color(255, 255, 255, Math.round(230 * strength));
-		glowColors[1] = withAlpha(hot, Math.round(150 * strength));
+		glowColors[0] = withAlpha(hot, Math.round(230 * strength));
+		glowColors[1] = withAlpha(base, Math.round(170 * strength));
 		glowColors[2] = withAlpha(base, 0);
 		g.setPaint(new RadialGradientPaint(ex, ey, radius, glowStops, glowColors));
 		g.fill(new Ellipse2D.Float(ex - radius, ey - radius, radius * 2, radius * 2));

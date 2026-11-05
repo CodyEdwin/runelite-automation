@@ -88,6 +88,7 @@ public class XpLoggerPanel extends PluginPanel
 		color("titleColor", "Title", config.titleColor());
 
 		heading("Layout");
+		fontChoice();
 		number("fontSize", "Font size", config.fontSize(), 10, 28);
 		number("padding", "Padding", config.padding(), 0, 32);
 		number("rowGap", "Row spacing", config.rowGap(), 0, 40);
@@ -102,7 +103,7 @@ public class XpLoggerPanel extends PluginPanel
 		bool("climb", "XP drops climb to the top", config.climb());
 		bool("showDrops", "XP drop labels", config.showDrops());
 		bool("showPercent", "Percent on the bar", config.showPercent());
-		bool("skillColors", "Per-skill bar colors", config.skillColors());
+		bool("skillColors", "Per-skill colors (overrides fill)", config.skillColors());
 		color("barTrack", "Bar background", config.barTrack());
 		color("barFill", "Bar fill", config.barFill());
 		color("barFlash", "Flash / glow", config.barFlash());
@@ -139,6 +140,22 @@ public class XpLoggerPanel extends PluginPanel
 		box.setOpaque(false);
 		box.setForeground(Color.WHITE);
 		box.addActionListener(e -> configManager.setConfiguration(XpLoggerConfig.GROUP, key, box.isSelected()));
+		add(box);
+	}
+
+	private void fontChoice()
+	{
+		add(label("Overlay font"));
+		JComboBox<String> box = new JComboBox<>(XpFonts.families());
+		box.setSelectedItem(XpFonts.resolve(config.overlayFont()));
+		box.addActionListener(e ->
+		{
+			Object item = box.getSelectedItem();
+			if (item != null)
+			{
+				configManager.setConfiguration(XpLoggerConfig.GROUP, "overlayFont", item.toString());
+			}
+		});
 		add(box);
 	}
 

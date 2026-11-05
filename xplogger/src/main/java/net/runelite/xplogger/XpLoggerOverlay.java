@@ -42,7 +42,6 @@ import net.runelite.api.Experience;
 import net.runelite.api.GameState;
 import net.runelite.api.Skill;
 import net.runelite.client.game.SkillIconManager;
-import net.runelite.client.ui.FontManager;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
@@ -162,9 +161,12 @@ public class XpLoggerOverlay extends Overlay
 		boolean line3 = config.showActions() || config.showAvg();
 		int lines = 1 + (line2 ? 1 : 0) + (line3 ? 1 : 0);
 
-		graphics.setFont(FontManager.getRunescapeSmallFont().deriveFont((float) config.fontSize()));
+		float fontSize = config.fontSize();
+		Font textFont = XpFonts.font(config.overlayFont(), Font.PLAIN, fontSize);
+		Font titleFont = XpFonts.font(config.overlayFont(), Font.BOLD, fontSize);
+		graphics.setFont(textFont);
 		FontMetrics small = graphics.getFontMetrics();
-		graphics.setFont(FontManager.getRunescapeBoldFont().deriveFont(Font.BOLD, (float) config.fontSize()));
+		graphics.setFont(titleFont);
 		FontMetrics titleFm = graphics.getFontMetrics();
 
 		List<SkillSession> rows = activeSessions();
@@ -193,13 +195,13 @@ public class XpLoggerOverlay extends Overlay
 		{
 			if (config.showTitle())
 			{
-				graphics.setFont(FontManager.getRunescapeBoldFont().deriveFont(Font.BOLD, (float) config.fontSize()));
+				graphics.setFont(titleFont);
 				graphics.setColor(config.titleColor());
 				graphics.drawString(config.title(), pad, pad + titleFm.getAscent());
 			}
 			if (config.showSession())
 			{
-				graphics.setFont(FontManager.getRunescapeSmallFont().deriveFont((float) config.fontSize()));
+				graphics.setFont(textFont);
 				graphics.setColor(config.muted());
 				String session = formatDuration(Math.max(0L, now - sessionStartedAt));
 				graphics.drawString(session, width - pad - small.stringWidth(session), pad + titleFm.getAscent());
@@ -207,7 +209,7 @@ public class XpLoggerOverlay extends Overlay
 			y += titleFm.getHeight() + 6;
 		}
 
-		graphics.setFont(FontManager.getRunescapeSmallFont().deriveFont((float) config.fontSize()));
+		graphics.setFont(textFont);
 		if (rows.isEmpty())
 		{
 			graphics.setColor(config.muted());
@@ -225,12 +227,13 @@ public class XpLoggerOverlay extends Overlay
 		}
 		if (config.showDrops())
 		{
+			graphics.setFont(titleFont);
 			fx.setLabelMode(config.climb(), -getBounds().y, client.getCanvasWidth() - getBounds().x, barHeight);
 			fx.drawLabels(graphics, nanos);
 		}
 		if (hidden > 0)
 		{
-			graphics.setFont(FontManager.getRunescapeSmallFont().deriveFont((float) config.fontSize()));
+			graphics.setFont(textFont);
 			graphics.setColor(config.muted());
 			graphics.drawString("+" + hidden + " more skill(s)", pad, y + small.getAscent());
 		}
