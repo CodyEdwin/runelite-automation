@@ -51,10 +51,10 @@ import java.util.concurrent.ThreadLocalRandom;
  * <p>
  * Everything is time based ({@link System#nanoTime()}), not tick based, so it
  * stays smooth at any frame rate. Per bar it draws: a gradient fill, moving
- * diagonal energy stripes, a sheen sweeping across, embers spiralling along the
- * fill, a glow on the leading edge, sparks shooting off that edge (gravity and
- * fade) and a flash plus spark burst when {@link #pulse} is called on an
- * XP gain. The flash and glow use {@link #setColors}.
+ * diagonal energy stripes, a sheen sweeping across, light strands swirling around
+ * the bar, embers spiralling along the fill, a glow on the leading edge, sparks
+ * shooting off that edge (gravity and fade) and a flash plus spark burst when
+ * {@link #pulse} is called on an XP gain. The flash and glow use {@link #setColors}.
  * <p>
  * Performance: sparks live in a fixed pool of {@value #MAX_SPARKS} per bar
  * (parallel float arrays, reused), embers are computed from time with no
@@ -66,6 +66,8 @@ public final class XpBarFx
 	/** Spark pool size per bar. */
 	static final int MAX_SPARKS = 150;
 	private static final int EMBERS = 14;
+	private static final int STRANDS = 3;
+	private static final int STRAND_POINTS = 28;
 	private static final float GRAVITY = 260f;
 	private static final long PULSE_NANOS = 650_000_000L;
 	/** How long the sheen takes to run from the left edge to the end of the fill. */
@@ -209,6 +211,9 @@ public final class XpBarFx
 	private Color trackColor = TRACK;
 	private Color fillColor;
 	private Color flashColor = Color.WHITE;
+	private boolean strands = true;
+	private Color strandColor;
+	private float strandStrength = 1f;
 
 	/** Null fill keeps the per-skill palette. Null track/flash keep the defaults. */
 	public void setColors(Color track, Color fill, Color flash)
@@ -223,10 +228,26 @@ public final class XpBarFx
 		}
 	}
 
+	/**
+	 * Configures the strands of light that swirl around the bars.
+	 *
+	 * @param enabled  false turns them off
+	 * @param color    strand color, or null to tint them from each bar's palette
+	 * @param strength 0..2 multiplier on the strand brightness
+	 */
+	public void setStrands(boolean enabled, Color color, double strength)
+	{
+		strands = enabled;
+		strandColor = color;
+		strandStrength = (float) Math.max(0, Math.min(2, strength));
+	}
+
 	private final Map<String, Bar> bars = new HashMap<>();
 	private final RoundRectangle2D.Float round = new RoundRectangle2D.Float();
 	private final Line2D.Float line = new Line2D.Float();
 	private BasicStroke sparkStroke;
+	private BasicStroke strandCoreStroke;
+	private BasicStroke strandGlowStroke;
 	private Font labelFont;
 
 	// Flying "+N xp" labels for all bars, pooled (see drawLabels).
@@ -251,6 +272,8 @@ public final class XpBarFx
 	private final Ellipse2D.Float dot = new Ellipse2D.Float();
 	private final int[] polyX = new int[4];
 	private final int[] polyY = new int[4];
+	private final int[] strandX = new int[STRAND_POINTS + 1];
+	private final int[] strandY = new int[STRAND_POINTS + 1];
 	private final float[] glowStops = {0f, 0.35f, 1f};
 	private final Color[] glowColors = new Color[3];
 	private final float[] sheenStops = {0f, 0.5f, 1f};
@@ -442,6 +465,12 @@ public final class XpBarFx
 
 		if (animate && fill >= 1f)
 		{
+			if (strands && strandStrength > 0.01f)
+			{
+				Color strandBase = strandColor != null ? strandColor : base;
+				Color strandHot = strandColor != null ? mix(strandColor, Color.WHITE, 0.55f) : hot;
+				drawLightStrands(g, x, y, fill, h, t, strandBase, strandHot, strandStrength);
+			}
 			updateSparks(bar, x + fill, y, h, dt, intensity);
 			// Glow only while the spark burst is flying: full when it fires,
 			// fading with the flash and the live sparks, zero otherwise.
@@ -512,6 +541,85 @@ public final class XpBarFx
 			g.setComposite(alpha(alpha));
 			g.setColor(depth > 0.8f ? Color.WHITE : hot);
 			dot.setFrame(ex - r, ey - r, r * 2, r * 2);
+			g.fill(dot);
+		}
+		g.setComposite(AlphaComposite.SrcOver);
+	}
+
+	/**
+	 * Draws a few strands of light wrapping around the bar: a faint sine strand
+	 * across the whole fill with a brighter packet chasing along it.
+	 */
+	private void drawLightStrands(Graphics2D g, int x, int y, float fill, int h, double t,
+		Color base, Color hot, float strength)
+	{
+		if (fill < 4f)
+		{
+			return;
+		}
+		float midY = y + h / 2f;
+		float amp = h * 0.62f + 2f;
+		float coreWidth = Math.max(1f, h / 9f);
+		float glowWidth = Math.max(2f, h / 3f);
+		if (strandCoreStroke == null || strandCoreStroke.getLineWidth() != coreWidth)
+		{
+			strandCoreStroke = new BasicStroke(coreWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND);
+		}
+		if (strandGlowStroke == null || strandGlowStroke.getLineWidth() != glowWidth)
+		{
+			strandGlowStroke = new BasicStroke(glowWidth, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND);
+		}
+
+		for (int s = 0; s < STRANDS; s++)
+		{
+			double phase = s * (Math.PI * 2.0 / STRANDS) + t * (0.85 + 0.21 * s);
+			double twist = Math.PI * (2.1 + 0.45 * s);
+
+			// Faint continuous strand wrapping the whole fill.
+			for (int i = 0; i <= STRAND_POINTS; i++)
+			{
+				float k = i / (float) STRAND_POINTS;
+				strandX[i] = Math.round(x + k * fill);
+				strandY[i] = Math.round((float) (midY + Math.sin(k * twist + phase) * amp));
+			}
+			g.setStroke(strandCoreStroke);
+			g.setComposite(alpha(0.11f * strength));
+			g.setColor(base);
+			g.drawPolyline(strandX, strandY, STRAND_POINTS + 1);
+
+			// Bright packet chasing along the same strand. Ping-pong the head
+			// so it turns around at the ends instead of jumping back.
+			float head = (float) Math.abs((t * (0.16 + 0.025 * s) + s * 0.31) % 2.0 - 1.0);
+			int headIndex = Math.round(head * STRAND_POINTS);
+			int tailIndex = Math.max(0, headIndex - STRAND_POINTS / 3);
+			int n = 0;
+			for (int i = tailIndex; i <= headIndex; i++)
+			{
+				float k = i / (float) STRAND_POINTS;
+				strandX[n] = Math.round(x + k * fill);
+				strandY[n] = Math.round((float) (midY + Math.sin(k * twist + phase) * amp));
+				n++;
+			}
+			if (n < 2)
+			{
+				continue;
+			}
+			g.setStroke(strandGlowStroke);
+			g.setComposite(alpha(0.20f * strength));
+			g.setColor(hot);
+			g.drawPolyline(strandX, strandY, n);
+			g.setStroke(strandCoreStroke);
+			g.setComposite(alpha(0.75f * strength));
+			g.setColor(mix(hot, Color.WHITE, 0.5f));
+			g.drawPolyline(strandX, strandY, n);
+
+			// Bright head of the packet.
+			float hx = x + head * fill;
+			float hy = (float) (midY + Math.sin(head * twist + phase) * amp);
+			float r = Math.max(1.5f, h * 0.11f);
+			g.setComposite(alpha(0.7f * strength));
+			g.setColor(Color.WHITE);
+			dot.setFrame(hx - r, hy - r, r * 2, r * 2);
 			g.fill(dot);
 		}
 		g.setComposite(AlphaComposite.SrcOver);

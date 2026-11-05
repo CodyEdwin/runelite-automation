@@ -99,6 +99,9 @@ public class XpLoggerPanel extends PluginPanel
 		heading("Bars");
 		number("barThickness", "Thickness %", config.barThickness(), 100, 400);
 		bool("animate", "Animations", config.animate());
+		bool("lightStrands", "Light strands around the bar", config.lightStrands());
+		color("strandColor", "Strand color", config.strandColor());
+		number("strandIntensity", "Strand intensity %", config.strandIntensity(), 0, 200);
 		number("spark", "Spark intensity %", config.spark(), 0, 200);
 		bool("climb", "XP drops climb to the top", config.climb());
 		bool("showDrops", "XP drop labels", config.showDrops());

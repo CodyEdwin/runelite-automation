@@ -210,67 +210,86 @@ public interface XpLoggerConfig extends Config
 		return Color.WHITE;
 	}
 
-	@ConfigItem(keyName = "showSession", name = "Session time", description = "Show how long this session has run", position = 26)
+	@ConfigItem(keyName = "lightStrands", name = "Light strands", description = "Strands of light swirling around each bar", position = 26)
+	default boolean lightStrands()
+	{
+		return true;
+	}
+
+	@ConfigItem(keyName = "strandColor", name = "Strand color", description = "Color of the light strands", position = 27)
+	default Color strandColor()
+	{
+		return Color.WHITE;
+	}
+
+	@Range(min = 0, max = 200)
+	@ConfigItem(keyName = "strandIntensity", name = "Strand intensity %", description = "Strand brightness, 0 is none and 100 is default", position = 28)
+	default int strandIntensity()
+	{
+		return 100;
+	}
+
+	@ConfigItem(keyName = "showSession", name = "Session time", description = "Show how long this session has run", position = 29)
 	default boolean showSession()
 	{
 		return true;
 	}
 
-	@ConfigItem(keyName = "showXpHr", name = "XP per hour", description = "Show XP per hour", position = 27)
+	@ConfigItem(keyName = "showXpHr", name = "XP per hour", description = "Show XP per hour", position = 30)
 	default boolean showXpHr()
 	{
 		return true;
 	}
 
-	@ConfigItem(keyName = "showGained", name = "XP gained", description = "Show XP gained this session", position = 28)
+	@ConfigItem(keyName = "showGained", name = "XP gained", description = "Show XP gained this session", position = 31)
 	default boolean showGained()
 	{
 		return true;
 	}
 
-	@ConfigItem(keyName = "showLeft", name = "XP left", description = "Show XP left and time to level", position = 29)
+	@ConfigItem(keyName = "showLeft", name = "XP left", description = "Show XP left and time to level", position = 32)
 	default boolean showLeft()
 	{
 		return true;
 	}
 
-	@ConfigItem(keyName = "showActions", name = "Actions to level", description = "Show actions left from the mean XP per drop", position = 30)
+	@ConfigItem(keyName = "showActions", name = "Actions to level", description = "Show actions left from the mean XP per drop", position = 33)
 	default boolean showActions()
 	{
 		return true;
 	}
 
-	@ConfigItem(keyName = "showAvg", name = "Average XP", description = "Show average XP per action", position = 31)
+	@ConfigItem(keyName = "showAvg", name = "Average XP", description = "Show average XP per action", position = 34)
 	default boolean showAvg()
 	{
 		return true;
 	}
 
-	@ConfigItem(keyName = "showLevels", name = "Levels gained", description = "Show levels gained this session", position = 32)
+	@ConfigItem(keyName = "showLevels", name = "Levels gained", description = "Show levels gained this session", position = 35)
 	default boolean showLevels()
 	{
 		return false;
 	}
 
-	@ConfigItem(keyName = "showPercent", name = "Bar percent", description = "Show percent on thick bars", position = 33)
+	@ConfigItem(keyName = "showPercent", name = "Bar percent", description = "Show percent on thick bars", position = 36)
 	default boolean showPercent()
 	{
 		return true;
 	}
 
-	@ConfigItem(keyName = "showDrops", name = "XP drop labels", description = "Fly a +XP label off the bar", position = 34)
+	@ConfigItem(keyName = "showDrops", name = "XP drop labels", description = "Fly a +XP label off the bar", position = 37)
 	default boolean showDrops()
 	{
 		return true;
 	}
 
-	@ConfigItem(keyName = "onlyGained", name = "Only gained skills", description = "Limit the list to skills that gained XP this session", position = 35)
+	@ConfigItem(keyName = "onlyGained", name = "Only gained skills", description = "Limit the list to skills that gained XP this session", position = 38)
 	default boolean onlyGained()
 	{
 		return true;
 	}
 
-	@ConfigItem(keyName = "skills", name = "Skills", description = "Comma-separated skill names to show, or empty for every skill", position = 36)
+	@ConfigItem(keyName = "skills", name = "Skills", description = "Comma-separated skill names to show, or empty for every skill", position = 39)
 	default String skills()
 	{
 		return "";
