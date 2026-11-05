@@ -103,22 +103,23 @@ public class XpLoggerOverlay extends Overlay
 		}
 		if (session.statXp >= 0 && xp > session.statXp)
 		{
+			long drop = xp - session.statXp;
 			session.actions++;
-			session.actionXp += xp - session.statXp;
-			long drop = config.showDrops() ? xp - session.statXp : 0;
-			fx.pulse(skill.getName(), drop, skillIcons.getSkillImage(skill, true));
+			session.actionXp += drop;
+			session.lastActionXp = drop;
+			fx.pulse(skill.getName(), config.showDrops() ? drop : 0, skillIcons.getSkillImage(skill, true));
 		}
 		session.statXp = xp;
 	}
 
-	/** @return actions left from the session's mean XP per drop, or -1 before the first drop */
-	static long actionsToLevel(long remaining, long actionXp, int actions)
+	/** @return actions left assuming each action gives the same XP as the last drop, or -1 before the first drop */
+	static long actionsToLevel(long remaining, long lastActionXp)
 	{
-		if (actions <= 0 || actionXp <= 0)
+		if (lastActionXp <= 0)
 		{
 			return -1;
 		}
-		return (long) Math.ceil(remaining / (actionXp / (double) actions));
+		return (long) Math.ceil(remaining / (double) lastActionXp);
 	}
 
 	@Override
@@ -306,7 +307,7 @@ public class XpLoggerOverlay extends Overlay
 			lineY += small.getHeight() + TEXT_GAP;
 			if (config.showActions())
 			{
-				long left = actionsToLevel(remaining, session.actionXp, session.actions);
+				long left = actionsToLevel(remaining, session.lastActionXp);
 				String actions = level >= Experience.MAX_REAL_LEVEL
 					? "Actions to level: MAX"
 					: "Actions to level: " + (left < 0 ? "--" : formatNumber(left));
@@ -477,6 +478,7 @@ public class XpLoggerOverlay extends Overlay
 		private long statXp = -1;
 		private int actions;
 		private long actionXp;
+		private long lastActionXp;
 
 		private SkillSession(Skill skill, long xp, int level)
 		{
@@ -492,6 +494,7 @@ public class XpLoggerOverlay extends Overlay
 			statXp = xp;
 			actions = 0;
 			actionXp = 0L;
+			lastActionXp = 0L;
 			firstGainAt = 0L;
 			lastGainAt = 0L;
 		}

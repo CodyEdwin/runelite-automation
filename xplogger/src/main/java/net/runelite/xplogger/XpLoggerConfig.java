@@ -253,7 +253,7 @@ public interface XpLoggerConfig extends Config
 		return true;
 	}
 
-	@ConfigItem(keyName = "showActions", name = "Actions to level", description = "Show actions left from the mean XP per drop", position = 33)
+	@ConfigItem(keyName = "showActions", name = "Actions to level", description = "Show actions left from the XP of the last drop", position = 33)
 	default boolean showActions()
 	{
 		return true;
