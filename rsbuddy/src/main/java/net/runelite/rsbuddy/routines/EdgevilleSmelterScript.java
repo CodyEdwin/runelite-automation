@@ -309,10 +309,12 @@ public final class EdgevilleSmelterScript extends TaskRoutine
 			}
 			else
 			{
-				++depositAttempts;
-				if (actions.depositAll())
+				Widget deposit = context.getTargets().findWidget(InterfaceID.Bankmain.DEPOSITINV).orElse(null);
+				GameInput input = context.getInput();
+				if (deposit != null && !input.isBusy() && input.click(deposit))
 				{
-					cooldown(2);
+					++depositAttempts;
+					cooldown(1);
 				}
 				setStatus("Depositing");
 				return;
@@ -436,7 +438,8 @@ public final class EdgevilleSmelterScript extends TaskRoutine
 			int itemId = iron < targetCounts[0] ? ItemID.IRON_ORE : ItemID.COAL;
 			int have = itemId == ItemID.IRON_ORE ? iron : coal;
 			int target = itemId == ItemID.IRON_ORE ? targetCounts[0] : targetCounts[1];
-			if (actions.withdraw(itemId))
+			GameInput input = context.getInput();
+			if (!input.isBusy() && input.clickBankItem(itemId))
 			{
 				withdrawFailures = 0;
 				cooldown(1);
