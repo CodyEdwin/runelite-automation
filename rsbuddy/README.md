@@ -470,6 +470,43 @@ Exchange booth, counter, chest) or a bank chest with **Use**, plus bankers (id 1
 or any NPC with **Bank**). It logs the candidates it picked from, and if nothing matches it logs the
 nearby bank-like objects, other objects and NPCs before stopping.
 
+## Edgeville Smelter
+
+`EdgevilleSmelterScript` appears in the panel as **Edgeville Smelter**. Keep the ores for the chosen
+bar in the first bank tab and start the routine at the Edgeville bank.
+
+Settings: select **Edgeville Smelter** in the RSBuddy side panel and choose the bar under
+**Routine settings** (Bronze, Iron, Steel, Silver, Gold, Mithril, Adamantite or Runite). The same
+setting is in RuneLite Configuration → **RSBuddy**. It is read on Start.
+
+Recipes and ores per bar:
+
+- Bronze: copper ore + tin ore
+- Iron: iron ore
+- Steel: iron ore + 2 coal
+- Silver: silver ore
+- Gold: gold ore
+- Mithril: mithril ore + 2 coal
+- Adamantite: adamantite ore + 4 coal
+- Runite: runite ore + 6 coal
+
+Loop:
+
+1. Open the Edgeville bank, **Deposit inventory**, then withdraw exactly as many ores as fit in
+   the free inventory slots (whole bars only, using the bank's Withdraw-10/5/1 actions).
+2. **Escape** to close the bank and walk to the Edgeville furnace by minimap.
+3. Click the furnace (**Smelt**), pick the chosen bar in the smelting menu by its item/name, and
+   click **All** if the quantity menu stays open.
+4. Wait while the ores are used. A level-up dialog is dismissed; if the batch stops early, the
+   furnace is clicked again.
+5. When the metal ore is gone, walk back to the bank, deposit the bars and any leftover coal, and
+   repeat until the bank runs out of the required ores.
+
+The make-menu quantity should be **All** (the routine also clicks the All button when it can).
+Ores must be in the first bank tab so the withdraw actions can see them. Stops with a clear status
+when the bank lacks an ore or has too little for one bar, the bar is not available at the current
+Smithing level, or the bank cannot withdraw the ores.
+
 ## Motherlode Miner
 
 `MotherlodeMinerScript` (panel: **Motherlode Miner**, setting **Motherlode: upstairs**) mines

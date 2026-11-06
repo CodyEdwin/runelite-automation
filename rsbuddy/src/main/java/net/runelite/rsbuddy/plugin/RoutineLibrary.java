@@ -32,6 +32,7 @@ import net.runelite.rsbuddy.routines.BowFletcherScript;
 import net.runelite.rsbuddy.routines.CatherbySharkFisherScript;
 import net.runelite.rsbuddy.routines.CombatTrainerScript;
 import net.runelite.rsbuddy.routines.CustomScript;
+import net.runelite.rsbuddy.routines.EdgevilleSmelterScript;
 import net.runelite.rsbuddy.routines.FruitStallStealerScript;
 import net.runelite.rsbuddy.routines.GemCrabKillerScript;
 import net.runelite.rsbuddy.routines.GemCutterScript;
@@ -124,6 +125,11 @@ public final class RoutineLibrary
 				config.bowFletcherClosestBooth()),
 			RoutineLibrary::bowFletcher);
 
+		registry.register(EdgevilleSmelterScript.class.getName(),
+			loader -> RoutineLoader.load(EdgevilleSmelterScript.class.getName(), loader,
+				config.edgevilleSmelterBarType().name()),
+			RoutineLibrary::edgevilleSmelter);
+
 		registry.register(AnimatedSuitKillerScript.class.getName(),
 			loader -> RoutineLoader.load(AnimatedSuitKillerScript.class.getName(), loader,
 				config.animatedSuitBlack(),
@@ -177,6 +183,13 @@ public final class RoutineLibrary
 			"Open the closest bank: booth, chest or banker NPC. Off: prefer a banker NPC.",
 			"bowFletcherClosestBooth", form.config()::bowFletcherClosestBooth);
 		form.setHint("<html>Knife in locked slot 1. Applied the next time the routine starts.</html>");
+	}
+
+	private static void edgevilleSmelter(RoutineSettingsForm form)
+	{
+		form.addCombo("Bar to smelt", "Which bar to smelt at the Edgeville furnace; the ores follow from it.",
+			EdgevilleSmelterBarType.values(), "edgevilleSmelterBarType", form.config()::edgevilleSmelterBarType);
+		form.setHint("<html>Keep the ores in the first bank tab. Applied the next time the routine starts.</html>");
 	}
 
 	private static void gemCutter(RoutineSettingsForm form)

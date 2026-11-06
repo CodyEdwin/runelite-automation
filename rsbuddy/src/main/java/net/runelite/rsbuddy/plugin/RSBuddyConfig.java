@@ -390,6 +390,17 @@ public interface RSBuddyConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "edgevilleSmelterBarType",
+		name = "Edgeville smelter: bar",
+		description = "Which bar to smelt at the Edgeville furnace. The ores withdrawn follow from it.",
+		position = 37
+	)
+	default EdgevilleSmelterBarType edgevilleSmelterBarType()
+	{
+		return EdgevilleSmelterBarType.STEEL;
+	}
+
+	@ConfigItem(
 		keyName = "rooftopCourse",
 		name = "Rooftop agility course",
 		description = "Which rooftop agility course the trainer routine runs.",
