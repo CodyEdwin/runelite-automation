@@ -509,6 +509,38 @@ Ores must be in the first bank tab so the withdraw actions can see them. Stops w
 when the bank lacks an ore or has too little for one bar, the bar is not available at the current
 Smithing level, or the bank cannot withdraw the ores.
 
+## West Varrock Smither
+
+`WestVarrockSmitherRoutine` appears in the panel as **West Varrock Smither**. Put a hammer in the
+**locked first inventory slot**, keep the selected metal's bars in the first bank tab, and start the
+routine at the Varrock west bank.
+
+Settings: select **West Varrock Smither** in the RSBuddy side panel and choose the metal, item and
+anvil quantity under **Routine settings**. The same settings are in RuneLite Configuration →
+**RSBuddy** and are read on Start.
+
+- **West Varrock smither: metal** (default `Steel`): Bronze, Iron, Steel, Mithril, Adamant or Rune.
+- **West Varrock smither: item** (default `Platebody`): Dagger, Sword, Longsword, 2h sword,
+  Scimitar, Mace, Warhammer, Axe, Battleaxe, Claws, Chainbody, Platelegs, Plateskirt, Platebody,
+  Med helm, Full helm, Sq shield or Kiteshield. The routine withdraws the right number of bars for
+  the item (1, 2, 3 or 5 per item) and checks the option exists in the anvil menu.
+- **West Varrock smither: amount** (default `All`): quantity chosen in the anvil menu each trip:
+  `1`, `5`, `10` or `All`. The routine keeps making trips until the bank runs out of bars.
+
+Loop:
+
+1. Open the nearest bank and deposit the previous trip's products. The locked hammer stays in slot 1.
+2. Withdraw enough bars for the selected item and anvil quantity, using exact Withdraw-10/5/1
+   actions, then close the bank and walk to the anvil across the street.
+3. Click the anvil, choose the product in the anvil menu, then click the selected quantity button.
+4. Wait while the bars are used. A level-up dialog is dismissed; if the batch stops early, the anvil
+   is clicked and the product chosen again.
+5. When the bars are gone, walk back to the bank and repeat. Stops with a clear status when the bank
+   has no bars for the selected item or the anvil menu does not offer it (Smithing level too low).
+
+The bars must be in the first bank tab. The routine does not drop anything, so keep unrelated
+inventory items to a minimum.
+
 ## Motherlode Miner
 
 `MotherlodeMinerScript` (panel: **Motherlode Miner**, setting **Motherlode: upstairs**) mines

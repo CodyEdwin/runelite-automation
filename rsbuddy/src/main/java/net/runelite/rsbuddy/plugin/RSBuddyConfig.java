@@ -401,6 +401,39 @@ public interface RSBuddyConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "westVarrockSmithMetal",
+		name = "West Varrock smither: metal",
+		description = "Which metal's bars to withdraw for smithing at the Varrock west anvil.",
+		position = 38
+	)
+	default WestVarrockSmithMetal westVarrockSmithMetal()
+	{
+		return WestVarrockSmithMetal.STEEL;
+	}
+
+	@ConfigItem(
+		keyName = "westVarrockSmithItem",
+		name = "West Varrock smither: item",
+		description = "Which item to smith at the anvil.",
+		position = 39
+	)
+	default WestVarrockSmithItem westVarrockSmithItem()
+	{
+		return WestVarrockSmithItem.PLATEBODY;
+	}
+
+	@ConfigItem(
+		keyName = "westVarrockSmithAmount",
+		name = "West Varrock smither: amount",
+		description = "How many items to choose in the anvil quantity menu each trip: 1, 5, 10 or All.",
+		position = 40
+	)
+	default WestVarrockSmithAmount westVarrockSmithAmount()
+	{
+		return WestVarrockSmithAmount.ALL;
+	}
+
+	@ConfigItem(
 		keyName = "rooftopCourse",
 		name = "Rooftop agility course",
 		description = "Which rooftop agility course the trainer routine runs.",

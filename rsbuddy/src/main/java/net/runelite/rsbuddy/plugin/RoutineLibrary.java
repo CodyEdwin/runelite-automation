@@ -41,6 +41,7 @@ import net.runelite.rsbuddy.routines.HillGiantScript;
 import net.runelite.rsbuddy.routines.MotherlodeMinerScript;
 import net.runelite.rsbuddy.routines.ObjectInteractScript;
 import net.runelite.rsbuddy.routines.RooftopAgilityTrainerScript;
+import net.runelite.rsbuddy.routines.WestVarrockSmitherRoutine;
 
 /**
  * Registers every built-in routine. A new routine is added by one {@code register} call.
@@ -130,6 +131,13 @@ public final class RoutineLibrary
 				config.edgevilleSmelterBarType().name()),
 			RoutineLibrary::edgevilleSmelter);
 
+		registry.register(WestVarrockSmitherRoutine.class.getName(),
+			loader -> RoutineLoader.load(WestVarrockSmitherRoutine.class.getName(), loader,
+				config.westVarrockSmithMetal().name(),
+				config.westVarrockSmithItem().name(),
+				config.westVarrockSmithAmount().name()),
+			RoutineLibrary::westVarrockSmither);
+
 		registry.register(AnimatedSuitKillerScript.class.getName(),
 			loader -> RoutineLoader.load(AnimatedSuitKillerScript.class.getName(), loader,
 				config.animatedSuitBlack(),
@@ -190,6 +198,18 @@ public final class RoutineLibrary
 		form.addCombo("Bar to smelt", "Which bar to smelt at the Edgeville furnace; the ores follow from it.",
 			EdgevilleSmelterBarType.values(), "edgevilleSmelterBarType", form.config()::edgevilleSmelterBarType);
 		form.setHint("<html>Keep the ores in the first bank tab. Applied the next time the routine starts.</html>");
+	}
+
+	private static void westVarrockSmither(RoutineSettingsForm form)
+	{
+		form.addCombo("Metal", "Which metal's bars to withdraw for smithing.",
+			WestVarrockSmithMetal.values(), "westVarrockSmithMetal", form.config()::westVarrockSmithMetal);
+		form.addCombo("Item to smith", "Which item to make at the anvil; its bar cost follows from it.",
+			WestVarrockSmithItem.values(), "westVarrockSmithItem", form.config()::westVarrockSmithItem);
+		form.addCombo("Amount at anvil", "Quantity to choose in the anvil menu each trip.",
+			WestVarrockSmithAmount.values(), "westVarrockSmithAmount", form.config()::westVarrockSmithAmount);
+		form.setHint("<html>Hammer in locked slot 1. Keep the bars in the first bank tab."
+			+ " Applied the next time the routine starts.</html>");
 	}
 
 	private static void gemCutter(RoutineSettingsForm form)
