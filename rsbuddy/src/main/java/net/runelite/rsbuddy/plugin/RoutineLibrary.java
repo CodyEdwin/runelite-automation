@@ -134,8 +134,7 @@ public final class RoutineLibrary
 		registry.register(WestVarrockSmitherRoutine.class.getName(),
 			loader -> RoutineLoader.load(WestVarrockSmitherRoutine.class.getName(), loader,
 				config.westVarrockSmithMetal().name(),
-				config.westVarrockSmithItem().name(),
-				config.westVarrockSmithAmount().name()),
+				config.westVarrockSmithItem().name()),
 			RoutineLibrary::westVarrockSmither);
 
 		registry.register(AnimatedSuitKillerScript.class.getName(),
@@ -206,9 +205,8 @@ public final class RoutineLibrary
 			WestVarrockSmithMetal.values(), "westVarrockSmithMetal", form.config()::westVarrockSmithMetal);
 		form.addCombo("Item to smith", "Which item to make at the anvil; its bar cost follows from it.",
 			WestVarrockSmithItem.values(), "westVarrockSmithItem", form.config()::westVarrockSmithItem);
-		form.addCombo("Amount at anvil", "Quantity to choose in the anvil menu each trip.",
-			WestVarrockSmithAmount.values(), "westVarrockSmithAmount", form.config()::westVarrockSmithAmount);
-		form.setHint("<html>Hammer in locked slot 1. Bank left click must be Withdraw-All. Smith the"
+		form.setHint("<html>Quantity is always All. Hammer in locked slot 1. Bank left click must be"
+			+ " Withdraw-All. Smith the"
 			+ " chosen item once before starting so Space repeats it. Applied the next time the"
 			+ " routine starts.</html>");
 	}

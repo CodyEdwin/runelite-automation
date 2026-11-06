@@ -142,31 +142,6 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 		}
 	}
 
-	/** Quantity choices. Names match the plugin's WestVarrockSmithAmount. */
-	enum Amount
-	{
-		ONE("1", 1, InterfaceID.Skillmulti._1),
-		FIVE("5", 5, InterfaceID.Skillmulti._5),
-		TEN("10", 10, InterfaceID.Skillmulti._10),
-		ALL("All", -1, InterfaceID.Skillmulti.ALL);
-
-		private final String label;
-		private final int value;
-		private final int widgetId;
-
-		Amount(String label, int value, int widgetId)
-		{
-			this.label = label;
-			this.value = value;
-			this.widgetId = widgetId;
-		}
-
-		boolean isAll()
-		{
-			return value < 0;
-		}
-	}
-
 	private enum Phase
 	{
 		BANK,
@@ -185,7 +160,6 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 
 	private final Metal metal;
 	private final Item item;
-	private final Amount amount;
 	private final SkillInterruptWatcher interruptWatcher = new SkillInterruptWatcher(Skill.SMITHING);
 
 	private Phase phase;
@@ -197,6 +171,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 	private int depositAttempts;
 	private int withdrawFailures;
 	private int leaveAttempts;
+	private int bankAnvilAttempts;
 	private int menuWaitTicks;
 	private int menuAttempts;
 	private int quantityAttempts;
@@ -209,21 +184,19 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 
 	public WestVarrockSmitherRoutine()
 	{
-		this(Metal.STEEL.name(), Item.KEEL_PARTS.name(), Amount.ALL.name());
+		this(Metal.STEEL.name(), Item.KEEL_PARTS.name());
 	}
 
 	/**
 	 * @param metalName a {@link Metal} name
 	 * @param itemName an {@link Item} name
-	 * @param amountName an {@link Amount} name
 	 */
-	public WestVarrockSmitherRoutine(String metalName, String itemName, String amountName)
+	public WestVarrockSmitherRoutine(String metalName, String itemName)
 	{
 		super("West Varrock Smither",
 			"Smiths bars at the anvil across from the Varrock west bank, banking the products.");
 		this.metal = parseMetal(metalName);
 		this.item = parseItem(itemName);
-		this.amount = parseAmount(amountName);
 	}
 
 	private static Metal parseMetal(String name)
@@ -250,18 +223,6 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 		}
 	}
 
-	private static Amount parseAmount(String name)
-	{
-		try
-		{
-			return name == null ? Amount.ALL : Amount.valueOf(name);
-		}
-		catch (IllegalArgumentException ex)
-		{
-			return Amount.ALL;
-		}
-	}
-
 	@Override
 	public boolean useFastMouse()
 	{
@@ -279,6 +240,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 		depositAttempts = 0;
 		withdrawFailures = 0;
 		leaveAttempts = 0;
+		bankAnvilAttempts = 0;
 		menuWaitTicks = 0;
 		menuAttempts = 0;
 		quantityAttempts = 0;
@@ -287,8 +249,9 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 		spacePressed = false;
 		quantityClicked = false;
 		lastInputCount = -1;
-		setPhase(Phase.BANK, "started: " + metal.name() + " " + item.name() + " " + amount.name());
+		setPhase(Phase.BANK, "started: " + metal.name() + " " + item.name());
 		setStatus("Ready: " + metal.name() + " " + item.name());
+		actions.allowWithBankOpen("anvil");
 
 		task("dismiss level up", this::levelUpOpen, this::dismissLevelUp);
 		task("bank", () -> phase == Phase.BANK, this::bankStep);
@@ -309,6 +272,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 			spacePressed = false;
 			quantityClicked = false;
 			leaveAttempts = 0;
+			bankAnvilAttempts = 0;
 		}
 	}
 
@@ -334,16 +298,28 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 				return;
 			}
 
-			if (++leaveAttempts > 4)
+			// The anvil is usually visible across the street even with the
+			// bank open. Click it first; only close the bank if it is covered.
+			TileObject anvil = findAnvil();
+			if (anvil != null && context.getInput().objectCenter(anvil) != null
+				&& bankAnvilAttempts++ < 8)
 			{
-				context.getInput().closeInterface(InterfaceID.Bankmain.UNIVERSE);
-				cooldown(2);
+				if (actions.clickObject(anvil, "anvil", new String[]{"smith"}, "anvil"))
+				{
+					bankAnvilAttempts = 0;
+					setPhase(Phase.WAIT_MENU, "clicked the anvil with the bank open");
+					menuWaitTicks = 0;
+					cooldown(1);
+				}
+				else
+				{
+					setStatus("Clicking the anvil with the bank open");
+				}
+				return;
 			}
-			else if (actions.pressKey(KeyEvent.VK_ESCAPE))
-			{
-				cooldown(2);
-			}
-			setStatus("Closing the bank");
+
+			bankAnvilAttempts = 0;
+			closeBankForAnvil(context);
 			return;
 		}
 
@@ -480,6 +456,12 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 			return;
 		}
 
+		if (actions.bankOpen())
+		{
+			closeBankForAnvil(getContext());
+			return;
+		}
+
 		if (actions.goAndClick(this::findAnvil, ANVIL_TILE, "anvil",
 			new String[]{"smith"}, "anvil", ANVIL_REACH))
 		{
@@ -491,6 +473,20 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 		{
 			setStatus("Walking to the anvil");
 		}
+	}
+
+	private void closeBankForAnvil(RoutineContext context)
+	{
+		if (++leaveAttempts > 4)
+		{
+			context.getInput().closeInterface(InterfaceID.Bankmain.UNIVERSE);
+			cooldown(2);
+		}
+		else if (actions.pressKey(KeyEvent.VK_ESCAPE))
+		{
+			cooldown(2);
+		}
+		setStatus("Closing the bank to reach the anvil");
 	}
 
 	private TileObject findAnvil()
@@ -535,7 +531,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 		if (!spacePressed)
 		{
 			GameInput input = context.getInput();
-			if (!input.isBusy() && input.pressKey(KeyEvent.VK_SPACE))
+			if (!input.isBusy() && input.pressSpace())
 			{
 				spacePressed = true;
 				cooldown(1);
@@ -544,7 +540,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 			return;
 		}
 
-		Widget quantity = context.getTargets().findWidget(amount.widgetId).orElse(null);
+		Widget quantity = context.getTargets().findWidget(InterfaceID.Smithing.MAKE_ALL).orElse(null);
 		GameInput input = context.getInput();
 		if (!quantityClicked)
 		{
@@ -552,9 +548,9 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 			{
 				if (++quantityAttempts >= MENU_ATTEMPTS)
 				{
-					stop("the anvil menu has no " + amount.label + " quantity button");
+					stop("the anvil menu has no All button");
 				}
-				setStatus("Choosing " + amount.label);
+				setStatus("Choosing All");
 				return;
 			}
 
@@ -563,7 +559,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 				quantityClicked = true;
 				cooldown(1);
 			}
-			setStatus("Choosing " + amount.label);
+			setStatus("Choosing All");
 			return;
 		}
 
@@ -604,7 +600,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 		{
 			tripStartInput = held;
 			int fromInventory = held / item.bars;
-			itemsToMake = amount.isAll() ? fromInventory : Math.min(amount.value, fromInventory);
+			itemsToMake = fromInventory;
 		}
 
 		lastInputCount = held;
@@ -670,7 +666,9 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 
 	private boolean skillMenuOpen()
 	{
-		return getContext().getTargets().findWidget(InterfaceID.Skillmulti.UNIVERSE).isPresent();
+		// Anvils open InterfaceID.Smithing, not the generic Skillmulti make
+		// interface used by fletching, cooking and gem cutting.
+		return getContext().getTargets().findWidget(InterfaceID.Smithing.UNIVERSE).isPresent();
 	}
 
 	private boolean hasSmitherItems(Inventory inventory)
@@ -731,7 +729,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 	{
 		return Arrays.asList(
 			"Status: " + getStatus(),
-			"Metal: " + metal.name() + " | Item: " + item.label + " | Amount: " + amount.name(),
+			"Metal: " + metal.name() + " | Item: " + item.label,
 			"State: " + (phase == null ? "-" : phase.name()) + " | Input left: "
 				+ (lastInputCount < 0 ? "-" : lastInputCount));
 	}

@@ -517,34 +517,33 @@ keel parts for large keel parts) to **Withdraw-All**, and start the routine at t
 
 Before starting, smith the chosen item once manually so the anvil remembers it. On later trips the
 routine opens the anvil menu and presses **Space** to repeat that last item instead of find-clicking
-it. If the menu stays open, it clicks the configured quantity button.
+it. The anvil quantity is always **All**; if the menu stays open it clicks the All button.
 
-Settings: select **West Varrock Smither** in the RSBuddy side panel and choose the metal, item and
-anvil quantity under **Routine settings**. The same settings are in RuneLite Configuration →
-**RSBuddy** and are read on Start.
+Settings: select **West Varrock Smither** in the RSBuddy side panel and choose the metal and item
+under **Routine settings**. The same settings are in RuneLite Configuration → **RSBuddy** and are
+read on Start.
 
 - **West Varrock smither: metal** (default `Steel`): Bronze, Iron, Steel, Mithril, Adamant or Rune.
 - **West Varrock smither: item** (default `Keel parts`): Dagger, Sword, Longsword, 2h sword,
   Scimitar, Mace, Warhammer, Axe, Battleaxe, Claws, Chainbody, Platelegs, Plateskirt, Platebody,
   Med helm, Full helm, Sq shield, Kiteshield, Keel parts or Large keel parts. The routine withdraws
-  the right number of bars for the item (1, 2, 3 or 5 per item; keel parts use 5) and checks the
-  option exists in the anvil menu. Large keel parts are made from 5 regular keel parts each: choose
-  **Large keel parts** and keep the regular keel parts in the first bank tab. With **All** selected
-  it withdraws a full inventory of regular keel parts and makes as many large parts as possible.
-- **West Varrock smither: amount** (default `All`): quantity chosen in the anvil menu each trip:
-  `1`, `5`, `10` or `All`. The routine keeps making trips until the bank runs out of bars.
+  the right number of bars for the item (1, 2, 3 or 5 per item; keel parts use 5). Large keel parts
+  are made from 5 regular keel parts each: choose **Large keel parts** and keep the regular keel
+  parts in the first bank tab. It withdraws a full inventory of regular keel parts and makes as many
+  large parts as possible.
 
 Loop:
 
 1. Open the nearest bank and deposit the previous trip's products. The locked hammer stays in slot 1.
 2. Left-click the bars, or regular keel parts for large keel parts, in the bank so
-   **Withdraw-All** fills the inventory, then close the bank and walk to the anvil across the street.
-3. Click the anvil and press **Space** in the menu to repeat the last smithed item. If the menu stays
-   open, click the configured quantity button.
+   **Withdraw-All** fills the inventory. Click the anvil while the bank is still open; the bank is
+   only closed manually if the anvil is not on screen.
+3. Press **Space** in the anvil menu to repeat the last smithed item. If the menu stays open, click
+   **All**.
 4. Wait while the bars are used. A level-up dialog is dismissed; if the batch stops early, the anvil
-   is clicked and the product chosen again.
-5. When the bars are gone, walk back to the bank and repeat. Stops with a clear status when the bank
-   has no bars for the selected item or the anvil menu does not offer it (Smithing level too low).
+   is clicked and Space is pressed again.
+5. When the inventory batch is done, walk back to the bank and repeat. Stops with a clear status when
+   the bank has no input for the selected item or the All button cannot be found.
 
 The bars or regular keel parts must be in the first bank tab with **Withdraw-All** as their left
 click. The routine does not drop anything, so keep unrelated inventory items to a minimum.
