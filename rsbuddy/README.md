@@ -492,11 +492,13 @@ Recipes and ores per bar:
 
 Loop:
 
-1. Open the Edgeville bank, **Deposit inventory**, then withdraw exactly as many ores as fit in
-   the free inventory slots (whole bars only, using the bank's Withdraw-10/5/1 actions).
-2. **Escape** to close the bank and walk to the Edgeville furnace by minimap.
-3. Click the furnace (**Smelt**), pick the chosen bar in the smelting menu by its item/name, and
-   click **All** if the quantity menu stays open.
+1. Open the Edgeville bank and **Deposit inventory**. For Steel, the routine left-clicks iron ore
+   (set it to **Withdraw-9**) and then coal (set it to **Withdraw-All**). Other bars use the bank's
+   Withdraw-10/5/1 actions.
+2. Click the visible Edgeville furnace while the bank is still open. If the bank covers it, the
+   routine presses **Escape** and clicks it instead of walking by minimap.
+3. When the smelting menu opens, Steel presses **2**; the other bars are picked by item/name. The
+   routine clicks **All** if the quantity menu stays open.
 4. Wait while the ores are used. A level-up dialog is dismissed; if the batch stops early, the
    furnace is clicked again.
 5. When the metal ore is gone, walk back to the bank, deposit the bars and any leftover coal, and

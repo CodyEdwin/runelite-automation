@@ -58,7 +58,7 @@ public final class EdgevilleSmelterScript extends TaskRoutine
 
 	private static final WorldPoint FURNACE_TILE = new WorldPoint(3110, 3499, 0);
 	private static final int BANK_SEARCH_DISTANCE = 20;
-	private static final int FURNACE_SEARCH_DISTANCE = 10;
+	private static final int FURNACE_SEARCH_DISTANCE = 25;
 	private static final int FURNACE_REACH = 4;
 	private static final int BANK_LOAD_TICKS = 4;
 	private static final int DEPOSIT_ATTEMPTS = 4;
@@ -230,6 +230,7 @@ public final class EdgevilleSmelterScript extends TaskRoutine
 		lastOreCount = -1;
 		setPhase(Phase.BANK, "started: " + bar.name());
 		setStatus("Ready: " + bar.name());
+		actions.allowWithBankOpen("furnace");
 
 		task("dismiss level up", this::levelUpOpen, this::dismissLevelUp);
 		task("bank", () -> phase == Phase.BANK, this::bankStep);
@@ -249,6 +250,7 @@ public final class EdgevilleSmelterScript extends TaskRoutine
 			menuAttempts = 0;
 			allAttempts = 0;
 			walkAttempts = 0;
+			leaveAttempts = 0;
 		}
 	}
 
@@ -267,23 +269,8 @@ public final class EdgevilleSmelterScript extends TaskRoutine
 
 		if (bankStage == BankStage.LEAVE)
 		{
-			if (!actions.bankOpen())
-			{
-				setPhase(Phase.WALK_TO_FURNACE, "bank closed");
-				setStatus("Walking to the furnace");
-				return;
-			}
-
-			if (++leaveAttempts > 4)
-			{
-				context.getInput().closeInterface(InterfaceID.Bankmain.UNIVERSE);
-				cooldown(2);
-			}
-			else if (actions.pressKey(KeyEvent.VK_ESCAPE))
-			{
-				cooldown(2);
-			}
-			setStatus("Closing the bank");
+			setPhase(Phase.CLICK_FURNACE, "ores withdrawn, clicking the visible furnace");
+			setStatus("Clicking the furnace");
 			return;
 		}
 
@@ -387,6 +374,12 @@ public final class EdgevilleSmelterScript extends TaskRoutine
 
 	private void withdraw(Inventory inventory)
 	{
+		if (bar == Bar.STEEL)
+		{
+			withdrawSteel(inventory);
+			return;
+		}
+
 		RoutineContext context = getContext();
 		for (int i = 0; i < bar.ingredients.length; i++)
 		{
@@ -425,6 +418,48 @@ public final class EdgevilleSmelterScript extends TaskRoutine
 		bankStage = BankStage.LEAVE;
 		bankTicks = 0;
 		leaveAttempts = 0;
+		setStatus("Leaving the bank with " + tripBars + " bars worth of ore");
+	}
+
+	/**
+	 * Steel uses the bank's left-click options: iron ore is set to Withdraw-9
+	 * and coal to Withdraw-All, so two ordinary clicks fill the inventory.
+	 */
+	private void withdrawSteel(Inventory inventory)
+	{
+		RoutineContext context = getContext();
+		int iron = inventory.countItem(ItemID.IRON_ORE);
+		int coal = inventory.countItem(ItemID.COAL);
+
+		if (iron < targetCounts[0] || coal < targetCounts[1])
+		{
+			int itemId = iron < targetCounts[0] ? ItemID.IRON_ORE : ItemID.COAL;
+			int have = itemId == ItemID.IRON_ORE ? iron : coal;
+			int target = itemId == ItemID.IRON_ORE ? targetCounts[0] : targetCounts[1];
+			if (actions.withdraw(itemId))
+			{
+				withdrawFailures = 0;
+				cooldown(1);
+			}
+			else if (++withdrawFailures >= WITHDRAW_FAIL_LIMIT)
+			{
+				stop("could not withdraw " + itemName(context, itemId)
+					+ " (set left-click Iron ore to Withdraw-9 and Coal to Withdraw-All)");
+				return;
+			}
+			setStatus("Withdrawing " + itemName(context, itemId) + " (" + have + "/" + target + ")");
+			return;
+		}
+
+		tripBars = Math.min(iron, coal / 2);
+		if (tripBars <= 0)
+		{
+			stop("withdrew no complete steel bars");
+			return;
+		}
+
+		bankStage = BankStage.LEAVE;
+		bankTicks = 0;
 		setStatus("Leaving the bank with " + tripBars + " bars worth of ore");
 	}
 
@@ -471,15 +506,35 @@ public final class EdgevilleSmelterScript extends TaskRoutine
 			return;
 		}
 
-		WorldPoint location = getContext().getPlayerLocation();
-		if (location != null && location.distanceTo2D(FURNACE_TILE) > FURNACE_SEARCH_DISTANCE)
+		RoutineContext context = getContext();
+		TileObject furnace = findFurnace();
+		if (furnace == null)
 		{
-			setPhase(Phase.WALK_TO_FURNACE, "too far from the furnace");
+			if (actions.bankOpen())
+			{
+				closeBankForFurnace();
+				return;
+			}
+			walkToFurnace();
 			return;
 		}
 
-		if (actions.goAndClick(this::findFurnace, FURNACE_TILE, "furnace",
-			new String[]{"smelt"}, "furnace", FURNACE_REACH))
+		if (actions.bankOpen() && context.getInput().objectCenter(furnace) == null)
+		{
+			closeBankForFurnace();
+			return;
+		}
+
+		WorldPoint location = context.getPlayerLocation();
+		if (!actions.bankOpen() && !actions.isMoving() && location != null
+			&& location.distanceTo2D(FURNACE_TILE) > FURNACE_REACH
+			&& !actions.clickableOnScreen(furnace))
+		{
+			walkToFurnace();
+			return;
+		}
+
+		if (actions.clickObject(furnace, "furnace", new String[]{"smelt"}, "furnace"))
 		{
 			setPhase(Phase.WAIT_MENU, "clicked the furnace");
 			menuWaitTicks = 0;
@@ -489,6 +544,21 @@ public final class EdgevilleSmelterScript extends TaskRoutine
 		{
 			setStatus("Clicking the furnace");
 		}
+	}
+
+	private void closeBankForFurnace()
+	{
+		RoutineContext context = getContext();
+		if (++leaveAttempts > 4)
+		{
+			context.getInput().closeInterface(InterfaceID.Bankmain.UNIVERSE);
+			cooldown(2);
+		}
+		else if (actions.pressKey(KeyEvent.VK_ESCAPE))
+		{
+			cooldown(2);
+		}
+		setStatus("Closing the bank to click the furnace");
 	}
 
 	private TileObject findFurnace()
@@ -532,7 +602,7 @@ public final class EdgevilleSmelterScript extends TaskRoutine
 
 		if (!barKeyPressed)
 		{
-			int option = findBarOption(context);
+			int option = bar == Bar.STEEL ? 1 : findBarOption(context);
 			if (option < 0)
 			{
 				stop("the smelting menu has no " + bar.name() + " option (Smithing level too low?)");
