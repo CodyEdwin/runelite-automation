@@ -208,8 +208,8 @@ public final class RoutineLibrary
 			WestVarrockSmithItem.values(), "westVarrockSmithItem", form.config()::westVarrockSmithItem);
 		form.addCombo("Amount at anvil", "Quantity to choose in the anvil menu each trip.",
 			WestVarrockSmithAmount.values(), "westVarrockSmithAmount", form.config()::westVarrockSmithAmount);
-		form.setHint("<html>Hammer in locked slot 1. Keep the bars in the first bank tab."
-			+ " Applied the next time the routine starts.</html>");
+		form.setHint("<html>Hammer in locked slot 1. Keep the bars, or regular keel parts for large"
+			+ " keel parts, in the first bank tab. Applied the next time the routine starts.</html>");
 	}
 
 	private static void gemCutter(RoutineSettingsForm form)

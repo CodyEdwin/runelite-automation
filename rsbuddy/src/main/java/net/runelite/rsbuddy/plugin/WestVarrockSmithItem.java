@@ -47,7 +47,9 @@ public enum WestVarrockSmithItem
 	MED_HELM("Med helm"),
 	FULL_HELM("Full helm"),
 	SQ_SHIELD("Sq shield"),
-	KITESHIELD("Kiteshield");
+	KITESHIELD("Kiteshield"),
+	KEEL_PARTS("Keel parts"),
+	LARGE_KEEL_PARTS("Large keel parts");
 
 	private final String label;
 

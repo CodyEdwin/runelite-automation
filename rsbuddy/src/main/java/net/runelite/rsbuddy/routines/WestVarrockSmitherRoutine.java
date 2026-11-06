@@ -115,22 +115,41 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 		MED_HELM("Med helm", 1, 1139, 1137, 1141, 1143, 1145, 1147),
 		FULL_HELM("Full helm", 2, 1155, 1153, 1157, 1159, 1161, 1163),
 		SQ_SHIELD("Sq shield", 2, 1173, 1175, 1177, 1181, 1183, 1185),
-		KITESHIELD("Kiteshield", 3, 1189, 1191, 1193, 1197, 1199, 1201);
+		KITESHIELD("Kiteshield", 3, 1189, 1191, 1193, 1197, 1199, 1201),
+		KEEL_PARTS("Keel parts", 5, 31999, 32002, 32005, 32008, 32011, 32014),
+		LARGE_KEEL_PARTS("Large keel parts", 5, true, 32020, 32023, 32026, 32029, 32032, 32035);
 
 		private final String label;
 		private final int bars;
+		private final boolean keelPartsInput;
 		private final int[] productIds;
 
 		Item(String label, int bars, int... productIds)
 		{
+			this(label, bars, false, productIds);
+		}
+
+		Item(String label, int bars, boolean keelPartsInput, int... productIds)
+		{
 			this.label = label;
 			this.bars = bars;
+			this.keelPartsInput = keelPartsInput;
 			this.productIds = productIds;
 		}
 
 		int productId(Metal metal)
 		{
 			return productIds[metal.ordinal()];
+		}
+
+		int ingredientId(Metal metal)
+		{
+			return keelPartsInput ? KEEL_PARTS.productId(metal) : metal.barId;
+		}
+
+		boolean usesKeelParts()
+		{
+			return keelPartsInput;
 		}
 	}
 
@@ -183,7 +202,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 	private Phase phase;
 	private BankStage bankStage;
 	private int itemsToMake;
-	private int barsToWithdraw;
+	private int inputToWithdraw;
 
 	private int bankTicks;
 	private int depositAttempts;
@@ -197,11 +216,11 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 
 	private boolean itemClicked;
 	private boolean quantityClicked;
-	private int lastBarCount = -1;
+	private int lastInputCount = -1;
 
 	public WestVarrockSmitherRoutine()
 	{
-		this(Metal.STEEL.name(), Item.PLATEBODY.name(), Amount.ALL.name());
+		this(Metal.STEEL.name(), Item.KEEL_PARTS.name(), Amount.ALL.name());
 	}
 
 	/**
@@ -234,11 +253,11 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 	{
 		try
 		{
-			return name == null ? Item.PLATEBODY : Item.valueOf(name);
+			return name == null ? Item.KEEL_PARTS : Item.valueOf(name);
 		}
 		catch (IllegalArgumentException ex)
 		{
-			return Item.PLATEBODY;
+			return Item.KEEL_PARTS;
 		}
 	}
 
@@ -266,7 +285,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 		phase = null;
 		bankStage = BankStage.DEPOSIT;
 		itemsToMake = 0;
-		barsToWithdraw = 0;
+		inputToWithdraw = 0;
 		bankTicks = 0;
 		depositAttempts = 0;
 		withdrawFailures = 0;
@@ -278,7 +297,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 		restarts = 0;
 		itemClicked = false;
 		quantityClicked = false;
-		lastBarCount = -1;
+		lastInputCount = -1;
 		setPhase(Phase.BANK, "started: " + metal.name() + " " + item.name() + " " + amount.name());
 		setStatus("Ready: " + metal.name() + " " + item.name());
 
@@ -363,12 +382,12 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 	private void deposit(RoutineContext context, Inventory inventory)
 	{
 		// A locked hammer keeps slot 1 filled, so the inventory is never completely
-		// empty. Treat the deposit as done once no bars or products are left.
+		// empty. Treat the deposit as done once no inputs or products are left.
 		if (hasSmitherItems(inventory))
 		{
 			if (depositAttempts >= DEPOSIT_ATTEMPTS)
 			{
-				stop("Deposit inventory did not clear the bars or products (are they in a locked slot?)");
+				stop("Deposit inventory did not clear the inputs or products (are they in a locked slot?)");
 				return;
 			}
 
@@ -392,7 +411,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 		bankTicks = 0;
 		depositAttempts = 0;
 		withdrawFailures = 0;
-		setStatus("Withdrawing " + metal.name() + " bars");
+		setStatus("Withdrawing " + ingredientName());
 	}
 
 	private boolean planTrip(RoutineContext context, Inventory inventory)
@@ -404,7 +423,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 			return false;
 		}
 
-		int available = bank.count(metal.barId);
+		int available = bank.count(item.ingredientId(metal));
 		int maxBySlots = inventory.getEmptySlots() / item.bars;
 		int requested = amount.isAll() ? maxBySlots : Math.min(amount.value, maxBySlots);
 		int make = Math.min(requested, available / item.bars);
@@ -418,7 +437,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 			}
 			if (available < item.bars)
 			{
-				stop("bank has no " + metal.name().toLowerCase(Locale.ROOT) + " bars for a "
+				stop("bank has no " + ingredientName() + " for a "
 					+ item.label.toLowerCase(Locale.ROOT));
 			}
 			else
@@ -428,32 +447,41 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 			return false;
 		}
 
-		itemsToMake = make;
-		barsToWithdraw = make * item.bars;
+		if (item.usesKeelParts() && amount.isAll())
+		{
+			// Withdraw a full inventory of small keel parts; the anvil's All
+			// option makes as many large parts as those parts allow.
+			inputToWithdraw = Math.min(available, inventory.getEmptySlots());
+			itemsToMake = inputToWithdraw / item.bars;
+		}
+		else
+		{
+			itemsToMake = make;
+			inputToWithdraw = make * item.bars;
+		}
 		return true;
 	}
 
 	private void withdraw(RoutineContext context, Inventory inventory)
 	{
-		int bars = inventory.countItem(metal.barId);
-		if (bars < barsToWithdraw)
+		int ingredientId = item.ingredientId(metal);
+		int held = inventory.countItem(ingredientId);
+		if (held < inputToWithdraw)
 		{
-			int missing = barsToWithdraw - bars;
+			int missing = inputToWithdraw - held;
 			int amountToWithdraw = missing >= 10 ? 10 : missing >= 5 ? 5 : 1;
 			GameInput input = context.getInput();
-			if (input.withdrawBankItem(metal.barId, "Withdraw-" + amountToWithdraw))
+			if (input.withdrawBankItem(ingredientId, "Withdraw-" + amountToWithdraw))
 			{
 				withdrawFailures = 0;
 			}
 			else if (++withdrawFailures >= WITHDRAW_FAIL_LIMIT)
 			{
-				stop("could not withdraw " + metal.name().toLowerCase(Locale.ROOT)
-					+ " bars (keep them in the first bank tab)");
+				stop("could not withdraw " + ingredientName() + " (keep them in the first bank tab)");
 				return;
 			}
 
-			setStatus("Withdrawing " + metal.name().toLowerCase(Locale.ROOT)
-				+ " bars (" + bars + "/" + barsToWithdraw + ")");
+			setStatus("Withdrawing " + ingredientName() + " (" + held + "/" + inputToWithdraw + ")");
 			cooldown(1);
 			return;
 		}
@@ -461,8 +489,8 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 		bankStage = BankStage.LEAVE;
 		bankTicks = 0;
 		leaveAttempts = 0;
-		setStatus("Leaving the bank with " + itemsToMake + " " + item.label.toLowerCase(Locale.ROOT)
-			+ " worth of bars");
+		setStatus("Leaving the bank with enough input for " + itemsToMake + " "
+			+ item.label.toLowerCase(Locale.ROOT));
 	}
 
 	// ---------------------------------------------------------------- anvil
@@ -601,7 +629,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 		quantityClicked = false;
 		menuAttempts = 0;
 		quantityAttempts = 0;
-		lastBarCount = getContext().getInventory().countItem(metal.barId);
+		lastInputCount = getContext().getInventory().countItem(item.ingredientId(metal));
 		interruptWatcher.reset(getContext().getClient());
 		setPhase(Phase.SMITHING, "item chosen, smithing");
 		setStatus("Smithing " + productName(getContext()));
@@ -617,37 +645,37 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 		}
 
 		Inventory inventory = context.getInventory();
-		int bars = inventory.countItem(metal.barId);
-		if (bars < item.bars)
+		int held = inventory.countItem(item.ingredientId(metal));
+		if (held < item.bars)
 		{
 			bankStage = BankStage.DEPOSIT;
 			bankTicks = 0;
 			depositAttempts = 0;
 			restarts = 0;
-			setPhase(Phase.BANK, "bars used up, banking");
+			setPhase(Phase.BANK, "input used up, banking");
 			setStatus("Walking back to the bank");
 			return;
 		}
 
 		Player player = context.getPlayer();
 		boolean animating = player != null && player.getAnimation() != -1;
-		boolean usedBar = lastBarCount >= 0 && bars < lastBarCount;
-		lastBarCount = bars;
-		if (usedBar)
+		boolean usedInput = lastInputCount >= 0 && held < lastInputCount;
+		lastInputCount = held;
+		if (usedInput)
 		{
 			restarts = 0;
 		}
 
-		String interrupt = interruptWatcher.update(context.getClient(), animating, usedBar);
+		String interrupt = interruptWatcher.update(context.getClient(), animating, usedInput);
 		if (interrupt == null)
 		{
-			setStatus("Smithing " + productName(context) + " (" + bars + " bars left)");
+			setStatus("Smithing " + productName(context) + " (" + held + " " + ingredientName() + " left)");
 			return;
 		}
 
 		if (++restarts > RESTART_LIMIT)
 		{
-			stop("smithing keeps stopping with bars left");
+			stop("smithing keeps stopping with input left");
 			return;
 		}
 
@@ -707,15 +735,22 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 	private boolean hasSmitherItems(Inventory inventory)
 	{
 		int productId = item.productId(metal);
+		int ingredientId = item.ingredientId(metal);
 		for (net.runelite.api.Item inventoryItem : inventory.getItems())
 		{
 			if (inventoryItem != null
-				&& (inventoryItem.getId() == metal.barId || inventoryItem.getId() == productId))
+				&& (inventoryItem.getId() == ingredientId || inventoryItem.getId() == productId))
 			{
 				return true;
 			}
 		}
 		return false;
+	}
+
+	private String ingredientName()
+	{
+		return item.usesKeelParts() ? "keel parts"
+			: metal.name().toLowerCase(Locale.ROOT) + " bars";
 	}
 
 	private String productName(RoutineContext context)
@@ -756,7 +791,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 		return Arrays.asList(
 			"Status: " + getStatus(),
 			"Metal: " + metal.name() + " | Item: " + item.label + " | Amount: " + amount.name(),
-			"State: " + (phase == null ? "-" : phase.name()) + " | Bars left: "
-				+ (lastBarCount < 0 ? "-" : lastBarCount));
+			"State: " + (phase == null ? "-" : phase.name()) + " | Input left: "
+				+ (lastInputCount < 0 ? "-" : lastInputCount));
 	}
 }

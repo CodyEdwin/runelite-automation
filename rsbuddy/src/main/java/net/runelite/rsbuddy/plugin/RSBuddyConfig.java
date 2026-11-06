@@ -419,7 +419,7 @@ public interface RSBuddyConfig extends Config
 	)
 	default WestVarrockSmithItem westVarrockSmithItem()
 	{
-		return WestVarrockSmithItem.PLATEBODY;
+		return WestVarrockSmithItem.KEEL_PARTS;
 	}
 
 	@ConfigItem(
