@@ -450,7 +450,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 
 	private void goToAnvil()
 	{
-		if (skillMenuOpen())
+		if (makeMenuOpen())
 		{
 			enterMenu();
 			return;
@@ -499,7 +499,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 	private void menuStep()
 	{
 		RoutineContext context = getContext();
-		boolean menuOpen = skillMenuOpen();
+		boolean menuOpen = makeMenuOpen();
 
 		if (phase == Phase.WAIT_MENU)
 		{
@@ -531,19 +531,17 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 		if (!optionPressed)
 		{
 			GameInput input = context.getInput();
-			int key = item.usesKeelParts() ? KeyEvent.VK_1 + metal.ordinal() : KeyEvent.VK_SPACE;
+			int key = itemKey();
 			if (!input.isBusy() && input.pressKey(key))
 			{
 				optionPressed = true;
 				cooldown(1);
 			}
-			setStatus(item.usesKeelParts()
-				? "Pressing " + (metal.ordinal() + 1) + " for " + productName(context)
-				: "Pressing Space to repeat " + productName(context));
+			setStatus("Pressing " + itemKeyLabel() + " for " + productName(context));
 			return;
 		}
 
-		Widget quantity = context.getTargets().findWidget(InterfaceID.Smithing.MAKE_ALL).orElse(null);
+		Widget quantity = findQuantityButton();
 		GameInput input = context.getInput();
 		if (!quantityClicked)
 		{
@@ -615,7 +613,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 	private void smithingStep()
 	{
 		RoutineContext context = getContext();
-		if (skillMenuOpen())
+		if (makeMenuOpen())
 		{
 			enterMenu();
 			return;
@@ -667,11 +665,74 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 
 	// -------------------------------------------------------------- helpers
 
-	private boolean skillMenuOpen()
+	private boolean makeMenuOpen()
 	{
-		// Anvils open InterfaceID.Smithing, not the generic Skillmulti make
+		// Standard anvil items use the Smithing interface. Large keel parts
+		// use its metal-choice make menu, which can be the generic Skillmulti
 		// interface used by fletching, cooking and gem cutting.
-		return getContext().getTargets().findWidget(InterfaceID.Smithing.UNIVERSE).isPresent();
+		return getContext().getTargets().findWidget(InterfaceID.Smithing.UNIVERSE).isPresent()
+			|| getContext().getTargets().findWidget(InterfaceID.Smithing.FRAME).isPresent()
+			|| getContext().getTargets().findWidget(InterfaceID.Skillmulti.UNIVERSE).isPresent();
+	}
+
+	private Widget findQuantityButton()
+	{
+		Widget quantity = getContext().getTargets().findWidget(InterfaceID.Smithing.MAKE_ALL).orElse(null);
+		if (quantity == null || quantity.isHidden())
+		{
+			quantity = getContext().getTargets().findWidget(InterfaceID.Skillmulti.ALL).orElse(null);
+		}
+		return quantity;
+	}
+
+	private int itemKey()
+	{
+		if (!item.usesKeelParts())
+		{
+			return KeyEvent.VK_SPACE;
+		}
+		switch (metal)
+		{
+			case BRONZE:
+				return KeyEvent.VK_SPACE;
+			case IRON:
+				return KeyEvent.VK_1;
+			case STEEL:
+				return KeyEvent.VK_2;
+			case MITHRIL:
+				return KeyEvent.VK_3;
+			case ADAMANT:
+				return KeyEvent.VK_5;
+			case RUNE:
+				return KeyEvent.VK_6;
+			default:
+				return KeyEvent.VK_SPACE;
+		}
+	}
+
+	private String itemKeyLabel()
+	{
+		if (!item.usesKeelParts())
+		{
+			return "Space";
+		}
+		switch (metal)
+		{
+			case BRONZE:
+				return "Space";
+			case IRON:
+				return "1";
+			case STEEL:
+				return "2";
+			case MITHRIL:
+				return "3";
+			case ADAMANT:
+				return "5";
+			case RUNE:
+				return "6";
+			default:
+				return "Space";
+		}
 	}
 
 	private boolean hasSmitherItems(Inventory inventory)

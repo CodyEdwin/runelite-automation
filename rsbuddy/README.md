@@ -517,8 +517,9 @@ keel parts for large keel parts) to **Withdraw-All**, and start the routine at t
 
 Before starting, smith the chosen item once manually so the anvil remembers it. On later trips the
 routine opens the anvil menu and presses **Space** to repeat that last item instead of find-clicking
-it. Large keel parts use the metal number instead (1–5 for bronze–adamant, 6 for rune). The anvil
-quantity is always **All**; if the menu stays open it clicks the All button.
+it. Large keel parts use the menu keys instead: Space bronze, 1 iron, 2 steel, 3 mithril, 5
+adamant, 6 rune. The anvil quantity is always **All**; if the menu stays open it clicks the All
+button.
 
 Settings: select **West Varrock Smither** in the RSBuddy side panel and choose the metal and item
 under **Routine settings**. The same settings are in RuneLite Configuration → **RSBuddy** and are
@@ -540,7 +541,7 @@ Loop:
    **Withdraw-All** fills the inventory. Click the anvil while the bank is still open; the bank is
    only closed manually if the anvil is not on screen.
 3. Press **Space** in the anvil menu to repeat the last smithed item. For large keel parts, press
-   the metal's number instead: 1 bronze, 2 iron, 3 steel, 4 mithril, 5 adamant (6 rune). If the
+   Space for bronze, 1 for iron, 2 for steel, 3 for mithril, 5 for adamant, or 6 for rune. If the
    menu stays open, click **All**.
 4. Wait while the bars are used. A level-up dialog is dismissed; if the batch stops early, the anvil
    is clicked and the item key is pressed again.
