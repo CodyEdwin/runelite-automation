@@ -512,8 +512,12 @@ Smithing level, or the bank cannot withdraw the ores.
 ## West Varrock Smither
 
 `WestVarrockSmitherRoutine` appears in the panel as **West Varrock Smither**. Put a hammer in the
-**locked first inventory slot**, keep the selected metal's bars in the first bank tab, and start the
-routine at the Varrock west bank.
+**locked first inventory slot**, set the bank left click on the selected metal's bars (or regular
+keel parts for large keel parts) to **Withdraw-All**, and start the routine at the Varrock west bank.
+
+Before starting, smith the chosen item once manually so the anvil remembers it. On later trips the
+routine opens the anvil menu and presses **Space** to repeat that last item instead of find-clicking
+it. If the menu stays open, it clicks the configured quantity button.
 
 Settings: select **West Varrock Smither** in the RSBuddy side panel and choose the metal, item and
 anvil quantity under **Routine settings**. The same settings are in RuneLite Configuration →
@@ -533,16 +537,17 @@ anvil quantity under **Routine settings**. The same settings are in RuneLite Con
 Loop:
 
 1. Open the nearest bank and deposit the previous trip's products. The locked hammer stays in slot 1.
-2. Withdraw enough bars, or regular keel parts for large keel parts, using exact Withdraw-10/5/1
-   actions, then close the bank and walk to the anvil across the street.
-3. Click the anvil, choose the product in the anvil menu, then click the selected quantity button.
+2. Left-click the bars, or regular keel parts for large keel parts, in the bank so
+   **Withdraw-All** fills the inventory, then close the bank and walk to the anvil across the street.
+3. Click the anvil and press **Space** in the menu to repeat the last smithed item. If the menu stays
+   open, click the configured quantity button.
 4. Wait while the bars are used. A level-up dialog is dismissed; if the batch stops early, the anvil
    is clicked and the product chosen again.
 5. When the bars are gone, walk back to the bank and repeat. Stops with a clear status when the bank
    has no bars for the selected item or the anvil menu does not offer it (Smithing level too low).
 
-The bars or regular keel parts must be in the first bank tab. The routine does not drop anything,
-so keep unrelated inventory items to a minimum.
+The bars or regular keel parts must be in the first bank tab with **Withdraw-All** as their left
+click. The routine does not drop anything, so keep unrelated inventory items to a minimum.
 
 ## Motherlode Miner
 

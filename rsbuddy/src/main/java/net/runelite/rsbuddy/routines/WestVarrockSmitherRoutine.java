@@ -29,7 +29,6 @@ import java.awt.event.KeyEvent;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
-import net.runelite.api.Client;
 import net.runelite.api.ItemComposition;
 import net.runelite.api.ItemContainer;
 import net.runelite.api.Player;
@@ -66,16 +65,6 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 	private static final int MENU_ATTEMPTS = 4;
 	private static final int RESTART_LIMIT = 6;
 	private static final int LEVEL_UP_CLICK_ATTEMPTS = 3;
-
-	/** Anvil make-menu option slots, in order (A is the first item). */
-	private static final int[] MAKE_OPTIONS = {
-		InterfaceID.Skillmulti.A, InterfaceID.Skillmulti.B, InterfaceID.Skillmulti.C,
-		InterfaceID.Skillmulti.D, InterfaceID.Skillmulti.E, InterfaceID.Skillmulti.F,
-		InterfaceID.Skillmulti.G, InterfaceID.Skillmulti.H, InterfaceID.Skillmulti.I,
-		InterfaceID.Skillmulti.J, InterfaceID.Skillmulti.K, InterfaceID.Skillmulti.L,
-		InterfaceID.Skillmulti.M, InterfaceID.Skillmulti.N, InterfaceID.Skillmulti.O,
-		InterfaceID.Skillmulti.P, InterfaceID.Skillmulti.Q, InterfaceID.Skillmulti.R
-	};
 
 	/** Metal choices. Names match the plugin's WestVarrockSmithMetal. */
 	enum Metal
@@ -202,7 +191,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 	private Phase phase;
 	private BankStage bankStage;
 	private int itemsToMake;
-	private int inputToWithdraw;
+	private int tripStartInput = -1;
 
 	private int bankTicks;
 	private int depositAttempts;
@@ -214,7 +203,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 	private int levelUpAttempts;
 	private int restarts;
 
-	private boolean itemClicked;
+	private boolean spacePressed;
 	private boolean quantityClicked;
 	private int lastInputCount = -1;
 
@@ -285,7 +274,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 		phase = null;
 		bankStage = BankStage.DEPOSIT;
 		itemsToMake = 0;
-		inputToWithdraw = 0;
+		tripStartInput = -1;
 		bankTicks = 0;
 		depositAttempts = 0;
 		withdrawFailures = 0;
@@ -295,7 +284,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 		quantityAttempts = 0;
 		levelUpAttempts = 0;
 		restarts = 0;
-		itemClicked = false;
+		spacePressed = false;
 		quantityClicked = false;
 		lastInputCount = -1;
 		setPhase(Phase.BANK, "started: " + metal.name() + " " + item.name() + " " + amount.name());
@@ -317,7 +306,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 			menuWaitTicks = 0;
 			menuAttempts = 0;
 			quantityAttempts = 0;
-			itemClicked = false;
+			spacePressed = false;
 			quantityClicked = false;
 			leaveAttempts = 0;
 		}
@@ -402,6 +391,8 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 			return;
 		}
 
+		tripStartInput = -1;
+		itemsToMake = 0;
 		if (!planTrip(context, inventory))
 		{
 			return;
@@ -425,40 +416,25 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 
 		int available = bank.count(item.ingredientId(metal));
 		int maxBySlots = inventory.getEmptySlots() / item.bars;
-		int requested = amount.isAll() ? maxBySlots : Math.min(amount.value, maxBySlots);
-		int make = Math.min(requested, available / item.bars);
 
-		if (make <= 0)
+		if (available < item.bars)
 		{
 			if (bankTicks < BANK_LOAD_TICKS)
 			{
 				setStatus("Waiting for the bank items");
 				return false;
 			}
-			if (available < item.bars)
-			{
-				stop("bank has no " + ingredientName() + " for a "
-					+ item.label.toLowerCase(Locale.ROOT));
-			}
-			else
-			{
-				stop("not enough free inventory slots for a " + item.label.toLowerCase(Locale.ROOT));
-			}
+			stop("bank has no " + ingredientName() + " for a "
+				+ item.label.toLowerCase(Locale.ROOT));
 			return false;
 		}
 
-		if (item.usesKeelParts() && amount.isAll())
+		if (maxBySlots <= 0)
 		{
-			// Withdraw a full inventory of small keel parts; the anvil's All
-			// option makes as many large parts as those parts allow.
-			inputToWithdraw = Math.min(available, inventory.getEmptySlots());
-			itemsToMake = inputToWithdraw / item.bars;
+			stop("not enough free inventory slots for a " + item.label.toLowerCase(Locale.ROOT));
+			return false;
 		}
-		else
-		{
-			itemsToMake = make;
-			inputToWithdraw = make * item.bars;
-		}
+
 		return true;
 	}
 
@@ -466,22 +442,24 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 	{
 		int ingredientId = item.ingredientId(metal);
 		int held = inventory.countItem(ingredientId);
-		if (held < inputToWithdraw)
+		if (held < item.bars)
 		{
-			int missing = inputToWithdraw - held;
-			int amountToWithdraw = missing >= 10 ? 10 : missing >= 5 ? 5 : 1;
+			// The bank's left click is expected to be Withdraw-All, so fill
+			// the inventory in one click. For large keel parts this also
+			// removes a whole inventory of small keel parts.
 			GameInput input = context.getInput();
-			if (input.withdrawBankItem(ingredientId, "Withdraw-" + amountToWithdraw))
+			if (input.clickBankItem(ingredientId))
 			{
 				withdrawFailures = 0;
 			}
 			else if (++withdrawFailures >= WITHDRAW_FAIL_LIMIT)
 			{
-				stop("could not withdraw " + ingredientName() + " (keep them in the first bank tab)");
+				stop("could not withdraw " + ingredientName()
+					+ " (set its bank left click to Withdraw-All and keep it in the first tab)");
 				return;
 			}
 
-			setStatus("Withdrawing " + ingredientName() + " (" + held + "/" + inputToWithdraw + ")");
+			setStatus("Withdrawing " + ingredientName());
 			cooldown(1);
 			return;
 		}
@@ -489,8 +467,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 		bankStage = BankStage.LEAVE;
 		bankTicks = 0;
 		leaveAttempts = 0;
-		setStatus("Leaving the bank with enough input for " + itemsToMake + " "
-			+ item.label.toLowerCase(Locale.ROOT));
+		setStatus("Leaving the bank with " + ingredientName());
 	}
 
 	// ---------------------------------------------------------------- anvil
@@ -544,7 +521,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 
 		if (!menuOpen)
 		{
-			if (itemClicked)
+			if (spacePressed)
 			{
 				startSmithing();
 			}
@@ -555,23 +532,15 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 			return;
 		}
 
-		if (!itemClicked)
+		if (!spacePressed)
 		{
-			Widget option = findItemOption(context);
-			if (option == null)
-			{
-				stop("the anvil menu has no " + productName(context).toLowerCase(Locale.ROOT)
-					+ " option (Smithing level too low?)");
-				return;
-			}
-
 			GameInput input = context.getInput();
-			if (!input.isBusy() && input.click(option))
+			if (!input.isBusy() && input.pressKey(KeyEvent.VK_SPACE))
 			{
-				itemClicked = true;
+				spacePressed = true;
 				cooldown(1);
 			}
-			setStatus("Choosing " + productName(context));
+			setStatus("Pressing Space to repeat " + productName(context));
 			return;
 		}
 
@@ -617,7 +586,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 		menuWaitTicks = 0;
 		menuAttempts = 0;
 		quantityAttempts = 0;
-		itemClicked = false;
+		spacePressed = false;
 		quantityClicked = false;
 		levelUpAttempts = 0;
 		setStatus("Choosing " + productName(getContext()));
@@ -625,11 +594,20 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 
 	private void startSmithing()
 	{
-		itemClicked = false;
+		spacePressed = false;
 		quantityClicked = false;
 		menuAttempts = 0;
 		quantityAttempts = 0;
-		lastInputCount = getContext().getInventory().countItem(item.ingredientId(metal));
+
+		int held = getContext().getInventory().countItem(item.ingredientId(metal));
+		if (tripStartInput < 0)
+		{
+			tripStartInput = held;
+			int fromInventory = held / item.bars;
+			itemsToMake = amount.isAll() ? fromInventory : Math.min(amount.value, fromInventory);
+		}
+
+		lastInputCount = held;
 		interruptWatcher.reset(getContext().getClient());
 		setPhase(Phase.SMITHING, "item chosen, smithing");
 		setStatus("Smithing " + productName(getContext()));
@@ -646,13 +624,18 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 
 		Inventory inventory = context.getInventory();
 		int held = inventory.countItem(item.ingredientId(metal));
-		if (held < item.bars)
+		int usedFromTrip = tripStartInput < 0 ? 0 : tripStartInput - held;
+		boolean batchDone = held < item.bars
+			|| (itemsToMake > 0 && usedFromTrip >= itemsToMake * item.bars);
+		if (batchDone)
 		{
 			bankStage = BankStage.DEPOSIT;
 			bankTicks = 0;
 			depositAttempts = 0;
+			tripStartInput = -1;
+			itemsToMake = 0;
 			restarts = 0;
-			setPhase(Phase.BANK, "input used up, banking");
+			setPhase(Phase.BANK, "trip complete, banking");
 			setStatus("Walking back to the bank");
 			return;
 		}
@@ -684,48 +667,6 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 	}
 
 	// -------------------------------------------------------------- helpers
-
-	private Widget findItemOption(RoutineContext context)
-	{
-		Client client = context.getClient();
-		int productId = item.productId(metal);
-		String name = productName(context).toLowerCase(Locale.ROOT);
-		for (int widgetId : MAKE_OPTIONS)
-		{
-			Widget option = client.getWidget(widgetId);
-			if (option != null && !option.isHidden() && matchesItem(option, productId, name))
-			{
-				return option;
-			}
-		}
-		return null;
-	}
-
-	private boolean matchesItem(Widget widget, int productId, String name)
-	{
-		if (widget.getItemId() == productId
-			|| GameInput.plainText(widget.getName()).toLowerCase(Locale.ROOT).contains(name)
-			|| GameInput.plainText(widget.getText()).toLowerCase(Locale.ROOT).contains(name))
-		{
-			return true;
-		}
-		for (Widget[] children : Arrays.asList(widget.getDynamicChildren(), widget.getStaticChildren()))
-		{
-			if (children == null)
-			{
-				continue;
-			}
-			for (Widget child : children)
-			{
-				if (child != null && (child.getItemId() == productId
-					|| GameInput.plainText(child.getText()).toLowerCase(Locale.ROOT).contains(name)))
-				{
-					return true;
-				}
-			}
-		}
-		return false;
-	}
 
 	private boolean skillMenuOpen()
 	{
