@@ -27,6 +27,7 @@ package net.runelite.client.plugins.customcursor;
 import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
+import net.runelite.client.util.OSType;
 
 @ConfigGroup("customcursor")
 public interface CustomCursorConfig extends Config
@@ -34,10 +35,23 @@ public interface CustomCursorConfig extends Config
 	@ConfigItem(
 		keyName = "cursorStyle",
 		name = "Cursor",
-		description = "Select which cursor you wish to use."
+		description = "Select which cursor you wish to use.",
+		position = 0
 	)
 	default CustomCursor selectedCursor()
 	{
 		return CustomCursor.RS3_GOLD;
+	}
+
+	@ConfigItem(
+		keyName = "overlayCursor",
+		name = "Overlay cursor",
+		description = "Draws the cursor in-game so it keeps its full color on Linux. " +
+			"This can add a slight delay to the cursor.",
+		position = 1
+	)
+	default boolean overlayCursor()
+	{
+		return OSType.getOSType() == OSType.Linux;
 	}
 }
