@@ -179,6 +179,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 	private int restarts;
 
 	private boolean optionPressed;
+	private boolean anvilClicked;
 	private boolean quantityClicked;
 	private int lastInputCount = -1;
 
@@ -247,6 +248,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 		levelUpAttempts = 0;
 		restarts = 0;
 		optionPressed = false;
+		anvilClicked = false;
 		quantityClicked = false;
 		lastInputCount = -1;
 		setPhase(Phase.BANK, "started: " + metal.name() + " " + item.name());
@@ -289,6 +291,12 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 		RoutineContext context = getContext();
 		Inventory inventory = context.getInventory();
 
+		if (makeMenuOpen())
+		{
+			enterMenu();
+			return;
+		}
+
 		if (bankStage == BankStage.LEAVE)
 		{
 			if (!actions.bankOpen())
@@ -307,6 +315,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 				if (actions.clickObject(anvil, "anvil", new String[]{"smith"}, "anvil"))
 				{
 					bankAnvilAttempts = 0;
+					anvilClicked = true;
 					setPhase(Phase.WAIT_MENU, "clicked the anvil with the bank open");
 					menuWaitTicks = 0;
 					cooldown(1);
@@ -462,9 +471,18 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 			return;
 		}
 
+		if (anvilClicked && !actions.isMoving() && atAnvil())
+		{
+			// The large keel metal menu can open without being recognised
+			// here; once the character reaches the anvil, press the key.
+			setPhase(Phase.CHOOSE_ITEM, "at the anvil, pressing the item key");
+			return;
+		}
+
 		if (actions.goAndClick(this::findAnvil, ANVIL_TILE, "anvil",
 			new String[]{"smith"}, "anvil", ANVIL_REACH))
 		{
+			anvilClicked = true;
 			setPhase(Phase.WAIT_MENU, "clicked the anvil");
 			menuWaitTicks = 0;
 			cooldown(1);
@@ -508,6 +526,14 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 				enterMenu();
 				return;
 			}
+			if (anvilClicked && !actions.isMoving() && atAnvil())
+			{
+				if (++menuWaitTicks >= 2)
+				{
+					setPhase(Phase.CHOOSE_ITEM, "at the anvil, pressing the item key");
+				}
+				return;
+			}
 			if (++menuWaitTicks >= MENU_WAIT_TICKS)
 			{
 				setPhase(Phase.ANVIL, "the anvil menu did not open");
@@ -517,6 +543,25 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 
 		if (!menuOpen)
 		{
+			if (phase == Phase.CHOOSE_ITEM && !optionPressed)
+			{
+				// Fallback for the large keel menu: after reaching the anvil,
+				// press the key even if its interface was not recognised.
+				if (++menuWaitTicks < 2)
+				{
+					setStatus("Waiting for the anvil menu");
+					return;
+				}
+				GameInput input = context.getInput();
+				int key = itemKey();
+				if (!input.isBusy() && input.pressKey(key))
+				{
+					optionPressed = true;
+					cooldown(1);
+				}
+				setStatus("Pressing " + itemKeyLabel() + " for " + productName(context));
+				return;
+			}
 			if (optionPressed)
 			{
 				startSmithing();
@@ -592,6 +637,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 	private void startSmithing()
 	{
 		optionPressed = false;
+		anvilClicked = false;
 		quantityClicked = false;
 		menuAttempts = 0;
 		quantityAttempts = 0;
@@ -665,14 +711,30 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 
 	// -------------------------------------------------------------- helpers
 
+	private boolean atAnvil()
+	{
+		WorldPoint location = getContext().getPlayerLocation();
+		return location != null && location.distanceTo2D(ANVIL_TILE) <= ANVIL_REACH;
+	}
+
 	private boolean makeMenuOpen()
 	{
 		// Standard anvil items use the Smithing interface. Large keel parts
 		// use its metal-choice make menu, which can be the generic Skillmulti
-		// interface used by fletching, cooking and gem cutting.
-		return getContext().getTargets().findWidget(InterfaceID.Smithing.UNIVERSE).isPresent()
-			|| getContext().getTargets().findWidget(InterfaceID.Smithing.FRAME).isPresent()
-			|| getContext().getTargets().findWidget(InterfaceID.Skillmulti.UNIVERSE).isPresent();
+		// interface used by fletching, cooking and gem cutting. Check loaded
+		// widgets directly: some menu roots report themselves as hidden while
+		// their children are visible.
+		return menuWidget(InterfaceID.Smithing.UNIVERSE)
+			|| menuWidget(InterfaceID.Smithing.FRAME)
+			|| menuWidget(InterfaceID.Smithing.MAKE_ALL)
+			|| menuWidget(InterfaceID.Skillmulti.UNIVERSE)
+			|| menuWidget(InterfaceID.Skillmulti.QUANTITIES)
+			|| menuWidget(InterfaceID.Skillmulti.ALL);
+	}
+
+	private boolean menuWidget(int widgetId)
+	{
+		return getContext().getClient().getWidget(widgetId) != null;
 	}
 
 	private Widget findQuantityButton()
@@ -687,52 +749,12 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 
 	private int itemKey()
 	{
-		if (!item.usesKeelParts())
-		{
-			return KeyEvent.VK_SPACE;
-		}
-		switch (metal)
-		{
-			case BRONZE:
-				return KeyEvent.VK_SPACE;
-			case IRON:
-				return KeyEvent.VK_1;
-			case STEEL:
-				return KeyEvent.VK_2;
-			case MITHRIL:
-				return KeyEvent.VK_3;
-			case ADAMANT:
-				return KeyEvent.VK_5;
-			case RUNE:
-				return KeyEvent.VK_6;
-			default:
-				return KeyEvent.VK_SPACE;
-		}
+		return item.usesKeelParts() ? KeyEvent.VK_1 + metal.ordinal() : KeyEvent.VK_SPACE;
 	}
 
 	private String itemKeyLabel()
 	{
-		if (!item.usesKeelParts())
-		{
-			return "Space";
-		}
-		switch (metal)
-		{
-			case BRONZE:
-				return "Space";
-			case IRON:
-				return "1";
-			case STEEL:
-				return "2";
-			case MITHRIL:
-				return "3";
-			case ADAMANT:
-				return "5";
-			case RUNE:
-				return "6";
-			default:
-				return "Space";
-		}
+		return item.usesKeelParts() ? Integer.toString(metal.ordinal() + 1) : "Space";
 	}
 
 	private boolean hasSmitherItems(Inventory inventory)
