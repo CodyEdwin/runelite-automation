@@ -35,6 +35,7 @@ include("rsbuddy")
 include("xplogger")
 include("fullscreen")
 include("currenthit")
+include("mouseeffects")
 apply(from = "./common.settings.gradle.kts")
 
 includeBuild("cache")
