@@ -178,7 +178,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 	private int levelUpAttempts;
 	private int restarts;
 
-	private boolean spacePressed;
+	private boolean optionPressed;
 	private boolean quantityClicked;
 	private int lastInputCount = -1;
 
@@ -246,7 +246,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 		quantityAttempts = 0;
 		levelUpAttempts = 0;
 		restarts = 0;
-		spacePressed = false;
+		optionPressed = false;
 		quantityClicked = false;
 		lastInputCount = -1;
 		setPhase(Phase.BANK, "started: " + metal.name() + " " + item.name());
@@ -269,7 +269,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 			menuWaitTicks = 0;
 			menuAttempts = 0;
 			quantityAttempts = 0;
-			spacePressed = false;
+			optionPressed = false;
 			quantityClicked = false;
 			leaveAttempts = 0;
 			bankAnvilAttempts = 0;
@@ -517,7 +517,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 
 		if (!menuOpen)
 		{
-			if (spacePressed)
+			if (optionPressed)
 			{
 				startSmithing();
 			}
@@ -528,15 +528,18 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 			return;
 		}
 
-		if (!spacePressed)
+		if (!optionPressed)
 		{
 			GameInput input = context.getInput();
-			if (!input.isBusy() && input.pressSpace())
+			int key = item.usesKeelParts() ? KeyEvent.VK_1 + metal.ordinal() : KeyEvent.VK_SPACE;
+			if (!input.isBusy() && input.pressKey(key))
 			{
-				spacePressed = true;
+				optionPressed = true;
 				cooldown(1);
 			}
-			setStatus("Pressing Space to repeat " + productName(context));
+			setStatus(item.usesKeelParts()
+				? "Pressing " + (metal.ordinal() + 1) + " for " + productName(context)
+				: "Pressing Space to repeat " + productName(context));
 			return;
 		}
 
@@ -582,7 +585,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 		menuWaitTicks = 0;
 		menuAttempts = 0;
 		quantityAttempts = 0;
-		spacePressed = false;
+		optionPressed = false;
 		quantityClicked = false;
 		levelUpAttempts = 0;
 		setStatus("Choosing " + productName(getContext()));
@@ -590,7 +593,7 @@ public final class WestVarrockSmitherRoutine extends TaskRoutine
 
 	private void startSmithing()
 	{
-		spacePressed = false;
+		optionPressed = false;
 		quantityClicked = false;
 		menuAttempts = 0;
 		quantityAttempts = 0;
