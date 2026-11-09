@@ -30,7 +30,7 @@ import net.runelite.rsbuddy.routines.ArdougneBakerStallStealerScript;
 import net.runelite.rsbuddy.routines.BarbarianFisherCookerScript;
 import net.runelite.rsbuddy.routines.BowFletcherScript;
 import net.runelite.rsbuddy.routines.CatherbySharkFisherScript;
-import net.runelite.rsbuddy.routines.CombatTrainerScript;
+import net.runelite.rsbuddy.routines.CombatTrainerRoutine;
 import net.runelite.rsbuddy.routines.CustomScript;
 import net.runelite.rsbuddy.routines.EdgevilleSmelterScript;
 import net.runelite.rsbuddy.routines.FruitStallStealerScript;
@@ -76,8 +76,8 @@ public final class RoutineLibrary
 			loader -> RoutineLoader.load(CatherbySharkFisherScript.class.getName(), loader),
 			null);
 
-		registry.register(CombatTrainerScript.class.getName(),
-			loader -> RoutineLoader.load(CombatTrainerScript.class.getName(), loader),
+		registry.register(CombatTrainerRoutine.class.getName(),
+			loader -> RoutineLoader.load(CombatTrainerRoutine.class.getName(), loader),
 			null);
 
 		registry.register(FruitStallStealerScript.class.getName(),

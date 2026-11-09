@@ -51,12 +51,12 @@ import net.runelite.rsbuddy.routine.Routine;
 import net.runelite.rsbuddy.routine.RoutineContext;
 
 /**
- * Trains combat on a player-selected list of nearby NPCs. When the script
+ * Trains combat on a player-selected list of nearby NPCs. When the routine
  * starts it opens a configuration window with the attackable NPCs around the
  * player and an HP percentage at which to eat food. Pressing Start in that
- * window minimises it, and the script attacks the chosen NPCs until stopped.
+ * window minimises it, and the routine attacks the chosen NPCs until stopped.
  */
-public final class CombatTrainerScript extends Routine
+public final class CombatTrainerRoutine extends Routine
 {
 	private static final String ATTACK_ACTION = "Attack";
 	private static final int ATTACK_COOLDOWN_TICKS = 3;
@@ -73,7 +73,7 @@ public final class CombatTrainerScript extends Routine
 	private int cooldown;
 	private boolean loggingOut;
 
-	public CombatTrainerScript()
+	public CombatTrainerRoutine()
 	{
 		super("Combat Trainer", "Attacks chosen nearby NPCs and eats food below a chosen HP percentage.");
 	}
@@ -209,7 +209,9 @@ public final class CombatTrainerScript extends Routine
 
 		NPC npc = target.get();
 		String name = getNpcName(npc);
-		if (input.interact(npc, ATTACK_ACTION))
+		// A plain left click attacks the NPC directly. Opening the right-click
+		// menu and picking Attack is unreliable, so the default click is used.
+		if (input.click(npc))
 		{
 			cooldown = ATTACK_COOLDOWN_TICKS;
 			setStatus("Attacking " + name);

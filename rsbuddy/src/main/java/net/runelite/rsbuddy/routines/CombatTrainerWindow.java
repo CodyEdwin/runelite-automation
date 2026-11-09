@@ -49,14 +49,14 @@ import net.runelite.client.ui.ColorScheme;
 import net.runelite.client.ui.FontManager;
 
 /**
- * Configuration window for {@link CombatTrainerScript}. It shows the
+ * Configuration window for {@link CombatTrainerRoutine}. It shows the
  * attackable NPCs around the player, lets the player pick which ones to
  * attack, and sets the HP percentage at which food is eaten. Pressing Start
- * minimises the window while the script runs.
+ * minimises the window while the routine runs.
  */
 final class CombatTrainerWindow extends JFrame
 {
-	private final CombatTrainerScript script;
+	private final CombatTrainerRoutine routine;
 	private final JPanel npcList;
 	private final Map<String, JCheckBox> checkBoxes = new LinkedHashMap<>();
 	private final Set<String> shownNames = new TreeSet<>();
@@ -65,11 +65,11 @@ final class CombatTrainerWindow extends JFrame
 	private final JLabel statusLabel;
 	private final Timer statusTimer;
 
-	CombatTrainerWindow(CombatTrainerScript script)
+	CombatTrainerWindow(CombatTrainerRoutine routine)
 	{
 		super("Combat Trainer");
 
-		this.script = script;
+		this.routine = routine;
 
 		hintLabel = new JLabel(" ");
 		hintLabel.setForeground(ColorScheme.PROGRESS_ERROR_COLOR);
@@ -119,7 +119,7 @@ final class CombatTrainerWindow extends JFrame
 		refreshButton.addActionListener(event ->
 		{
 			hintLabel.setText("Refreshing nearby NPCs...");
-			script.requestNpcRefresh();
+			routine.requestNpcRefresh();
 		});
 		listHeader.add(refreshButton, BorderLayout.EAST);
 
@@ -147,14 +147,14 @@ final class CombatTrainerWindow extends JFrame
 		hpLabel.setForeground(ColorScheme.TEXT_COLOR);
 		hpRow.add(hpLabel, BorderLayout.WEST);
 
-		hpSpinner = new JSpinner(new SpinnerNumberModel(script.getEatAtHpPercent(), 1, 99, 1));
+		hpSpinner = new JSpinner(new SpinnerNumberModel(routine.getEatAtHpPercent(), 1, 99, 1));
 		hpSpinner.setPreferredSize(new Dimension(64, 24));
 		hpRow.add(hpSpinner, BorderLayout.EAST);
 
 		bottom.add(hpRow);
 		bottom.add(Box.createVerticalStrut(6));
 
-		statusLabel = new JLabel("Status: " + script.getStatus());
+		statusLabel = new JLabel("Status: " + routine.getStatus());
 		statusLabel.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		statusLabel.setFont(FontManager.getRunescapeSmallFont());
 		bottom.add(statusLabel);
@@ -184,7 +184,7 @@ final class CombatTrainerWindow extends JFrame
 		content.add(bottom, BorderLayout.SOUTH);
 
 		statusTimer = new Timer(500, event ->
-			statusLabel.setText("Status: " + script.getStatus()));
+			statusLabel.setText("Status: " + routine.getStatus()));
 		statusTimer.setCoalesce(true);
 		statusTimer.start();
 	}
@@ -233,7 +233,7 @@ final class CombatTrainerWindow extends JFrame
 				box.setOpaque(false);
 				box.setForeground(ColorScheme.TEXT_COLOR);
 				box.setAlignmentX(LEFT_ALIGNMENT);
-				box.setSelected(selected.contains(name) || script.isTargetSelected(name));
+				box.setSelected(selected.contains(name) || routine.isTargetSelected(name));
 				checkBoxes.put(name, box);
 				npcList.add(box);
 			}
@@ -280,20 +280,20 @@ final class CombatTrainerWindow extends JFrame
 			return;
 		}
 
-		script.startTraining(selected, (Integer) hpSpinner.getValue());
+		routine.startTraining(selected, (Integer) hpSpinner.getValue());
 		hintLabel.setText("Training started.");
-		statusLabel.setText("Status: " + script.getStatus());
+		statusLabel.setText("Status: " + routine.getStatus());
 
 		// The window stays available in the taskbar, minimised while the
-		// script fights.
+		// routine fights.
 		setState(ICONIFIED);
 	}
 
 	private void stopTraining()
 	{
-		script.stopTraining();
+		routine.stopTraining();
 		hintLabel.setText("Training stopped. Adjust the settings and press Start.");
-		statusLabel.setText("Status: " + script.getStatus());
+		statusLabel.setText("Status: " + routine.getStatus());
 		setState(NORMAL);
 		toFront();
 	}
