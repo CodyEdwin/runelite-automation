@@ -26,6 +26,8 @@ package net.runelite.rsbuddy.routines;
 
 import java.awt.Point;
 import java.util.Collections;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -41,13 +43,17 @@ import net.runelite.api.ItemComposition;
 import net.runelite.api.NPC;
 import net.runelite.api.NPCComposition;
 import net.runelite.api.Player;
+import net.runelite.api.Scene;
 import net.runelite.api.Skill;
+import net.runelite.api.Tile;
+import net.runelite.api.TileItem;
 import net.runelite.api.WorldView;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.rsbuddy.input.GameInput;
 import net.runelite.rsbuddy.inventory.Inventory;
+import net.runelite.rsbuddy.routine.Actions;
 import net.runelite.rsbuddy.routine.Routine;
 import net.runelite.rsbuddy.routine.RoutineContext;
 
@@ -64,10 +70,19 @@ public final class CombatTrainerRoutine extends Routine
 	private static final int SCAN_RADIUS = 20;
 	private static final int MAX_TARGET_DISTANCE = 20;
 	private static final int AIM_TOLERANCE_PX = 5;
+	private static final int LOOT_RADIUS = 15;
+	private static final int LOOT_RECLICK_TICKS = 2;
+	private static final int LOOT_ATTEMPT_LIMIT = 4;
+	private static final int LOOT_TARGET_TIMEOUT_TICKS = 25;
+	private static final long IGNORED_LOOT_TIMEOUT_MS = 10_000L;
 	private static final Pattern TAGS = Pattern.compile("<[^>]*>");
 
 	private final Set<String> targetNames = ConcurrentHashMap.newKeySet();
+	private final Set<String> lootNames = ConcurrentHashMap.newKeySet();
+	private final Set<Integer> lootItemIds = ConcurrentHashMap.newKeySet();
+	private final Map<WorldPoint, Long> ignoredLoot = new ConcurrentHashMap<>();
 	private volatile int eatAtHpPercent = 50;
+	private volatile String lootItemsText = "";
 	private volatile boolean training;
 	private volatile boolean refreshRequested;
 	private volatile CombatTrainerWindow window;
@@ -75,10 +90,15 @@ public final class CombatTrainerRoutine extends Routine
 	private int cooldown;
 	private boolean loggingOut;
 	private NPC hoverNpc;
+	private volatile GroundItem lootTarget;
+	private int lootAttempts;
+	private int lootTicks;
+	private int lootClickTicks = -1;
 
 	public CombatTrainerRoutine()
 	{
-		super("Combat Trainer", "Attacks chosen nearby NPCs and eats food below a chosen HP percentage.");
+		super("Combat Trainer", "Attacks chosen nearby NPCs, picks up listed items, and eats food"
+			+ " below a chosen HP percentage.");
 	}
 
 	@Override
@@ -101,7 +121,9 @@ public final class CombatTrainerRoutine extends Routine
 	{
 		training = false;
 		hoverNpc = null;
+		lootTarget = null;
 		getContext().getInput().follow(null);
+		getContext().getInput().setGroundItemPickupFilter(null);
 		CombatTrainerWindow current = window;
 		window = null;
 
@@ -119,13 +141,27 @@ public final class CombatTrainerRoutine extends Routine
 			return;
 		}
 
+		GameInput input = getContext().getInput();
+
+		// Keep the cursor on a drop while it is being picked up, for the same
+		// reason as an NPC: the camera and player move while the mouse travels.
+		GroundItem loot = lootTarget;
+		if (loot != null)
+		{
+			Point aim = input.groundItemPoint(loot.sceneX, loot.sceneY);
+			if (aim != null)
+			{
+				input.follow(aim);
+			}
+			return;
+		}
+
 		NPC npc = hoverNpc;
 		if (npc == null || npc.isDead())
 		{
 			return;
 		}
 
-		GameInput input = getContext().getInput();
 		Point aim = input.npcCenter(npc);
 		if (aim != null)
 		{
@@ -235,6 +271,12 @@ public final class CombatTrainerRoutine extends Routine
 			return;
 		}
 
+		// Pick up any listed drops before starting the next fight.
+		if (lootNearby(context))
+		{
+			return;
+		}
+
 		// Stay on the NPC the cursor is already travelling toward instead of
 		// re-picking the nearest one every tick, which would make the cursor
 		// chase different NPCs and never settle on one.
@@ -335,6 +377,292 @@ public final class CombatTrainerRoutine extends Routine
 			hoverNpc = null;
 			getContext().getInput().follow(null);
 		}
+	}
+
+	/**
+	 * Picks up a matching item from the ground.
+	 *
+	 * @return true when a drop was found and this tick's action belongs to
+	 * looting; false when there is nothing on the list to pick up
+	 */
+	private boolean lootNearby(RoutineContext context)
+	{
+		if (lootNames.isEmpty())
+		{
+			return false;
+		}
+
+		GameInput input = context.getInput();
+		GroundItem loot = findGroundLoot(context);
+		if (loot == null)
+		{
+			resetLootTracking();
+			return false;
+		}
+
+		// Only one target at a time, so the NPC aim cannot fight the drop aim.
+		clearHover();
+
+		if (!loot.sameAs(lootTarget))
+		{
+			lootTarget = loot;
+			lootAttempts = 0;
+			lootTicks = 0;
+			lootClickTicks = -1;
+		}
+
+		// Teach the pickup filter about this item, so its Take stays the top
+		// left-click option and walking clicks cannot loot anything else.
+		if (lootItemIds.add(loot.itemId))
+		{
+			input.setGroundItemPickupFilter(lootItemIds);
+		}
+
+		if (++lootTicks > LOOT_TARGET_TIMEOUT_TICKS
+			|| lootAttempts >= LOOT_ATTEMPT_LIMIT)
+		{
+			// Unreachable or permanently covered: ignore the pile for a while
+			// instead of blocking the next fight.
+			ignoreLoot(loot.worldLocation);
+			resetLootTracking();
+			setStatus("Skipping unreachable loot");
+			return true;
+		}
+
+		// Wait for the previous Take to play out: the player walks onto the
+		// tile and picks the item up by itself.
+		Player player = context.getPlayer();
+		if (lootClickTicks >= 0)
+		{
+			++lootClickTicks;
+			if (Actions.isMoving(player) || lootClickTicks < LOOT_RECLICK_TICKS)
+			{
+				setStatus("Looting " + loot.name);
+				return true;
+			}
+		}
+
+		Point aim = input.groundItemPoint(loot.sceneX, loot.sceneY);
+		if (aim == null)
+		{
+			// The tile is off screen: walk closer and aim again next tick.
+			resetLootTracking();
+			if (input.walkTo(loot.worldLocation))
+			{
+				setStatus("Walking to " + loot.name);
+			}
+			return true;
+		}
+
+		Point mouse = input.getMouseLocation();
+		boolean onTile = input.isOnGroundItemTile(mouse, loot.sceneX, loot.sceneY);
+		int hover = input.groundItemHoverState(loot.itemId, loot.sceneX, loot.sceneY);
+		if (hover == 2 && onTile && mouse != null)
+		{
+			// The item's Take is the top option under the cursor right now,
+			// so this left click picks it up.
+			if (input.click(mouse))
+			{
+				lootClickTicks = 0;
+				++lootAttempts;
+				setStatus("Looting " + loot.name);
+			}
+			return true;
+		}
+
+		// Still travelling, or something else is on top. Keep the cursor on
+		// the item and verify again next tick rather than clicking blind.
+		input.follow(aim);
+		setStatus("Looting " + loot.name);
+		return true;
+	}
+
+	private GroundItem findGroundLoot(RoutineContext context)
+	{
+		Client client = context.getClient();
+		Player player = context.getPlayer();
+		WorldPoint playerLocation = player == null ? null : player.getWorldLocation();
+		WorldView worldView = client.getTopLevelWorldView();
+		if (worldView == null || playerLocation == null)
+		{
+			return null;
+		}
+
+		Scene scene = worldView.getScene();
+		if (scene == null)
+		{
+			return null;
+		}
+
+		Tile[][][] tiles = scene.getTiles();
+		int plane = worldView.getPlane();
+		if (tiles == null || plane < 0 || plane >= tiles.length)
+		{
+			return null;
+		}
+
+		Tile[][] planeTiles = tiles[plane];
+		if (planeTiles == null)
+		{
+			return null;
+		}
+
+		boolean inventoryFull = context.getInventory().isFull();
+		GroundItem best = null;
+		int bestScore = Integer.MAX_VALUE;
+
+		for (Tile[] row : planeTiles)
+		{
+			if (row == null)
+			{
+				continue;
+			}
+
+			for (Tile tile : row)
+			{
+				if (tile == null)
+				{
+					continue;
+				}
+
+				List<TileItem> groundItems = tile.getGroundItems();
+				if (groundItems == null || groundItems.isEmpty())
+				{
+					continue;
+				}
+
+				WorldPoint itemLocation = tile.getWorldLocation();
+				net.runelite.api.Point sceneLocation = tile.getSceneLocation();
+				if (itemLocation == null || sceneLocation == null)
+				{
+					continue;
+				}
+
+				int distance = itemLocation.distanceTo(playerLocation);
+				if (distance > LOOT_RADIUS || isIgnoredLoot(itemLocation))
+				{
+					continue;
+				}
+
+				for (TileItem groundItem : groundItems)
+				{
+					if (groundItem == null
+						|| groundItem.getOwnership() == TileItem.OWNERSHIP_OTHER)
+					{
+						continue;
+					}
+
+					int itemId = groundItem.getId();
+					if (itemId <= 0 || !matchesLootName(getItemName(client, itemId)))
+					{
+						continue;
+					}
+
+					if (inventoryFull && !stacksOntoInventory(context, itemId))
+					{
+						continue;
+					}
+
+					int score = distance * 10;
+					if (groundItem.getOwnership() == TileItem.OWNERSHIP_SELF)
+					{
+						score -= 5;
+					}
+
+					if (score < bestScore)
+					{
+						bestScore = score;
+						best = new GroundItem(itemId, getItemName(client, itemId),
+							sceneLocation.getX(), sceneLocation.getY(), itemLocation);
+					}
+				}
+			}
+		}
+
+		return best;
+	}
+
+	private boolean matchesLootName(String itemName)
+	{
+		if (itemName == null || itemName.isEmpty())
+		{
+			return false;
+		}
+
+		String name = itemName.toLowerCase(Locale.ROOT).trim();
+		for (String wanted : lootNames)
+		{
+			if (name.equals(wanted))
+			{
+				return true;
+			}
+
+			// Allow charged or dose variants: "amulet of glory" also matches
+			// "Amulet of glory(6)", but "air" does not match "air rune".
+			if (name.startsWith(wanted) && name.length() > wanted.length()
+				&& !Character.isLetterOrDigit(name.charAt(wanted.length())))
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	private static boolean stacksOntoInventory(RoutineContext context, int itemId)
+	{
+		if (context.getInventory().countItem(itemId) <= 0)
+		{
+			return false;
+		}
+
+		ItemComposition composition = context.getClient().getItemDefinition(itemId);
+		return composition != null && composition.isStackable();
+	}
+
+	private boolean isIgnoredLoot(WorldPoint location)
+	{
+		Long expiresAt = ignoredLoot.get(location);
+		if (expiresAt == null)
+		{
+			return false;
+		}
+
+		if (System.currentTimeMillis() >= expiresAt)
+		{
+			ignoredLoot.remove(location);
+			return false;
+		}
+
+		return true;
+	}
+
+	private void ignoreLoot(WorldPoint location)
+	{
+		if (location != null)
+		{
+			ignoredLoot.put(location, System.currentTimeMillis() + IGNORED_LOOT_TIMEOUT_MS);
+		}
+	}
+
+	private void resetLootTracking()
+	{
+		lootTarget = null;
+		lootAttempts = 0;
+		lootTicks = 0;
+		lootClickTicks = -1;
+	}
+
+	private static String getItemName(Client client, int itemId)
+	{
+		ItemComposition composition = client.getItemDefinition(itemId);
+		String name = composition == null ? null : composition.getName();
+		if (name == null)
+		{
+			return "";
+		}
+
+		return TAGS.matcher(name).replaceAll("").trim();
 	}
 
 	private Optional<NPC> findTarget(RoutineContext context)
@@ -592,11 +920,28 @@ public final class CombatTrainerRoutine extends Routine
 		current.toFront();
 	}
 
-	void startTraining(Set<String> names, int hpPercent)
+	void startTraining(Set<String> names, int hpPercent, String lootItems)
 	{
 		targetNames.clear();
 		targetNames.addAll(names);
 		eatAtHpPercent = Math.max(1, Math.min(99, hpPercent));
+
+		lootItemsText = lootItems == null ? "" : lootItems.trim();
+		lootNames.clear();
+		for (String part : lootItemsText.split(","))
+		{
+			String item = part.trim().toLowerCase(Locale.ROOT);
+			if (!item.isEmpty())
+			{
+				lootNames.add(item);
+			}
+		}
+
+		lootItemIds.clear();
+		ignoredLoot.clear();
+		resetLootTracking();
+		getContext().getInput().setGroundItemPickupFilter(null);
+
 		cooldown = 0;
 		loggingOut = false;
 		hoverNpc = null;
@@ -609,8 +954,19 @@ public final class CombatTrainerRoutine extends Routine
 	{
 		training = false;
 		hoverNpc = null;
+		resetLootTracking();
+		ignoredLoot.clear();
 		getContext().getInput().follow(null);
+		getContext().getInput().setGroundItemPickupFilter(null);
 		setStatus("Training stopped");
+	}
+
+	/**
+	 * @return the item list as it was last entered, for re-filling the window
+	 */
+	String getLootItemsText()
+	{
+		return lootItemsText;
 	}
 
 	/**
@@ -698,5 +1054,34 @@ public final class CombatTrainerRoutine extends Routine
 		}
 
 		return false;
+	}
+
+	/**
+	 * One ground-item stack the routine wants to pick up.
+	 */
+	private static final class GroundItem
+	{
+		private final int itemId;
+		private final String name;
+		private final int sceneX;
+		private final int sceneY;
+		private final WorldPoint worldLocation;
+
+		private GroundItem(int itemId, String name, int sceneX, int sceneY, WorldPoint worldLocation)
+		{
+			this.itemId = itemId;
+			this.name = name;
+			this.sceneX = sceneX;
+			this.sceneY = sceneY;
+			this.worldLocation = worldLocation;
+		}
+
+		private boolean sameAs(GroundItem other)
+		{
+			return other != null
+				&& itemId == other.itemId
+				&& sceneX == other.sceneX
+				&& sceneY == other.sceneY;
+		}
 	}
 }

@@ -42,6 +42,7 @@ import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
+import javax.swing.JTextField;
 import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
@@ -51,8 +52,9 @@ import net.runelite.client.ui.FontManager;
 /**
  * Configuration window for {@link CombatTrainerRoutine}. It shows the
  * attackable NPCs around the player, lets the player pick which ones to
- * attack, and sets the HP percentage at which food is eaten. Pressing Start
- * minimises the window while the routine runs.
+ * attack, sets the HP percentage at which food is eaten, and takes a
+ * comma-separated list of items to pick up. Pressing Start minimises the
+ * window while the routine runs.
  */
 final class CombatTrainerWindow extends JFrame
 {
@@ -61,6 +63,7 @@ final class CombatTrainerWindow extends JFrame
 	private final Map<String, JCheckBox> checkBoxes = new LinkedHashMap<>();
 	private final Set<String> shownNames = new TreeSet<>();
 	private final JSpinner hpSpinner;
+	private final JTextField lootField;
 	private final JLabel hintLabel;
 	private final JLabel statusLabel;
 	private final Timer statusTimer;
@@ -77,8 +80,8 @@ final class CombatTrainerWindow extends JFrame
 
 		setDefaultCloseOperation(HIDE_ON_CLOSE);
 		setAlwaysOnTop(true);
-		setSize(380, 540);
-		setMinimumSize(new Dimension(340, 420));
+		setSize(380, 600);
+		setMinimumSize(new Dimension(340, 480));
 		setLocationRelativeTo(null);
 
 		JPanel content = new JPanel(new BorderLayout(8, 8));
@@ -96,7 +99,7 @@ final class CombatTrainerWindow extends JFrame
 		header.add(title);
 
 		JLabel subtitle = new JLabel(
-			"<html>Choose the nearby NPCs to attack, set the eat HP, then press Start.</html>");
+			"<html>Choose the nearby NPCs to attack, set the eat HP and items to pick up, then press Start.</html>");
 		subtitle.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		subtitle.setFont(FontManager.getRunescapeSmallFont());
 		header.add(subtitle);
@@ -152,6 +155,21 @@ final class CombatTrainerWindow extends JFrame
 		hpRow.add(hpSpinner, BorderLayout.EAST);
 
 		bottom.add(hpRow);
+		bottom.add(Box.createVerticalStrut(6));
+
+		JPanel lootRow = new JPanel(new BorderLayout(6, 0));
+		lootRow.setOpaque(false);
+
+		JLabel lootLabel = new JLabel("Pick up items");
+		lootLabel.setForeground(ColorScheme.TEXT_COLOR);
+		lootRow.add(lootLabel, BorderLayout.WEST);
+
+		lootField = new JTextField(routine.getLootItemsText());
+		lootField.setToolTipText(
+			"Comma-separated item names, e.g. air rune, death rune, abyssal whip");
+		lootRow.add(lootField, BorderLayout.CENTER);
+
+		bottom.add(lootRow);
 		bottom.add(Box.createVerticalStrut(6));
 
 		statusLabel = new JLabel("Status: " + routine.getStatus());
@@ -280,7 +298,7 @@ final class CombatTrainerWindow extends JFrame
 			return;
 		}
 
-		routine.startTraining(selected, (Integer) hpSpinner.getValue());
+		routine.startTraining(selected, (Integer) hpSpinner.getValue(), lootField.getText());
 		hintLabel.setText("Training started.");
 		statusLabel.setText("Status: " + routine.getStatus());
 
