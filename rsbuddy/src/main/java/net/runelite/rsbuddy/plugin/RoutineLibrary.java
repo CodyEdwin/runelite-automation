@@ -34,7 +34,7 @@ import net.runelite.rsbuddy.routines.CombatTrainerScript;
 import net.runelite.rsbuddy.routines.CustomScript;
 import net.runelite.rsbuddy.routines.EdgevilleSmelterScript;
 import net.runelite.rsbuddy.routines.FruitStallStealerScript;
-import net.runelite.rsbuddy.routines.GemCrabKillerScript;
+import net.runelite.rsbuddy.routines.GemCrabKillerRoutine;
 import net.runelite.rsbuddy.routines.GemCutterScript;
 import net.runelite.rsbuddy.routines.GrandExchangeFlipperScript;
 import net.runelite.rsbuddy.routines.HillGiantScript;
@@ -103,8 +103,8 @@ public final class RoutineLibrary
 				config.rooftopCourse().name()),
 			RoutineLibrary::rooftop);
 
-		registry.register(GemCrabKillerScript.class.getName(),
-			loader -> RoutineLoader.load(GemCrabKillerScript.class.getName(), loader,
+		registry.register(GemCrabKillerRoutine.class.getName(),
+			loader -> RoutineLoader.load(GemCrabKillerRoutine.class.getName(), loader,
 				config.gemCrabPotionMode().name(), config.gemCrabBoostThreshold()),
 			RoutineLibrary::gemCrab);
 
@@ -244,11 +244,11 @@ public final class RoutineLibrary
 
 	private static void gemCrab(RoutineSettingsForm form)
 	{
-		form.addCombo("Strength potions",
-			"Regular strength potions, super strength, or either (super first).",
+		form.addCombo("Potions",
+			"Regular strength, super strength, either (super first), ranging, or divine ranging potions.",
 			GemCrabPotionMode.values(), "gemCrabPotionMode", form.config()::gemCrabPotionMode);
 		form.addSpinner("Re-drink at boost",
-			"Drink another potion once the Strength boost has dropped to this many levels or less.",
+			"Drink another potion once the Strength or Ranged boost has dropped to this many levels or less.",
 			"gemCrabBoostThreshold", 0, 15, form.config()::gemCrabBoostThreshold);
 		form.setHint(APPLIED_ON_START);
 	}

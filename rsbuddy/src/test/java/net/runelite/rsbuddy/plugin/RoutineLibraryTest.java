@@ -37,7 +37,7 @@ import javax.imageio.ImageIO;
 import javax.swing.SwingUtilities;
 import net.runelite.client.ui.components.IconTextField;
 import net.runelite.rsbuddy.routine.RoutineManager;
-import net.runelite.rsbuddy.routines.GemCrabKillerScript;
+import net.runelite.rsbuddy.routines.GemCrabKillerRoutine;
 import net.runelite.rsbuddy.routines.MotherlodeMinerScript;
 import org.junit.Assert;
 import org.junit.Test;
@@ -51,7 +51,7 @@ public class RoutineLibraryTest
 		{
 		};
 		RoutineRegistry registry = RoutineLibrary.create(config);
-		Assert.assertEquals(15, registry.getDefinitions().size());
+		Assert.assertEquals(17, registry.getDefinitions().size());
 
 		for (RoutineDefinition definition : registry.getDefinitions())
 		{
@@ -61,7 +61,7 @@ public class RoutineLibraryTest
 		}
 
 		Map<String, String> stored = new HashMap<>();
-		stored.put(RoutineListPanel.FAVORITES_KEY, GemCrabKillerScript.class.getName()
+		stored.put(RoutineListPanel.FAVORITES_KEY, GemCrabKillerRoutine.class.getName()
 			+ "," + MotherlodeMinerScript.class.getName());
 		RoutinePreferences preferences = new RoutinePreferences()
 		{
@@ -108,7 +108,7 @@ public class RoutineLibraryTest
 				Assert.assertEquals("Gem Crab Killer", names.get(0));
 				Assert.assertEquals("Motherlode Miner", names.get(1));
 				Assert.assertEquals("Animated Suit Killer", names.get(2));
-				Assert.assertEquals(15, names.size());
+				Assert.assertEquals(17, names.size());
 
 				IconTextField search = findSearch(panel);
 				Assert.assertNotNull(search);

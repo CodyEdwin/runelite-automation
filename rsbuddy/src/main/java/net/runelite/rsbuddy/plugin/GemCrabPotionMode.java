@@ -25,13 +25,15 @@
 package net.runelite.rsbuddy.plugin;
 
 /**
- * Which strength potions the Gem Crab Killer drinks.
+ * Which potions the Gem Crab Killer drinks.
  */
 public enum GemCrabPotionMode
 {
 	STRENGTH("Strength potion"),
 	SUPER_STRENGTH("Super strength"),
-	EITHER("Either (prefer super)");
+	EITHER("Either (prefer super)"),
+	RANGING("Ranging potion"),
+	DIVINE_RANGING("Divine ranging potion");
 
 	private final String label;
 

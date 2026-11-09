@@ -211,9 +211,10 @@ public interface RSBuddyConfig extends Config
 
 	@ConfigItem(
 		keyName = "gemCrabPotionMode",
-		name = "Gem crab: strength potions",
-		description = "Which strength potions the Gem Crab Killer drinks: regular Strength potions only,"
-			+ " Super strength only, or Either (super strength first, then regular). Lowest dose first.",
+		name = "Gem crab: potions",
+		description = "Which potions the Gem Crab Killer drinks: regular Strength potions only,"
+			+ " Super strength only, Either (super strength first, then regular), Ranging potions only,"
+			+ " or Divine ranging potions only. Lowest dose first.",
 		position = 14
 	)
 	default GemCrabPotionMode gemCrabPotionMode()
@@ -228,7 +229,7 @@ public interface RSBuddyConfig extends Config
 	@ConfigItem(
 		keyName = "gemCrabBoostThreshold",
 		name = "Gem crab: re-drink at boost",
-		description = "Drink another potion once the Strength boost has dropped to this many levels or less.",
+		description = "Drink another potion once the Strength or Ranged boost has dropped to this many levels or less.",
 		position = 15
 	)
 	default int gemCrabBoostThreshold()

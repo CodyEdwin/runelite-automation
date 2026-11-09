@@ -275,13 +275,14 @@ withdraws one from the bank. If the bank has none either, it stops at the bank w
 
 ## Gem Crab Killer
 
-`GemCrabKillerScript` is registered automatically and appears in the panel as **Gem Crab Killer**.
+`GemCrabKillerRoutine` is registered automatically and appears in the panel as **Gem Crab Killer**.
 Start it next to the Gemstone Crab (NPC `14779`) or its cave.
 
 It will:
 
-1. Attack the Gemstone Crab and wait, without re-clicking, until it dies.
-2. Click the nearby **Cave** (**Crawl-through**) exactly once. A crawl is only armed by a kill.
+1. Left-click the Gemstone Crab and wait, without re-clicking, until it dies.
+2. Wait about 5 seconds, then click the nearby **Cave** (**Crawl-through**) exactly once. A crawl
+   is only armed by a kill.
 3. Wait for the crawl to finish (teleport, or moved/animated then stood still), without clicking
    the cave again. If the click did nothing for about 5 seconds it retries, at most 3 clicks.
 4. Wait for the new crab (live `14779`, not dying), never clicking the cave, and attack it the
@@ -289,7 +290,7 @@ It will:
 
 If no crab appears within about 36 seconds, one recovery crawl is allowed. Starting with no crab
 nearby waits for a spawn instead of crawling. State changes are logged as
-`[GemCrab] OLD -> NEW: reason`.
+`[GemCrab] OLD -> NEW: reason`. Level-up scrolls are dismissed with Space so they do not stop combat.
 
 If the crab or cave is off screen, the camera is turned toward it first. The overlay shows the
 current state and kills per hour.
@@ -298,15 +299,18 @@ To avoid the idle logout, every 30 to 60 seconds (re-randomized each time) the r
 holds the left or right arrow key (random direction, 150-450 ms) to rotate the camera a little.
 The nudge only happens while the simulated mouse is idle and no menu is open.
 
-If strength potions are in the inventory, the routine drinks one (lowest dose first) whenever the
-Strength boost is at or below the threshold (default 3), including at the start when unboosted.
-Without potions it simply keeps fighting. Which potions it drinks is set in the RSBuddy plugin's
-config (RuneLite Configuration, wrench icon, then the "RSBuddy" entry):
+If potions are in the inventory, the routine drinks one (lowest dose first) whenever the matching
+Strength or Ranged boost is at or below the threshold (default 3), including at the start when
+unboosted. Without potions it simply keeps fighting. Which potions it drinks is set in the RSBuddy
+plugin's config (RuneLite Configuration, wrench icon, then the "RSBuddy" entry):
 
-- **Gem crab: strength potions**: `Strength potion` (regular 4-1 doses only), `Super strength`
-  (super strength 4-1 doses only: 2440, 157, 159, 161), or `Either (prefer super)` (default: super
-  strength first, then regular).
-- **Gem crab: re-drink at boost**: drink again once the boost is this many levels or less
+- **Gem crab: potions**: `Strength potion` (regular 4-1 doses only), `Super strength`
+  (super strength 4-1 doses only: 2440, 157, 159, 161), `Either (prefer super)` (default: super
+  strength first, then regular), `Ranging potion` (regular 4-1 doses only), or `Divine ranging
+  potion` (divine 4-1 doses only: 23733, 23736, 23739, 23742). The ranged options track the
+  Ranged boost instead of Strength. Divine potions are only re-drunk after their five-minute
+  boost has expired, never during it.
+- **Gem crab: re-drink at boost**: drink again once the matching boost is this many levels or less
   (0-15, default 3).
 
 Settings are read when the routine is started, so change them, then press Start (or Stop and Start).

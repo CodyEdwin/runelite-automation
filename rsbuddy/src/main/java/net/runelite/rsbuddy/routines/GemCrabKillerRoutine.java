@@ -38,6 +38,7 @@ import net.runelite.api.Skill;
 import net.runelite.api.TileObject;
 import net.runelite.api.WorldView;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.ItemID;
 import net.runelite.api.gameval.NpcID;
 import net.runelite.api.widgets.Widget;
@@ -51,15 +52,14 @@ import net.runelite.rsbuddy.routine.RoutineContext;
  * Kills the Gemstone Crab (NPC 14779), then crawls through the nearby cave to
  * the crab's next spawn location, waits for it to appear, and repeats.
  * <p>
- * Start the script next to the crab or the cave. It never walks on its own
+ * Start the routine next to the crab or the cave. It never walks on its own
  * except for the walking the game does when a crab or the cave is clicked.
  */
-public final class GemCrabKillerScript extends Routine
+public final class GemCrabKillerRoutine extends Routine
 {
-	private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(GemCrabKillerScript.class);
+	private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(GemCrabKillerRoutine.class);
 
 	private static final int CRAB_ID = NpcID.GEMSTONE_CRAB; // 14779
-	private static final String ATTACK_ACTION = "Attack";
 	private static final String CAVE_NAME = "Cave";
 	private static final String CAVE_ACTION = "Crawl-through";
 
@@ -70,8 +70,8 @@ public final class GemCrabKillerScript extends Routine
 	private static final int ATTACK_COOLDOWN_TICKS = 3;
 	/** Ticks with no interaction while the crab is alive before re-attacking. */
 	private static final int REATTACK_IDLE_TICKS = 4;
-	/** Ticks after the crab dies before heading for the cave. */
-	private static final int POST_KILL_DELAY_TICKS = 2;
+	/** Ticks after the crab dies before heading for the cave (8 ticks ≈ 5 seconds). */
+	private static final int POST_KILL_DELAY_TICKS = 8;
 	/** Ticks with no movement or animation at all after a cave click: the click did not take. */
 	private static final int CRAWL_NO_START_TICKS = 8;
 	/** Hard cap on one crawl; after this it is treated as done. */
@@ -96,6 +96,8 @@ public final class GemCrabKillerScript extends Routine
 	private static final int DEFAULT_BOOST_THRESHOLD = 3;
 	/** Ticks to wait for a drink to register before trying again. */
 	private static final int DRINK_TIMEOUT_TICKS = 5;
+	/** Divine potions hold their boost for exactly five minutes. */
+	private static final long DIVINE_POTION_MS = 5 * 60 * 1000L;
 
 	/** Regular strength potions, lowest dose first. */
 	private static final int[] REGULAR_STRENGTH = {
@@ -113,15 +115,40 @@ public final class GemCrabKillerScript extends Routine
 		ItemID._4DOSE2STRENGTH   // Super strength(4) 2440
 	};
 
+	/** Ranging potions, lowest dose first. */
+	private static final int[] RANGING_POTIONS = {
+		ItemID._1DOSERANGERSPOTION,  // Ranging potion(1) 173
+		ItemID._2DOSERANGERSPOTION,  // Ranging potion(2) 171
+		ItemID._3DOSERANGERSPOTION,  // Ranging potion(3) 169
+		ItemID._4DOSERANGERSPOTION   // Ranging potion(4) 2444
+	};
+
+	/** Divine ranging potions, lowest dose first. */
+	private static final int[] DIVINE_RANGING_POTIONS = {
+		ItemID._1DOSEDIVINERANGE,  // Divine ranging potion(1) 23742
+		ItemID._2DOSEDIVINERANGE,  // Divine ranging potion(2) 23739
+		ItemID._3DOSEDIVINERANGE,  // Divine ranging potion(3) 23736
+		ItemID._4DOSEDIVINERANGE   // Divine ranging potion(4) 23733
+	};
+
 	/**
 	 * Which potions are drunk. Matches the plugin's GemCrabPotionMode by
 	 * name, so the option survives a script hot-reload.
 	 */
 	private enum PotionMode
 	{
-		STRENGTH,
-		SUPER_STRENGTH,
-		EITHER
+		STRENGTH(Skill.STRENGTH),
+		SUPER_STRENGTH(Skill.STRENGTH),
+		EITHER(Skill.STRENGTH),
+		RANGING(Skill.RANGED),
+		DIVINE_RANGING(Skill.RANGED);
+
+		private final Skill skill;
+
+		PotionMode(Skill skill)
+		{
+			this.skill = skill;
+		}
 	}
 
 	private enum State
@@ -151,28 +178,30 @@ public final class GemCrabKillerScript extends Routine
 	private int drinkWaitTicks;
 	private int boostBeforeDrink;
 	private int potionsDrunk;
+	private long nextDivineDrinkAt;
+	private int levelUpWaitTicks;
 
 	private final PotionMode potionMode;
 	private final int boostThreshold;
 	/** Potions in the order they are drunk for the chosen mode. */
-	private final int[] strengthPotions;
+	private final int[] potions;
 
-	public GemCrabKillerScript()
+	public GemCrabKillerRoutine()
 	{
 		this(PotionMode.EITHER.name(), DEFAULT_BOOST_THRESHOLD);
 	}
 
 	/**
-	 * @param potionMode STRENGTH, SUPER_STRENGTH or EITHER (super strength
-	 * first, then regular); anything else means EITHER
-	 * @param boostThreshold drink again once the Strength boost is this or less
+	 * @param potionMode STRENGTH, SUPER_STRENGTH, EITHER (super strength
+	 * first, then regular), RANGING or DIVINE_RANGING; anything else means EITHER
+	 * @param boostThreshold drink again once the matching boost is this or less
 	 */
-	public GemCrabKillerScript(String potionMode, int boostThreshold)
+	public GemCrabKillerRoutine(String potionMode, int boostThreshold)
 	{
 		super("Gem Crab Killer", "Kills the Gemstone Crab (14779), crawls through the cave, and repeats.");
 		this.potionMode = parseMode(potionMode);
 		this.boostThreshold = Math.max(0, boostThreshold);
-		this.strengthPotions = potionOrder(this.potionMode);
+		this.potions = potionOrder(this.potionMode);
 	}
 
 	private static PotionMode parseMode(String name)
@@ -195,6 +224,10 @@ public final class GemCrabKillerScript extends Routine
 				return REGULAR_STRENGTH;
 			case SUPER_STRENGTH:
 				return SUPER_STRENGTH;
+			case RANGING:
+				return RANGING_POTIONS;
+			case DIVINE_RANGING:
+				return DIVINE_RANGING_POTIONS;
 			default:
 				int[] both = new int[SUPER_STRENGTH.length + REGULAR_STRENGTH.length];
 				System.arraycopy(SUPER_STRENGTH, 0, both, 0, SUPER_STRENGTH.length);
@@ -223,6 +256,8 @@ public final class GemCrabKillerScript extends Routine
 		drinkWaitTicks = 0;
 		boostBeforeDrink = 0;
 		potionsDrunk = 0;
+		nextDivineDrinkAt = 0;
+		levelUpWaitTicks = 0;
 		setStatus("Ready");
 	}
 
@@ -236,7 +271,12 @@ public final class GemCrabKillerScript extends Routine
 			return;
 		}
 
-		drinkStrengthIfNeeded(context);
+		if (dismissLevelUp(context))
+		{
+			return;
+		}
+
+		drinkPotionIfNeeded(context);
 		antiIdle(context);
 
 		if (cooldown > 0)
@@ -370,7 +410,8 @@ public final class GemCrabKillerScript extends Routine
 			return;
 		}
 
-		if (input.interact(crab, ATTACK_ACTION))
+		// Attack is the crab's left-click option.
+		if (input.click(crab))
 		{
 			target = crab;
 			idleTicks = 0;
@@ -585,17 +626,55 @@ public final class GemCrabKillerScript extends Routine
 	}
 
 	/**
-	 * Drinks a strength potion whenever the Strength boost (boosted level
-	 * minus real level) is the configured threshold (default 3) or less, which
-	 * includes being unboosted. Does nothing when no strength potions are in
-	 * the inventory. Drinking does not interrupt combat, so this runs in
-	 * every state, but never while the mouse is moving, the camera is
-	 * turning, or a menu is open.
+	 * Presses Space to close the level-up scroll. While it is open the game
+	 * keeps the player in the level-up animation, which stops combat.
+	 * @return true while the scroll is open, so nothing else runs this tick
 	 */
-	private void drinkStrengthIfNeeded(RoutineContext context)
+	private boolean dismissLevelUp(RoutineContext context)
+	{
+		Widget dialog = context.getClient().getWidget(InterfaceID.LevelupDisplay.UNIVERSE);
+		if (dialog == null || dialog.isHidden())
+		{
+			levelUpWaitTicks = 0;
+			return false;
+		}
+
+		if (levelUpWaitTicks > 0)
+		{
+			--levelUpWaitTicks;
+			return true;
+		}
+
+		GameInput input = context.getInput();
+		if (!input.isBusy() && !input.isCameraBusy() && input.pressSpace())
+		{
+			levelUpWaitTicks = 1;
+		}
+		setStatus("Dismissing level up");
+		return true;
+	}
+
+	/**
+	 * Drinks a potion whenever the matching boost (boosted level minus real
+	 * level) is the configured threshold (default 3) or less, which includes
+	 * being unboosted. Does nothing when the selected potions are not in the
+	 * inventory. Drinking does not interrupt combat, so this runs in every
+	 * state, but never while the mouse is moving, the camera is turning, or a
+	 * menu is open.
+	 */
+	private void drinkPotionIfNeeded(RoutineContext context)
 	{
 		Client client = context.getClient();
-		int boost = client.getBoostedSkillLevel(Skill.STRENGTH) - client.getRealSkillLevel(Skill.STRENGTH);
+		Skill skill = potionMode.skill;
+		int boost = client.getBoostedSkillLevel(skill) - client.getRealSkillLevel(skill);
+
+		// A divine potion holds its boost for five minutes. Never drink
+		// another one during that window, even if the boost reading is odd.
+		if (potionMode == PotionMode.DIVINE_RANGING
+			&& System.currentTimeMillis() < nextDivineDrinkAt)
+		{
+			return;
+		}
 
 		if (drinkWaitTicks > 0)
 		{
@@ -618,7 +697,7 @@ public final class GemCrabKillerScript extends Routine
 		}
 
 		Inventory inventory = context.getInventory();
-		int slot = findStrengthPotionSlot(inventory);
+		int slot = findPotionSlot(inventory);
 		if (slot < 0)
 		{
 			return;
@@ -647,13 +726,17 @@ public final class GemCrabKillerScript extends Routine
 			boostBeforeDrink = boost;
 			drinkWaitTicks = DRINK_TIMEOUT_TICKS;
 			++potionsDrunk;
-			setStatus("Drinking strength potion");
+			if (potionMode == PotionMode.DIVINE_RANGING)
+			{
+				nextDivineDrinkAt = System.currentTimeMillis() + DIVINE_POTION_MS;
+			}
+			setStatus("Drinking " + potionMode);
 		}
 	}
 
-	private int findStrengthPotionSlot(Inventory inventory)
+	private int findPotionSlot(Inventory inventory)
 	{
-		for (int potion : strengthPotions)
+		for (int potion : potions)
 		{
 			int slot = inventory.findSlot(potion);
 			if (slot >= 0)
@@ -794,6 +877,7 @@ public final class GemCrabKillerScript extends Routine
 		return Arrays.asList(
 			"State: " + (state == null ? "-" : state.name()),
 			"Kills: " + kills + " (" + perHour + "/hr)",
-			"Strength potions: " + potionsDrunk + " (" + potionMode + ", at boost <= " + boostThreshold + ")");
+			"Potions: " + potionsDrunk + " (" + potionMode + ", at " + potionMode.skill.getName()
+				+ " boost <= " + boostThreshold + ")");
 	}
 }
