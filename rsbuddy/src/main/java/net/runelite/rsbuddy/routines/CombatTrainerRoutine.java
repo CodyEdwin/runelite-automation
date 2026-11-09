@@ -24,6 +24,7 @@
  */
 package net.runelite.rsbuddy.routines;
 
+import java.awt.Point;
 import java.util.Collections;
 import java.util.Map;
 import java.util.Optional;
@@ -62,6 +63,7 @@ public final class CombatTrainerRoutine extends Routine
 	private static final int ATTACK_COOLDOWN_TICKS = 3;
 	private static final int SCAN_RADIUS = 20;
 	private static final int MAX_TARGET_DISTANCE = 20;
+	private static final int AIM_TOLERANCE_PX = 5;
 	private static final Pattern TAGS = Pattern.compile("<[^>]*>");
 
 	private final Set<String> targetNames = ConcurrentHashMap.newKeySet();
@@ -72,6 +74,7 @@ public final class CombatTrainerRoutine extends Routine
 
 	private int cooldown;
 	private boolean loggingOut;
+	private NPC hoverNpc;
 
 	public CombatTrainerRoutine()
 	{
@@ -87,6 +90,7 @@ public final class CombatTrainerRoutine extends Routine
 		refreshRequested = true;
 		training = false;
 		loggingOut = false;
+		hoverNpc = null;
 		setStatus("Choose NPCs in the Combat Trainer window");
 
 		SwingUtilities.invokeLater(this::showWindow);
@@ -96,6 +100,8 @@ public final class CombatTrainerRoutine extends Routine
 	protected void onStop()
 	{
 		training = false;
+		hoverNpc = null;
+		getContext().getInput().follow(null);
 		CombatTrainerWindow current = window;
 		window = null;
 
@@ -106,12 +112,38 @@ public final class CombatTrainerRoutine extends Routine
 	}
 
 	@Override
+	protected void onClientTick()
+	{
+		if (!training || loggingOut || !getContext().isLoggedIn())
+		{
+			return;
+		}
+
+		NPC npc = hoverNpc;
+		if (npc == null || npc.isDead())
+		{
+			return;
+		}
+
+		GameInput input = getContext().getInput();
+		Point aim = input.npcCenter(npc);
+		if (aim != null)
+		{
+			// Re-aim every frame. The NPC and the camera keep moving while
+			// the cursor travels, so a point captured once would already be
+			// stale by the time the click landed.
+			input.follow(aim);
+		}
+	}
+
+	@Override
 	protected void onGameTick()
 	{
 		RoutineContext context = getContext();
 
 		if (!context.isLoggedIn())
 		{
+			clearHover();
 			setStatus("Waiting for login");
 			return;
 		}
@@ -134,12 +166,14 @@ public final class CombatTrainerRoutine extends Routine
 
 		if (!training)
 		{
+			clearHover();
 			setStatus("Choose NPCs and press Start");
 			return;
 		}
 
 		if (targetNames.isEmpty())
 		{
+			clearHover();
 			setStatus("No NPCs selected");
 			return;
 		}
@@ -185,6 +219,7 @@ public final class CombatTrainerRoutine extends Routine
 			// is not in the selected list, and the game refuses a new attack
 			// until the current interaction ends. Keep fighting whatever we
 			// are already on instead of clicking another NPC every tick.
+			clearHover();
 			NPC current = (NPC) interacting;
 			String currentName = getNpcName(current);
 			setStatus((current.isDead() ? "Finishing " : "Fighting ") + currentName);
@@ -195,36 +230,110 @@ public final class CombatTrainerRoutine extends Routine
 		// food. Logging out is safer than dying while waiting for a kill.
 		if (!hasFood(context))
 		{
+			clearHover();
 			beginLogout();
 			return;
 		}
 
-		Optional<NPC> target = findTarget(context);
-		if (target.isEmpty())
+		// Stay on the NPC the cursor is already travelling toward instead of
+		// re-picking the nearest one every tick, which would make the cursor
+		// chase different NPCs and never settle on one.
+		NPC npc = hoverNpc;
+		if (!isStillTarget(context, npc))
 		{
-			cooldown = 2;
-			setStatus("Waiting for " + describeTargets());
+			Optional<NPC> target = findTarget(context);
+			if (target.isEmpty())
+			{
+				clearHover();
+				cooldown = 2;
+				setStatus("Waiting for " + describeTargets());
+				return;
+			}
+
+			npc = target.get();
+			hoverNpc = npc;
+		}
+
+		String name = getNpcName(npc);
+		Point aim = input.npcCenter(npc);
+		if (aim == null)
+		{
+			// The NPC is not clickable on screen (out of range, behind an
+			// interface, or not drawn yet), so walk toward it instead.
+			clearHover();
+			if (input.walkTo(npc.getWorldLocation()))
+			{
+				cooldown = 2;
+				setStatus("Walking to " + name);
+			}
+			else
+			{
+				cooldown = 2;
+				setStatus("Cannot attack " + name);
+			}
 			return;
 		}
 
-		NPC npc = target.get();
-		String name = getNpcName(npc);
-		// A plain left click attacks the NPC directly. Opening the right-click
-		// menu and picking Attack is unreliable, so the default click is used.
-		if (input.click(npc))
+		Point mouse = input.getMouseLocation();
+		boolean onTarget = mouse != null
+			&& mouse.distance(aim) <= AIM_TOLERANCE_PX
+			&& input.isMouseOver(npc);
+		if (!onTarget)
+		{
+			// Glide the cursor to the NPC's live screen position. It is
+			// re-aimed every frame in onClientTick, so a moving camera does
+			// not leave the click behind where the NPC used to be.
+			input.follow(aim);
+			setStatus("Lining up " + name);
+			return;
+		}
+
+		// Click exactly where the cursor is now, while it is confirmed to be
+		// over the NPC's model, rather than at a point computed earlier.
+		hoverNpc = null;
+		if (input.click(mouse))
 		{
 			cooldown = ATTACK_COOLDOWN_TICKS;
 			setStatus("Attacking " + name);
-		}
-		else if (input.walkTo(npc.getWorldLocation()))
-		{
-			cooldown = 2;
-			setStatus("Walking to " + name);
 		}
 		else
 		{
 			cooldown = 2;
 			setStatus("Cannot attack " + name);
+		}
+	}
+
+	/**
+	 * @return true while the given NPC is still a valid selected target that
+	 * is close enough to keep aiming at
+	 */
+	private boolean isStillTarget(RoutineContext context, NPC npc)
+	{
+		if (npc == null || npc.isDead() || npc.getComposition() == null)
+		{
+			return false;
+		}
+
+		if (!isTargetSelected(getNpcName(npc)))
+		{
+			return false;
+		}
+
+		WorldPoint playerLocation = context.getPlayerLocation();
+		WorldPoint npcLocation = npc.getWorldLocation();
+		return playerLocation != null && npcLocation != null
+			&& npcLocation.distanceTo(playerLocation) <= MAX_TARGET_DISTANCE;
+	}
+
+	/**
+	 * Stops following the current NPC, if any.
+	 */
+	private void clearHover()
+	{
+		if (hoverNpc != null)
+		{
+			hoverNpc = null;
+			getContext().getInput().follow(null);
 		}
 	}
 
@@ -490,6 +599,8 @@ public final class CombatTrainerRoutine extends Routine
 		eatAtHpPercent = Math.max(1, Math.min(99, hpPercent));
 		cooldown = 0;
 		loggingOut = false;
+		hoverNpc = null;
+		getContext().getInput().follow(null);
 		training = true;
 		setStatus("Training: " + describeTargets());
 	}
@@ -497,6 +608,8 @@ public final class CombatTrainerRoutine extends Routine
 	void stopTraining()
 	{
 		training = false;
+		hoverNpc = null;
+		getContext().getInput().follow(null);
 		setStatus("Training stopped");
 	}
 

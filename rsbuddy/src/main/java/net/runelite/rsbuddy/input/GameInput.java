@@ -541,7 +541,28 @@ public final class GameInput
 	 */
 	public Point objectCenter(TileObject object)
 	{
-		Shape hull = objectHull(object);
+		return centerOf(objectHull(object));
+	}
+
+	/**
+	 * A stable, clickable point on the NPC's model, recomputed from its
+	 * current screen position. Client thread only.
+	 *
+	 * @return the point, or null when the NPC is not clickable on screen
+	 */
+	public Point npcCenter(NPC npc)
+	{
+		if (npc == null)
+		{
+			return null;
+		}
+
+		Point point = centerOf(npc.getConvexHull());
+		return point != null ? point : centerOf(npc.getCanvasTilePoly());
+	}
+
+	private Point centerOf(Shape hull)
+	{
 		if (hull == null)
 		{
 			return null;
