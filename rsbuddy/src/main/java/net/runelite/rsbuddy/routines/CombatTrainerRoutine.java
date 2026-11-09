@@ -53,7 +53,6 @@ import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.rsbuddy.input.GameInput;
 import net.runelite.rsbuddy.inventory.Inventory;
-import net.runelite.rsbuddy.routine.Actions;
 import net.runelite.rsbuddy.routine.Routine;
 import net.runelite.rsbuddy.routine.RoutineContext;
 
@@ -71,9 +70,8 @@ public final class CombatTrainerRoutine extends Routine
 	private static final int MAX_TARGET_DISTANCE = 20;
 	private static final int AIM_TOLERANCE_PX = 5;
 	private static final int LOOT_RADIUS = 15;
-	private static final int LOOT_RECLICK_TICKS = 2;
-	private static final int LOOT_ATTEMPT_LIMIT = 4;
-	private static final int LOOT_TARGET_TIMEOUT_TICKS = 25;
+	private static final int LOOT_RECLICK_TICKS = 3;
+	private static final int LOOT_ATTEMPT_LIMIT = 5;
 	private static final long IGNORED_LOOT_TIMEOUT_MS = 10_000L;
 	private static final Pattern TAGS = Pattern.compile("<[^>]*>");
 
@@ -92,7 +90,6 @@ public final class CombatTrainerRoutine extends Routine
 	private NPC hoverNpc;
 	private volatile GroundItem lootTarget;
 	private int lootAttempts;
-	private int lootTicks;
 	private int lootClickTicks = -1;
 
 	public CombatTrainerRoutine()
@@ -142,19 +139,6 @@ public final class CombatTrainerRoutine extends Routine
 		}
 
 		GameInput input = getContext().getInput();
-
-		// Keep the cursor on a drop while it is being picked up, for the same
-		// reason as an NPC: the camera and player move while the mouse travels.
-		GroundItem loot = lootTarget;
-		if (loot != null)
-		{
-			Point aim = input.groundItemPoint(loot.sceneX, loot.sceneY);
-			if (aim != null)
-			{
-				input.follow(aim);
-			}
-			return;
-		}
 
 		NPC npc = hoverNpc;
 		if (npc == null || npc.isDead())
@@ -247,6 +231,14 @@ public final class CombatTrainerRoutine extends Routine
 			return;
 		}
 
+		// Loot listed drops whenever they are spotted, even in the middle of
+		// a fight. Auto-retaliate carries the fight on and the next tick goes
+		// straight back to attacking.
+		if (lootNearby(context))
+		{
+			return;
+		}
+
 		Player player = context.getPlayer();
 		Actor interacting = player == null ? null : player.getInteracting();
 		if (interacting instanceof NPC)
@@ -268,12 +260,6 @@ public final class CombatTrainerRoutine extends Routine
 		{
 			clearHover();
 			beginLogout();
-			return;
-		}
-
-		// Pick up any listed drops before starting the next fight.
-		if (lootNearby(context))
-		{
 			return;
 		}
 
@@ -400,14 +386,13 @@ public final class CombatTrainerRoutine extends Routine
 			return false;
 		}
 
-		// Only one target at a time, so the NPC aim cannot fight the drop aim.
-		clearHover();
-
 		if (!loot.sameAs(lootTarget))
 		{
+			// Stop aiming at an NPC while a drop is handled; the next tick
+			// after the pickup goes straight back to the fight.
+			clearHover();
 			lootTarget = loot;
 			lootAttempts = 0;
-			lootTicks = 0;
 			lootClickTicks = -1;
 		}
 
@@ -418,62 +403,36 @@ public final class CombatTrainerRoutine extends Routine
 			input.setGroundItemPickupFilter(lootItemIds);
 		}
 
-		if (++lootTicks > LOOT_TARGET_TIMEOUT_TICKS
-			|| lootAttempts >= LOOT_ATTEMPT_LIMIT)
+		// Wait for the previous click to play out before trying again, so the
+		// mouse does not twitch repeatedly over the item.
+		if (lootClickTicks >= 0 && ++lootClickTicks < LOOT_RECLICK_TICKS)
 		{
-			// Unreachable or permanently covered: ignore the pile for a while
-			// instead of blocking the next fight.
+			setStatus("Looting " + loot.name);
+			return true;
+		}
+
+		if (lootAttempts >= LOOT_ATTEMPT_LIMIT)
+		{
+			// Unreachable or permanently covered: ignore the pile for a while.
 			ignoreLoot(loot.worldLocation);
 			resetLootTracking();
 			setStatus("Skipping unreachable loot");
 			return true;
 		}
 
-		// Wait for the previous Take to play out: the player walks onto the
-		// tile and picks the item up by itself.
-		Player player = context.getPlayer();
-		if (lootClickTicks >= 0)
+		// One deliberate click per attempt. The pickup filter keeps this
+		// item's Take as the top option, so no hover dance is needed.
+		if (input.takeGroundItem(loot.sceneX, loot.sceneY, loot.itemId, loot.name))
 		{
-			++lootClickTicks;
-			if (Actions.isMoving(player) || lootClickTicks < LOOT_RECLICK_TICKS)
-			{
-				setStatus("Looting " + loot.name);
-				return true;
-			}
+			lootClickTicks = 0;
+			++lootAttempts;
+			setStatus("Looting " + loot.name);
 		}
-
-		Point aim = input.groundItemPoint(loot.sceneX, loot.sceneY);
-		if (aim == null)
+		else if (input.walkTo(loot.worldLocation))
 		{
-			// The tile is off screen: walk closer and aim again next tick.
-			resetLootTracking();
-			if (input.walkTo(loot.worldLocation))
-			{
-				setStatus("Walking to " + loot.name);
-			}
-			return true;
+			lootClickTicks = 0;
+			setStatus("Walking to " + loot.name);
 		}
-
-		Point mouse = input.getMouseLocation();
-		boolean onTile = input.isOnGroundItemTile(mouse, loot.sceneX, loot.sceneY);
-		int hover = input.groundItemHoverState(loot.itemId, loot.sceneX, loot.sceneY);
-		if (hover == 2 && onTile && mouse != null)
-		{
-			// The item's Take is the top option under the cursor right now,
-			// so this left click picks it up.
-			if (input.click(mouse))
-			{
-				lootClickTicks = 0;
-				++lootAttempts;
-				setStatus("Looting " + loot.name);
-			}
-			return true;
-		}
-
-		// Still travelling, or something else is on top. Keep the cursor on
-		// the item and verify again next tick rather than clicking blind.
-		input.follow(aim);
-		setStatus("Looting " + loot.name);
 		return true;
 	}
 
@@ -649,7 +608,6 @@ public final class CombatTrainerRoutine extends Routine
 	{
 		lootTarget = null;
 		lootAttempts = 0;
-		lootTicks = 0;
 		lootClickTicks = -1;
 	}
 
