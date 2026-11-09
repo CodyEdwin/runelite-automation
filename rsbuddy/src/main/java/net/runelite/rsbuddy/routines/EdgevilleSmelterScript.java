@@ -316,7 +316,7 @@ public final class EdgevilleSmelterScript extends TaskRoutine
 
 	private void deposit(RoutineContext context, Inventory inventory)
 	{
-		if (inventory.getEmptySlots() < Inventory.SIZE)
+		if (hasDepositableItems(context, inventory))
 		{
 			if (depositAttempts >= DEPOSIT_ATTEMPTS)
 			{
@@ -928,6 +928,25 @@ public final class EdgevilleSmelterScript extends TaskRoutine
 				{
 					return true;
 				}
+			}
+		}
+		return false;
+	}
+
+	private boolean hasDepositableItems(RoutineContext context, Inventory inventory)
+	{
+		for (Item item : inventory.getItems())
+		{
+			if (item == null || item.getId() == -1)
+			{
+				continue;
+			}
+			ItemComposition composition = context.getClient().getItemDefinition(item.getId());
+			String name = composition == null ? "" : String.valueOf(composition.getName()).toLowerCase(Locale.ROOT);
+			// The locked coal bag stays in the inventory; everything else is banked.
+			if (!name.contains("coal bag"))
+			{
+				return true;
 			}
 		}
 		return false;
