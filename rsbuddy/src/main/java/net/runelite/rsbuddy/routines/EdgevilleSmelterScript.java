@@ -68,6 +68,13 @@ public final class EdgevilleSmelterScript extends TaskRoutine
 	private static final int RESTART_LIMIT = 6;
 	private static final int WALK_ATTEMPTS = 8;
 	private static final int LEVEL_UP_CLICK_ATTEMPTS = 3;
+	/** Mithril coal-bag trip steps. */
+	private static final int MITHRIL_COAL = 0;
+	private static final int MITHRIL_ESCAPE = 1;
+	private static final int MITHRIL_FILL = 2;
+	private static final int MITHRIL_REOPEN = 3;
+	private static final int MITHRIL_ORE = 4;
+	private static final int MITHRIL_TOPUP = 5;
 
 	/** Skill make-menu option slots, in order (key 1 = A, 2 = B, ...). */
 	private static final int[] MAKE_OPTIONS = {
@@ -175,6 +182,9 @@ public final class EdgevilleSmelterScript extends TaskRoutine
 	private boolean barKeyPressed;
 	private boolean allClicked;
 	private int lastOreCount = -1;
+	private int mithrilStep;
+	private int mithrilAttempts;
+	private int mithrilCoalBeforeFill;
 
 	public EdgevilleSmelterScript()
 	{
@@ -228,6 +238,9 @@ public final class EdgevilleSmelterScript extends TaskRoutine
 		barKeyPressed = false;
 		allClicked = false;
 		lastOreCount = -1;
+		mithrilStep = MITHRIL_COAL;
+		mithrilAttempts = 0;
+		mithrilCoalBeforeFill = 0;
 		setPhase(Phase.BANK, "started: " + bar.name());
 		setStatus("Ready: " + bar.name());
 		actions.allowWithBankOpen("furnace");
@@ -271,6 +284,12 @@ public final class EdgevilleSmelterScript extends TaskRoutine
 		{
 			setPhase(Phase.CLICK_FURNACE, "ores withdrawn, clicking the visible furnace");
 			setStatus("Clicking the furnace");
+			return;
+		}
+
+		if (bar == Bar.MITHRIL && bankStage == BankStage.WITHDRAW)
+		{
+			withdrawMithril(context, inventory);
 			return;
 		}
 
@@ -330,6 +349,9 @@ public final class EdgevilleSmelterScript extends TaskRoutine
 		bankTicks = 0;
 		depositAttempts = 0;
 		withdrawFailures = 0;
+		mithrilStep = MITHRIL_COAL;
+		mithrilAttempts = 0;
+		mithrilCoalBeforeFill = 0;
 		setStatus("Withdrawing ores");
 	}
 
@@ -343,6 +365,24 @@ public final class EdgevilleSmelterScript extends TaskRoutine
 		}
 
 		int maxBars = inventory.getEmptySlots() / bar.slotsPerBar();
+		if (bar == Bar.MITHRIL)
+		{
+			// Coal travels in the coal bag, so only the ore takes slots.
+			int ore = bank.count(ItemID.MITHRIL_ORE);
+			if (ore <= 0)
+			{
+				if (bankTicks < BANK_LOAD_TICKS)
+				{
+					setStatus("Waiting for the bank items");
+					return false;
+				}
+				stop("the bank has no mithril ore");
+				return false;
+			}
+			tripBars = Math.min(10, ore);
+			targetCounts = new int[]{tripBars, tripBars * 2};
+			return true;
+		}
 		for (Ingredient ingredient : bar.ingredients)
 		{
 			int available = bank.count(ingredient.itemId);
@@ -421,6 +461,123 @@ public final class EdgevilleSmelterScript extends TaskRoutine
 		bankTicks = 0;
 		leaveAttempts = 0;
 		setStatus("Leaving the bank with " + tripBars + " bars worth of ore");
+	}
+
+	/**
+	 * Mithril uses the coal bag: withdraw all coal, fill the bag, withdraw ten
+	 * mithril ore, top the inventory up with coal, then smelt with the bank
+	 * still open.
+	 */
+	private void withdrawMithril(RoutineContext context, Inventory inventory)
+	{
+		GameInput input = context.getInput();
+		int ore = inventory.countItem(ItemID.MITHRIL_ORE);
+		int coal = inventory.countItem(ItemID.COAL);
+
+		switch (mithrilStep)
+		{
+			case MITHRIL_COAL:
+				if (!actions.bankOpen())
+				{
+					actions.openNearestBank(BANK_SEARCH_DISTANCE, true);
+					return;
+				}
+				if (coal > 0)
+				{
+					mithrilAttempts = 0;
+					mithrilStep = MITHRIL_ESCAPE;
+					return;
+				}
+				if (!input.isBusy() && input.clickBankItem(ItemID.COAL))
+				{
+					cooldown(1);
+				}
+				else if (++mithrilAttempts > 12)
+				{
+					// The bag may already hold enough coal.
+					mithrilAttempts = 0;
+					mithrilStep = MITHRIL_ESCAPE;
+				}
+				setStatus("Withdrawing coal");
+				return;
+
+			case MITHRIL_ESCAPE:
+				if (actions.bankOpen())
+				{
+					actions.pressKey(KeyEvent.VK_ESCAPE);
+				}
+				mithrilCoalBeforeFill = coal;
+				mithrilAttempts = 0;
+				mithrilStep = MITHRIL_FILL;
+				setStatus("Filling the coal bag");
+				return;
+
+			case MITHRIL_FILL:
+				if (mithrilCoalBeforeFill == 0 || coal < mithrilCoalBeforeFill)
+				{
+					mithrilAttempts = 0;
+					mithrilStep = MITHRIL_REOPEN;
+					return;
+				}
+				if (!actions.bankOpen() && !input.isBusy())
+				{
+					actions.clickItem(ItemID.COAL_BAG, "Fill");
+				}
+				if (++mithrilAttempts > 15)
+				{
+					mithrilAttempts = 0;
+					mithrilStep = MITHRIL_REOPEN;
+				}
+				setStatus("Filling the coal bag");
+				return;
+
+			case MITHRIL_REOPEN:
+				if (actions.bankOpen())
+				{
+					mithrilAttempts = 0;
+					mithrilStep = MITHRIL_ORE;
+					return;
+				}
+				actions.openNearestBank(BANK_SEARCH_DISTANCE, true);
+				return;
+
+			case MITHRIL_ORE:
+				if (ore >= targetCounts[0])
+				{
+					mithrilAttempts = 0;
+					mithrilStep = MITHRIL_TOPUP;
+					return;
+				}
+				if (!input.isBusy())
+				{
+					if (input.clickBankItem(ItemID.MITHRIL_ORE))
+					{
+						cooldown(1);
+					}
+					else if (++mithrilAttempts > 12)
+					{
+						stop("could not withdraw mithril ore (set its left click to Withdraw-10)");
+						return;
+					}
+				}
+				setStatus("Withdrawing mithril ore");
+				return;
+
+			case MITHRIL_TOPUP:
+				if (input.isBusy())
+				{
+					return;
+				}
+				input.clickBankItem(ItemID.COAL);
+				bankStage = BankStage.LEAVE;
+				bankTicks = 0;
+				leaveAttempts = 0;
+				setStatus("Smelting " + tripBars + " mithril bars with the bank open");
+				return;
+
+			default:
+				break;
+		}
 	}
 
 	/**
@@ -605,6 +762,17 @@ public final class EdgevilleSmelterScript extends TaskRoutine
 
 		if (!barKeyPressed)
 		{
+			if (bar == Bar.MITHRIL)
+			{
+				// Space repeats the last bar smelted, which is mithril.
+				if (actions.pressKey(KeyEvent.VK_SPACE))
+				{
+					barKeyPressed = true;
+					cooldown(1);
+				}
+				setStatus("Choosing " + bar.name());
+				return;
+			}
 			int option = bar == Bar.STEEL ? 1 : findBarOption(context);
 			if (option < 0)
 			{
