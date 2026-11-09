@@ -110,6 +110,7 @@ tasks.register<JavaExec>("run") {
     dependsOn(":xplogger:installPlugin")
     dependsOn(":fullscreen:installPlugin")
     dependsOn(":currenthit:installPlugin")
+    dependsOn(":mouseeffects:installPlugin")
     mainClass.set("net.runelite.client.RuneLite")
     classpath = sourceSets.main.get().runtimeClasspath
     jvmArgs("-ea")
@@ -123,6 +124,7 @@ tasks.register<JavaExec>("runNorm") {
     dependsOn(":xplogger:installPlugin")
     dependsOn(":fullscreen:installPlugin")
     dependsOn(":currenthit:installPlugin")
+    dependsOn(":mouseeffects:installPlugin")
     mainClass.set("net.runelite.client.RuneLite")
     classpath = sourceSets.main.get().runtimeClasspath
 }
