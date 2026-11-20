@@ -174,7 +174,7 @@ public final class RoutineListPanel extends PluginPanel
 		inputTitle.setForeground(ColorScheme.LIGHT_GRAY_COLOR);
 		inputTitle.setFont(FontManager.getRunescapeSmallFont());
 		inputBackendSelector = new JComboBox<>(InputBackendType.values());
-		inputBackendSelector.setToolTipText("Auto picks Linux X11 or Windows SendInput. No Java input fallback.");
+		inputBackendSelector.setToolTipText("Auto picks Android (RuneLite Mobile), Linux X11 or Windows SendInput. No Java input fallback.");
 		inputBackendSelector.setSelectedItem(config.inputBackend());
 		inputBackendSelector.addActionListener(event ->
 		{

@@ -161,7 +161,7 @@ public final class GameInput
 		return hardwareInput != null;
 	}
 
-	/** Changes the backend choice (Auto / Linux X11 / Windows SendInput) and detects again. */
+	/** Changes the backend choice (Auto / Linux X11 / Windows SendInput / Android) and detects again. */
 	public synchronized void setBackendPreference(InputBackendType preference)
 	{
 		InputBackendType next = preference == null ? InputBackendType.AUTO : preference;

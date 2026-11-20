@@ -37,7 +37,7 @@
  *     Movement         minimap walking, isMoving, click-or-walk
  *     Bank / Keys / Waits / ActionLog
  *       GameInput      curved human mouse paths, clicks, keys (refuses direct menu actions)
- *         HardwareInput  OS backend: X11 XTest or Windows SendInput (no Java input fallback)
+ *         HardwareInput  OS backend: X11 XTest, Windows SendInput or the Android touch bridge (no Java input fallback)
  * </pre>
  *
  * <h2>Lifecycle</h2>

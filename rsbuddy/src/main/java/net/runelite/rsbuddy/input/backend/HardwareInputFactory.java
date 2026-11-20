@@ -64,7 +64,12 @@ public final class HardwareInputFactory
 		String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
 		if (type == InputBackendType.AUTO)
 		{
-			if (os.contains("win"))
+			// RuneLite Mobile reports os.name "Linux", so check for its AWT bridge first.
+			if (AndroidHardwareInput.isAndroidRuntime())
+			{
+				type = InputBackendType.ANDROID;
+			}
+			else if (os.contains("win"))
 			{
 				type = InputBackendType.WINDOWS_SENDINPUT;
 			}
@@ -80,6 +85,16 @@ public final class HardwareInputFactory
 
 		try
 		{
+			if (type == InputBackendType.ANDROID)
+			{
+				AndroidHardwareInput input = new AndroidHardwareInput();
+				if (!input.isAvailable())
+				{
+					return fail("Android input unavailable: " + input.getProblem());
+				}
+				return ok(input);
+			}
+
 			if (type == InputBackendType.WINDOWS_SENDINPUT)
 			{
 				if (!os.contains("win"))

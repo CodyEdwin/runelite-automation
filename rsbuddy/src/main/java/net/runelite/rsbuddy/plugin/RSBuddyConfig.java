@@ -484,7 +484,7 @@ public interface RSBuddyConfig extends Config
 	@ConfigItem(
 		keyName = "inputBackend",
 		name = "Input backend",
-		description = "OS hardware input used for every mouse move, click and key. Auto picks Linux X11 (XTest)"
+		description = "OS hardware input used for every mouse move, click and key. Auto picks the Android touch bridge (RuneLite Mobile), Linux X11 (XTest)"
 			+ " or Windows SendInput for the running OS. There is no Java input fallback: routines refuse to"
 			+ " start when the backend is unavailable.",
 		position = 32

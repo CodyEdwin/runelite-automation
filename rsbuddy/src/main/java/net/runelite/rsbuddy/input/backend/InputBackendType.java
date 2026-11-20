@@ -29,7 +29,8 @@ public enum InputBackendType
 {
 	AUTO("Auto"),
 	LINUX_X11("Linux X11 (XTest)"),
-	WINDOWS_SENDINPUT("Windows SendInput");
+	WINDOWS_SENDINPUT("Windows SendInput"),
+	ANDROID("Android (RuneLite Mobile)");
 
 	private final String label;
 
