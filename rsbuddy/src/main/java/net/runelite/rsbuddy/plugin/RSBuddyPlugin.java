@@ -52,6 +52,7 @@ import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.ClientToolbar;
 import net.runelite.client.ui.NavigationButton;
 import net.runelite.client.ui.overlay.OverlayManager;
+import net.runelite.client.util.HotkeyListener;
 import net.runelite.client.util.ImageUtil;
 import net.runelite.rsbuddy.debug.GeProbe;
 import net.runelite.rsbuddy.debug.WidgetDumper;
@@ -121,6 +122,7 @@ public class RSBuddyPlugin extends Plugin
 
 	private volatile GameInput input;
 	private volatile RoutineManager routineManager;
+	private HotkeyListener startStopHotkey;
 	private volatile RoutineRegistry registry;
 	private volatile WidgetWatcher watcher;
 	private volatile GeProbe probe;
@@ -210,6 +212,19 @@ public class RSBuddyPlugin extends Plugin
 		xpProgressOverlay.setDragHandler(xpDragHandler);
 		mouseManager.registerMouseListener(0, xpDragHandler);
 		keyManager.registerKeyListener(xpDragHandler);
+		startStopHotkey = new HotkeyListener(config::startStopHotkey)
+		{
+			@Override
+			public void hotkeyPressed()
+			{
+				RoutineManager manager = routineManager;
+				if (manager != null)
+				{
+					manager.toggle();
+				}
+			}
+		};
+		keyManager.registerKeyListener(startStopHotkey);
 		overlayManager.add(mouseOverlay);
 		mouseManager.registerMouseListener(mouseOverlay);
 		log.info("RSBuddy started");
@@ -246,6 +261,11 @@ public class RSBuddyPlugin extends Plugin
 			mouseManager.unregisterMouseListener(xpDragHandler);
 			keyManager.unregisterKeyListener(xpDragHandler);
 			xpDragHandler = null;
+		}
+		if (startStopHotkey != null)
+		{
+			keyManager.unregisterKeyListener(startStopHotkey);
+			startStopHotkey = null;
 		}
 		overlayManager.remove(mouseOverlay);
 		mouseManager.unregisterMouseListener(mouseOverlay);

@@ -25,6 +25,8 @@
 package net.runelite.rsbuddy.plugin;
 
 import java.awt.Color;
+import java.awt.event.KeyEvent;
+import net.runelite.client.config.Keybind;
 import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
@@ -492,5 +494,16 @@ public interface RSBuddyConfig extends Config
 	default InputBackendType inputBackend()
 	{
 		return InputBackendType.AUTO;
+	}
+
+	@ConfigItem(
+		keyName = "startStopHotkey",
+		name = "Start/stop hotkey",
+		description = "Stops the running routine, or restarts the last one. RuneLite Mobile's RSBuddy button sends Pause.",
+		position = 33
+	)
+	default Keybind startStopHotkey()
+	{
+		return new Keybind(KeyEvent.VK_PAUSE, 0);
 	}
 }

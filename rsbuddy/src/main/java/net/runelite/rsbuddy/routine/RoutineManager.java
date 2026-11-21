@@ -45,6 +45,8 @@ public final class RoutineManager
 
 	private Routine activeScript;
 
+	private Routine lastScript;
+
 	public RoutineManager(RoutineContext context)
 	{
 		this.context = context;
@@ -146,6 +148,7 @@ public final class RoutineManager
 		}
 
 		activeScript = script;
+		lastScript = script;
 		context.getInput().setGroundItemPickupFilter(script.getGroundItemPickupFilter());
 		context.getInput().setFastMouse(script.useFastMouse());
 		// Real visible clicks only for every script. The GE flipper is being
@@ -175,6 +178,19 @@ public final class RoutineManager
 			{
 				log.warn("Unable to stop failed routine {}", script.getName(), stopEx);
 			}
+		}
+	}
+
+	/** Start/stop hotkey: stops the running routine, or restarts the last one started. */
+	public synchronized void toggle()
+	{
+		if (activeScript != null)
+		{
+			stop();
+		}
+		else if (lastScript != null)
+		{
+			start(lastScript);
 		}
 	}
 
