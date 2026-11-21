@@ -85,12 +85,20 @@ public final class GemCrabKillerRoutine extends Routine
 	/** Ticks (about 36 seconds) to wait for the crab to spawn after crawling. */
 	private static final int SPAWN_TIMEOUT_TICKS = 60;
 
-	/** Anti-idle camera nudges happen every 30 to 60 seconds. */
-	private static final long ANTI_IDLE_MIN_MS = 30_000L;
-	private static final long ANTI_IDLE_MAX_MS = 60_000L;
-	/** Arrow-key hold range for a small camera nudge. */
-	private static final int ANTI_IDLE_MIN_HOLD_MS = 150;
-	private static final int ANTI_IDLE_MAX_HOLD_MS = 450;
+	/** Every click waits a random delay strictly between 1000 and 3000 ms (never a whole second). */
+	private static final long ACTION_DELAY_MIN_MS = 1000L;
+	private static final long ACTION_DELAY_MAX_MS = 3000L;
+	/** A delay that elapsed this long ago without its action firing is stale and restarts. */
+	private static final long ACTION_DELAY_STALE_NS = 1_500_000_000L;
+
+	/** Actions that each get their own random pre-click delay. */
+	private enum Action
+	{
+		CRAB,
+		CAVE,
+		LEVEL_UP,
+		POTION
+	}
 
 	/** Default: drink another strength potion once the boost has dropped to this. */
 	private static final int DEFAULT_BOOST_THRESHOLD = 3;
@@ -174,7 +182,8 @@ public final class GemCrabKillerRoutine extends Routine
 	private int crawlIdleTicks;
 	private int kills;
 	private long startedAt;
-	private long nextAntiIdleAt;
+	private final java.util.EnumMap<Action, Long> actionReadyAt = new java.util.EnumMap<>(Action.class);
+	private NPC pendingCrab;
 	private int drinkWaitTicks;
 	private int boostBeforeDrink;
 	private int potionsDrunk;
@@ -252,7 +261,8 @@ public final class GemCrabKillerRoutine extends Routine
 		crawlIdleTicks = 0;
 		kills = 0;
 		startedAt = System.currentTimeMillis();
-		scheduleAntiIdle();
+		actionReadyAt.clear();
+		pendingCrab = null;
 		drinkWaitTicks = 0;
 		boostBeforeDrink = 0;
 		potionsDrunk = 0;
@@ -277,7 +287,6 @@ public final class GemCrabKillerRoutine extends Routine
 		}
 
 		drinkPotionIfNeeded(context);
-		antiIdle(context);
 
 		if (cooldown > 0)
 		{
@@ -303,6 +312,111 @@ public final class GemCrabKillerRoutine extends Routine
 				waitForSpawn(context);
 				break;
 		}
+	}
+
+	/**
+	 * Runs a delayed click the frame its delay ends, so the real delay is not
+	 * rounded to the 600 ms game tick.
+	 */
+	@Override
+	protected void onClientTick()
+	{
+		RoutineContext context = getContext();
+		if (actionReadyAt.isEmpty() || !context.isLoggedIn())
+		{
+			return;
+		}
+		GameInput input = context.getInput();
+		if (input.isBusy() || input.isCameraBusy())
+		{
+			return;
+		}
+
+		if (isDue(Action.LEVEL_UP))
+		{
+			dismissLevelUp(context);
+			cancelIfStillDue(Action.LEVEL_UP);
+			return;
+		}
+		if (isDue(Action.POTION))
+		{
+			drinkPotionIfNeeded(context);
+			cancelIfStillDue(Action.POTION);
+			return;
+		}
+		if (cooldown > 0)
+		{
+			return;
+		}
+		if (isDue(Action.CAVE))
+		{
+			if (state == State.GO_TO_CAVE)
+			{
+				goToCave(context);
+			}
+			cancelIfStillDue(Action.CAVE);
+		}
+		else if (isDue(Action.CRAB) && state != State.GO_TO_CAVE && state != State.CRAWLING)
+		{
+			NPC crab = pendingCrab;
+			if (crab == null || isCrabDead(context, crab) || getInteractingCrab(context) != null)
+			{
+				actionReadyAt.remove(Action.CRAB);
+				pendingCrab = null;
+				return;
+			}
+			attack(context, crab);
+			cancelIfStillDue(Action.CRAB);
+		}
+	}
+
+	/** The action was no longer wanted when its delay ended; its next attempt waits a new delay. */
+	private void cancelIfStillDue(Action action)
+	{
+		if (isDue(action))
+		{
+			actionReadyAt.remove(action);
+		}
+	}
+
+	private boolean isDue(Action action)
+	{
+		Long readyAt = actionReadyAt.get(action);
+		return readyAt != null && System.nanoTime() >= readyAt;
+	}
+
+	/**
+	 * The first call for an action starts its random delay; it returns true
+	 * once that delay has passed (and clears it, so the next click waits again).
+	 */
+	private boolean actionDelayDone(Action action)
+	{
+		long now = System.nanoTime();
+		Long readyAt = actionReadyAt.get(action);
+		if (readyAt == null || now - readyAt > ACTION_DELAY_STALE_NS)
+		{
+			actionReadyAt.put(action, now + randomDelayNanos());
+			return false;
+		}
+		if (now < readyAt)
+		{
+			return false;
+		}
+		actionReadyAt.remove(action);
+		return true;
+	}
+
+	/** Random delay in (1000, 3000) ms with sub-millisecond precision, never exactly 1000/2000/3000 ms. */
+	private static long randomDelayNanos()
+	{
+		ThreadLocalRandom random = ThreadLocalRandom.current();
+		long nanos;
+		do
+		{
+			nanos = random.nextLong(ACTION_DELAY_MIN_MS * 1_000_000L + 1, ACTION_DELAY_MAX_MS * 1_000_000L);
+		}
+		while (nanos % 1_000_000_000L == 0);
+		return nanos;
 	}
 
 	private void findCrab(RoutineContext context)
@@ -410,6 +524,14 @@ public final class GemCrabKillerRoutine extends Routine
 			return;
 		}
 
+		if (!actionDelayDone(Action.CRAB))
+		{
+			pendingCrab = crab;
+			setStatus("Attacking Gemstone Crab (delay)");
+			return;
+		}
+		pendingCrab = null;
+
 		// Attack is the crab's left-click option.
 		if (input.click(crab))
 		{
@@ -491,6 +613,11 @@ public final class GemCrabKillerRoutine extends Routine
 		// Crawl-through is the cave's left-click option, so this is one
 		// click (or one direct menu action), never a menu that needs a
 		// second call. Either way the crawl counts as sent right now.
+		if (!actionDelayDone(Action.CAVE))
+		{
+			setStatus("Crawling through cave (delay)");
+			return;
+		}
 		if (input.interact(object, CAVE_ACTION))
 		{
 			++crawlClicks;
@@ -646,7 +773,7 @@ public final class GemCrabKillerRoutine extends Routine
 		}
 
 		GameInput input = context.getInput();
-		if (!input.isBusy() && !input.isCameraBusy() && input.pressSpace())
+		if (!input.isBusy() && !input.isCameraBusy() && actionDelayDone(Action.LEVEL_UP) && input.pressSpace())
 		{
 			levelUpWaitTicks = 1;
 		}
@@ -721,7 +848,11 @@ public final class GemCrabKillerRoutine extends Routine
 
 		// Drink is the potion's left-click option.
 		Widget widget = inventory.getSlotWidget(slot);
-		if (widget != null && input.click(widget))
+		if (widget == null || !actionDelayDone(Action.POTION))
+		{
+			return;
+		}
+		if (input.click(widget))
 		{
 			boostBeforeDrink = boost;
 			drinkWaitTicks = DRINK_TIMEOUT_TICKS;
@@ -745,42 +876,6 @@ public final class GemCrabKillerRoutine extends Routine
 			}
 		}
 		return -1;
-	}
-
-	/**
-	 * Keeps the client from idling out by rotating the camera a small random
-	 * amount left or right every 30 to 60 seconds. It only fires while the
-	 * mouse is idle and no menu is open, so it never interrupts a click; the
-	 * held arrow key also makes the attack and cave logic wait until the
-	 * nudge has finished.
-	 */
-	private void antiIdle(RoutineContext context)
-	{
-		if (System.currentTimeMillis() < nextAntiIdleAt)
-		{
-			return;
-		}
-
-		GameInput input = context.getInput();
-		if (input.isBusy() || input.isCameraBusy() || context.getClient().isMenuOpen())
-		{
-			// Try again on a later tick once the current action is done.
-			return;
-		}
-
-		ThreadLocalRandom random = ThreadLocalRandom.current();
-		boolean left = random.nextBoolean();
-		int holdMillis = random.nextInt(ANTI_IDLE_MIN_HOLD_MS, ANTI_IDLE_MAX_HOLD_MS + 1);
-		if (input.nudgeCamera(left, holdMillis))
-		{
-			scheduleAntiIdle();
-		}
-	}
-
-	private void scheduleAntiIdle()
-	{
-		nextAntiIdleAt = System.currentTimeMillis()
-			+ ThreadLocalRandom.current().nextLong(ANTI_IDLE_MIN_MS, ANTI_IDLE_MAX_MS + 1);
 	}
 
 	private Optional<TileObject> findCave(RoutineContext context)
