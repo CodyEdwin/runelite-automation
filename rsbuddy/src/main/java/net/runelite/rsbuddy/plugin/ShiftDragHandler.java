@@ -38,7 +38,7 @@ import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayManager;
 
 /**
- * Shift + drag to move the XP overlays.
+ * Alt + drag to move the XP overlays.
  * <p>
  * Only listens to the user's real mouse and keyboard through RuneLite's
  * MouseManager/KeyManager; it never injects input. A press is taken (consumed)
@@ -91,7 +91,7 @@ final class ShiftDragHandler implements MouseListener, KeyListener
 	@Override
 	public MouseEvent mousePressed(MouseEvent event)
 	{
-		shiftDown = event.isShiftDown();
+		shiftDown = event.isAltDown();
 		Overlay target = shiftDown && SwingUtilities.isLeftMouseButton(event) ? overlayAt(event.getPoint()) : null;
 		if (target == null)
 		{
@@ -146,7 +146,7 @@ final class ShiftDragHandler implements MouseListener, KeyListener
 	@Override
 	public MouseEvent mouseClicked(MouseEvent event)
 	{
-		if (event.isShiftDown() && overlayAt(event.getPoint()) != null)
+		if (event.isAltDown() && overlayAt(event.getPoint()) != null)
 		{
 			event.consume();
 		}
@@ -156,7 +156,7 @@ final class ShiftDragHandler implements MouseListener, KeyListener
 	@Override
 	public MouseEvent mouseMoved(MouseEvent event)
 	{
-		shiftDown = event.isShiftDown();
+		shiftDown = event.isAltDown();
 		hovered = overlayAt(event.getPoint());
 		return event;
 	}
@@ -182,7 +182,7 @@ final class ShiftDragHandler implements MouseListener, KeyListener
 	@Override
 	public void keyPressed(KeyEvent event)
 	{
-		if (event.getKeyCode() == KeyEvent.VK_SHIFT)
+		if (event.getKeyCode() == KeyEvent.VK_ALT)
 		{
 			shiftDown = true;
 		}
@@ -191,7 +191,7 @@ final class ShiftDragHandler implements MouseListener, KeyListener
 	@Override
 	public void keyReleased(KeyEvent event)
 	{
-		if (event.getKeyCode() == KeyEvent.VK_SHIFT)
+		if (event.getKeyCode() == KeyEvent.VK_ALT)
 		{
 			shiftDown = false;
 		}

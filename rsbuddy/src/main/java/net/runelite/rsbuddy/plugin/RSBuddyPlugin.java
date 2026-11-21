@@ -206,7 +206,7 @@ public class RSBuddyPlugin extends Plugin
 		clientToolbar.addNavigation(navButton);
 		overlayManager.add(overlay);
 		overlayManager.add(xpProgressOverlay);
-		// Shift + drag moves these overlays (reads real input only, never injects).
+		// Alt + drag moves these overlays (reads real input only, never injects).
 		xpDragHandler = new ShiftDragHandler(overlayManager, List.of(overlay, xpProgressOverlay),
 			client::getRealDimensions);
 		xpProgressOverlay.setDragHandler(xpDragHandler);
