@@ -477,6 +477,6 @@ public interface RuneLiteConfig extends Config
 	)
 	default Keybind dragHotkey()
 	{
-		return Keybind.SHIFT;
+		return Keybind.ALT;
 	}
 }
