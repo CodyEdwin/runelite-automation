@@ -728,6 +728,16 @@ public class NMZRoutine extends Routine
 			GameInput input = context.getInput();
 			WorldPoint where = object.get().getWorldLocation();
 			Player player = context.getPlayer();
+			if (context.getClient().isMenuOpen())
+			{
+				// Our right-click menu is up: pick Activate now.
+				if (input.interactViaMenu(object.get(), "Activate"))
+				{
+					log.info("[NMZ] activate from menu {}", id);
+				}
+				setStatus("Activating power-up");
+				return true;
+			}
 			long sinceClick = System.nanoTime() - powerupClickedAt;
 			boolean sameClicked = where != null && where.equals(powerupClicked);
 			boolean moving = player != null && player.getPoseAnimation() != player.getIdlePoseAnimation();
@@ -741,9 +751,9 @@ public class NMZRoutine extends Routine
 				offscreen(context, where, "power-up");
 				return true;
 			}
-			// Monsters crowd the power-up, so a left click often attacks one; pick Activate from the menu.
+			// Monsters crowd the power-up, so never left-click it; always right-click and pick Activate.
 			if (ready("powerup", POWERUP_DELAY_MIN_MS, POWERUP_DELAY_MAX_MS)
-				&& (input.interact(object.get(), "Activate") || input.click(object.get())))
+				&& input.interactViaMenu(object.get(), "Activate"))
 			{
 				powerupClicked = where;
 				powerupClickedAt = System.nanoTime();
