@@ -230,11 +230,26 @@ public interface RSBuddyConfig extends Config
 	)
 	@ConfigItem(
 		keyName = "gemCrabBoostThreshold",
-		name = "Gem crab: re-drink at boost",
+		name = "Gem crab: re-drink at boost (min)",
 		description = "Drink another potion once the Strength or Ranged boost has dropped to this many levels or less.",
 		position = 15
 	)
 	default int gemCrabBoostThreshold()
+	{
+		return 3;
+	}
+
+	@Range(
+		min = 0,
+		max = 15
+	)
+	@ConfigItem(
+		keyName = "gemCrabBoostThresholdMax",
+		name = "Gem crab: re-drink at boost (max)",
+		description = "Each drink happens at a random boost between the min and this max.",
+		position = 15
+	)
+	default int gemCrabBoostThresholdMax()
 	{
 		return 3;
 	}

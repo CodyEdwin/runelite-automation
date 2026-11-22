@@ -148,6 +148,37 @@ public final class RoutineSettingsForm
 		});
 	}
 
+	/** Two spinners on one row (e.g. a min and a max). */
+	public void addSpinnerRange(String label, String tooltip, String minKey, String maxKey, int min, int max,
+		Supplier<Integer> currentMin, Supplier<Integer> currentMax)
+	{
+		JLabel title = new JLabel(label);
+		title.setForeground(ColorScheme.TEXT_COLOR);
+		panel.add(title);
+
+		javax.swing.JPanel row = new javax.swing.JPanel(new java.awt.GridLayout(1, 2, 4, 0));
+		row.setOpaque(false);
+		row.add(spinner(tooltip, minKey, min, max, currentMin));
+		row.add(spinner(tooltip, maxKey, min, max, currentMax));
+		panel.add(row);
+	}
+
+	private JSpinner spinner(String tooltip, String key, int min, int max, Supplier<Integer> current)
+	{
+		JSpinner spinner = new JSpinner(new SpinnerNumberModel((int) current.get(), min, max, 1));
+		spinner.setToolTipText(tooltip);
+		spinner.addChangeListener(event -> preferences.set(key, (Integer) spinner.getValue()));
+		syncers.put(key, () ->
+		{
+			int value = current.get();
+			if (!Integer.valueOf(value).equals(spinner.getValue()))
+			{
+				spinner.setValue(value);
+			}
+		});
+		return spinner;
+	}
+
 	public void addText(String label, String key, Supplier<String> current)
 	{
 		JLabel title = new JLabel(label);

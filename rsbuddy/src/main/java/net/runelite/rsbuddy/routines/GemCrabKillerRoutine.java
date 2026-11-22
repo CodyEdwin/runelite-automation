@@ -31,6 +31,8 @@ import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 import net.runelite.api.Actor;
 import net.runelite.api.Client;
+import net.runelite.api.EnumID;
+import net.runelite.api.ParamID;
 import net.runelite.api.NPC;
 import net.runelite.api.ObjectComposition;
 import net.runelite.api.Player;
@@ -41,6 +43,8 @@ import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.ItemID;
 import net.runelite.api.gameval.NpcID;
+import net.runelite.api.gameval.VarPlayerID;
+import net.runelite.api.gameval.VarbitID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.rsbuddy.input.GameInput;
 import net.runelite.rsbuddy.inventory.Inventory;
@@ -88,6 +92,21 @@ public final class GemCrabKillerRoutine extends Routine
 	/** Every click waits a random delay strictly between 1000 and 3000 ms (never a whole second). */
 	private static final long ACTION_DELAY_MIN_MS = 1000L;
 	private static final long ACTION_DELAY_MAX_MS = 3000L;
+	/** Wait this long once a potion is needed before actually drinking it. */
+	private static final long POTION_DELAY_MIN_MS = 5_000L;
+	private static final long POTION_DELAY_MAX_MS = 30_000L;
+	/** Random gap between skill-tab XP checks while fighting. */
+	private static final long SKILL_CHECK_MIN_MS = 120_000L;
+	private static final long SKILL_CHECK_MAX_MS = 600_000L;
+	/** How long to keep hovering the trained skill during a check. */
+	private static final long SKILL_HOVER_MIN_MS = 5_000L;
+	private static final long SKILL_HOVER_MAX_MS = 30_000L;
+	/** After 1 in 4 kills: a short pause doing nothing. */
+	private static final long SHORT_BREAK_MIN_MS = 6_000L;
+	private static final long SHORT_BREAK_MAX_MS = 25_000L;
+	/** After 1 in 20 kills: a longer pause doing nothing. */
+	private static final long LONG_BREAK_MIN_MS = 30_000L;
+	private static final long LONG_BREAK_MAX_MS = 120_000L;
 	/** A delay that elapsed this long ago without its action firing is stale and restarts. */
 	private static final long ACTION_DELAY_STALE_NS = 1_500_000_000L;
 
@@ -189,9 +208,15 @@ public final class GemCrabKillerRoutine extends Routine
 	private int potionsDrunk;
 	private long nextDivineDrinkAt;
 	private int levelUpWaitTicks;
+	private int potionThreshold;
+	private long idleUntil;
+	private long nextSkillCheckAt;
+	private long skillHoverUntil;
+	private int skillTabClicks;
 
 	private final PotionMode potionMode;
-	private final int boostThreshold;
+	private final int boostMin;
+	private final int boostMax;
 	/** Potions in the order they are drunk for the chosen mode. */
 	private final int[] potions;
 
@@ -207,10 +232,25 @@ public final class GemCrabKillerRoutine extends Routine
 	 */
 	public GemCrabKillerRoutine(String potionMode, int boostThreshold)
 	{
+		this(potionMode, boostThreshold, boostThreshold);
+	}
+
+	/**
+	 * @param boostMin,boostMax each drink happens once the boost drops to a
+	 * new random value in this range (or less)
+	 */
+	public GemCrabKillerRoutine(String potionMode, int boostMin, int boostMax)
+	{
 		super("Gem Crab Killer", "Kills the Gemstone Crab (14779), crawls through the cave, and repeats.");
 		this.potionMode = parseMode(potionMode);
-		this.boostThreshold = Math.max(0, boostThreshold);
+		this.boostMin = Math.max(0, Math.min(boostMin, boostMax));
+		this.boostMax = Math.max(0, Math.max(boostMin, boostMax));
 		this.potions = potionOrder(this.potionMode);
+	}
+
+	private int rollThreshold()
+	{
+		return ThreadLocalRandom.current().nextInt(boostMin, boostMax + 1);
 	}
 
 	private static PotionMode parseMode(String name)
@@ -268,6 +308,11 @@ public final class GemCrabKillerRoutine extends Routine
 		potionsDrunk = 0;
 		nextDivineDrinkAt = 0;
 		levelUpWaitTicks = 0;
+		potionThreshold = rollThreshold();
+		idleUntil = 0;
+		nextSkillCheckAt = System.nanoTime() + randomDelayNanos(SKILL_CHECK_MIN_MS, SKILL_CHECK_MAX_MS);
+		skillHoverUntil = 0;
+		skillTabClicks = 0;
 		setStatus("Ready");
 	}
 
@@ -286,7 +331,14 @@ public final class GemCrabKillerRoutine extends Routine
 			return;
 		}
 
+		if (onBreak())
+		{
+			setStatus("Taking a break (" + (idleUntil - System.nanoTime()) / 1_000_000_000L + "s)");
+			return;
+		}
+
 		drinkPotionIfNeeded(context);
+		skillCheck(context);
 
 		if (cooldown > 0)
 		{
@@ -322,7 +374,7 @@ public final class GemCrabKillerRoutine extends Routine
 	protected void onClientTick()
 	{
 		RoutineContext context = getContext();
-		if (actionReadyAt.isEmpty() || !context.isLoggedIn())
+		if (actionReadyAt.isEmpty() || !context.isLoggedIn() || onBreak())
 		{
 			return;
 		}
@@ -341,8 +393,10 @@ public final class GemCrabKillerRoutine extends Routine
 		if (isDue(Action.POTION))
 		{
 			drinkPotionIfNeeded(context);
-			cancelIfStillDue(Action.POTION);
-			return;
+			if (input.isBusy())
+			{
+				return;
+			}
 		}
 		if (cooldown > 0)
 		{
@@ -395,7 +449,7 @@ public final class GemCrabKillerRoutine extends Routine
 		Long readyAt = actionReadyAt.get(action);
 		if (readyAt == null || now - readyAt > ACTION_DELAY_STALE_NS)
 		{
-			actionReadyAt.put(action, now + randomDelayNanos());
+			actionReadyAt.put(action, now + randomDelayNanos(ACTION_DELAY_MIN_MS, ACTION_DELAY_MAX_MS));
 			return false;
 		}
 		if (now < readyAt)
@@ -406,17 +460,164 @@ public final class GemCrabKillerRoutine extends Routine
 		return true;
 	}
 
-	/** Random delay in (1000, 3000) ms with sub-millisecond precision, never exactly 1000/2000/3000 ms. */
-	private static long randomDelayNanos()
+	/** Random delay strictly inside (minMs, maxMs) with sub-millisecond precision, never a round value. */
+	private static long randomDelayNanos(long minMs, long maxMs)
 	{
 		ThreadLocalRandom random = ThreadLocalRandom.current();
 		long nanos;
 		do
 		{
-			nanos = random.nextLong(ACTION_DELAY_MIN_MS * 1_000_000L + 1, ACTION_DELAY_MAX_MS * 1_000_000L);
+			nanos = random.nextLong(minMs * 1_000_000L + 1, maxMs * 1_000_000L);
 		}
-		while (nanos % 1_000_000_000L == 0);
+		while (nanos % 100_000_000L == 0 || (nanos / 1_000_000L) % 100 == 0);
 		return nanos;
+	}
+
+	private boolean onBreak()
+	{
+		if (idleUntil == 0)
+		{
+			return false;
+		}
+		if (System.nanoTime() < idleUntil)
+		{
+			return true;
+		}
+		idleUntil = 0;
+		log.info("[GemCrab] break over");
+		return false;
+	}
+
+	/**
+	 * Every 2-10 minutes while fighting: opens the skills tab and hovers the
+	 * skill the current attack style trains for 5-30 seconds. Stops early when
+	 * the fight ends or a potion is due.
+	 */
+	private void skillCheck(RoutineContext context)
+	{
+		long now = System.nanoTime();
+		if (skillHoverUntil != 0)
+		{
+			if (state != State.FIGHT || isDue(Action.POTION) || now >= skillHoverUntil)
+			{
+				endSkillCheck(now);
+			}
+			return;
+		}
+		if (now < nextSkillCheckAt || state != State.FIGHT || isDue(Action.POTION))
+		{
+			return;
+		}
+		Client client = context.getClient();
+		GameInput input = context.getInput();
+		if (input.isBusy() || input.isCameraBusy() || client.isMenuOpen())
+		{
+			return;
+		}
+
+		Skill skill = trainedSkill(client);
+		Widget skillWidget = client.getWidget(skillWidgetId(skill));
+		if (skillWidget == null || skillWidget.isHidden() || skillWidget.getBounds() == null
+			|| skillWidget.getBounds().isEmpty())
+		{
+			Widget tab = client.getWidget(skillsTabId(client));
+			if (++skillTabClicks > 3 || tab == null || tab.isHidden())
+			{
+				endSkillCheck(now);
+				return;
+			}
+			input.click(tab);
+			setStatus("Opening skills tab");
+			return;
+		}
+		if (input.hover(skillWidget))
+		{
+			skillHoverUntil = now + randomDelayNanos(SKILL_HOVER_MIN_MS, SKILL_HOVER_MAX_MS);
+			log.info("[GemCrab] checking {} XP for {} ms", skill.getName(), (skillHoverUntil - now) / 1_000_000L);
+			setStatus("Checking " + skill.getName() + " XP");
+		}
+	}
+
+	private void endSkillCheck(long now)
+	{
+		skillHoverUntil = 0;
+		skillTabClicks = 0;
+		nextSkillCheckAt = now + randomDelayNanos(SKILL_CHECK_MIN_MS, SKILL_CHECK_MAX_MS);
+	}
+
+	/** The skill the selected attack style trains (Controlled picks one of the three at random). */
+	private Skill trainedSkill(Client client)
+	{
+		try
+		{
+			int weaponType = client.getVarbitValue(VarbitID.COMBAT_WEAPON_CATEGORY);
+			int styleIndex = client.getVarpValue(VarPlayerID.COM_MODE);
+			int styleEnum = client.getEnum(EnumID.WEAPON_STYLES).getIntValue(weaponType);
+			if (styleEnum != -1)
+			{
+				int[] styles = client.getEnum(styleEnum).getIntVals();
+				if (styleIndex >= 0 && styleIndex < styles.length)
+				{
+					String name = client.getStructComposition(styles[styleIndex]).getStringValue(ParamID.ATTACK_STYLE_NAME);
+					switch (name == null ? "" : name.toLowerCase(java.util.Locale.ROOT))
+					{
+						case "accurate":
+							return Skill.ATTACK;
+						case "aggressive":
+							return Skill.STRENGTH;
+						case "defensive":
+							return Skill.DEFENCE;
+						case "controlled":
+							Skill[] shared = {Skill.ATTACK, Skill.STRENGTH, Skill.DEFENCE};
+							return shared[ThreadLocalRandom.current().nextInt(shared.length)];
+						case "ranging":
+						case "longrange":
+							return Skill.RANGED;
+						case "casting":
+						case "defensive casting":
+							return Skill.MAGIC;
+						default:
+							break;
+					}
+				}
+			}
+		}
+		catch (RuntimeException ex)
+		{
+			log.debug("[GemCrab] attack style lookup failed", ex);
+		}
+		return potionMode.skill;
+	}
+
+	private static int skillWidgetId(Skill skill)
+	{
+		switch (skill)
+		{
+			case ATTACK:
+				return InterfaceID.Stats.ATTACK;
+			case DEFENCE:
+				return InterfaceID.Stats.DEFENCE;
+			case RANGED:
+				return InterfaceID.Stats.RANGED;
+			case MAGIC:
+				return InterfaceID.Stats.MAGIC;
+			default:
+				return InterfaceID.Stats.STRENGTH;
+		}
+	}
+
+	private static int skillsTabId(Client client)
+	{
+		int topLevel = client.getTopLevelInterfaceId();
+		if (topLevel == InterfaceID.TOPLEVEL_OSRS_STRETCH)
+		{
+			return InterfaceID.ToplevelOsrsStretch.STONE1;
+		}
+		if (topLevel == InterfaceID.TOPLEVEL_PRE_EOC)
+		{
+			return InterfaceID.ToplevelPreEoc.STONE1;
+		}
+		return InterfaceID.Toplevel.STONE1;
 	}
 
 	private void findCrab(RoutineContext context)
@@ -478,6 +679,19 @@ public final class GemCrabKillerRoutine extends Routine
 			cooldown = POST_KILL_DELAY_TICKS;
 			crawlArmed = true;
 			crawlClicks = 0;
+			ThreadLocalRandom random = ThreadLocalRandom.current();
+			if (random.nextInt(20) == 0)
+			{
+				idleUntil = System.nanoTime() + randomDelayNanos(LONG_BREAK_MIN_MS, LONG_BREAK_MAX_MS);
+			}
+			else if (random.nextInt(4) == 0)
+			{
+				idleUntil = System.nanoTime() + randomDelayNanos(SHORT_BREAK_MIN_MS, SHORT_BREAK_MAX_MS);
+			}
+			if (idleUntil != 0)
+			{
+				log.info("[GemCrab] break for {} ms after kill {}", (idleUntil - System.nanoTime()) / 1_000_000L, kills);
+			}
 			setState(State.GO_TO_CAVE, "crab killed (kill " + kills + "), one crawl armed");
 			setStatus("Crab dead, heading to cave");
 			return;
@@ -818,14 +1032,30 @@ public final class GemCrabKillerRoutine extends Routine
 			}
 		}
 
-		if (boost > boostThreshold)
+		if (boost > potionThreshold)
 		{
+			actionReadyAt.remove(Action.POTION);
 			return;
 		}
 
 		Inventory inventory = context.getInventory();
 		int slot = findPotionSlot(inventory);
 		if (slot < 0)
+		{
+			actionReadyAt.remove(Action.POTION);
+			return;
+		}
+
+		// A human notices the boost has dropped a while before drinking.
+		Long readyAt = actionReadyAt.get(Action.POTION);
+		if (readyAt == null)
+		{
+			long delay = randomDelayNanos(POTION_DELAY_MIN_MS, POTION_DELAY_MAX_MS);
+			actionReadyAt.put(Action.POTION, System.nanoTime() + delay);
+			log.info("[GemCrab] boost {} <= {}, drinking in {} ms", boost, potionThreshold, delay / 1_000_000L);
+			return;
+		}
+		if (System.nanoTime() < readyAt)
 		{
 			return;
 		}
@@ -848,15 +1078,17 @@ public final class GemCrabKillerRoutine extends Routine
 
 		// Drink is the potion's left-click option.
 		Widget widget = inventory.getSlotWidget(slot);
-		if (widget == null || !actionDelayDone(Action.POTION))
+		if (widget == null)
 		{
 			return;
 		}
 		if (input.click(widget))
 		{
+			actionReadyAt.remove(Action.POTION);
 			boostBeforeDrink = boost;
 			drinkWaitTicks = DRINK_TIMEOUT_TICKS;
 			++potionsDrunk;
+			potionThreshold = rollThreshold();
 			if (potionMode == PotionMode.DIVINE_RANGING)
 			{
 				nextDivineDrinkAt = System.currentTimeMillis() + DIVINE_POTION_MS;
@@ -973,6 +1205,6 @@ public final class GemCrabKillerRoutine extends Routine
 			"State: " + (state == null ? "-" : state.name()),
 			"Kills: " + kills + " (" + perHour + "/hr)",
 			"Potions: " + potionsDrunk + " (" + potionMode + ", at " + potionMode.skill.getName()
-				+ " boost <= " + boostThreshold + ")");
+				+ " boost <= " + potionThreshold + ", range " + boostMin + "-" + boostMax + ")");
 	}
 }

@@ -105,7 +105,7 @@ public final class RoutineLibrary
 
 		registry.register(GemCrabKillerRoutine.class.getName(),
 			loader -> RoutineLoader.load(GemCrabKillerRoutine.class.getName(), loader,
-				config.gemCrabPotionMode().name(), config.gemCrabBoostThreshold()),
+				config.gemCrabPotionMode().name(), config.gemCrabBoostThreshold(), config.gemCrabBoostThresholdMax()),
 			RoutineLibrary::gemCrab);
 
 		registry.register(GrandExchangeFlipperScript.class.getName(),
@@ -247,9 +247,10 @@ public final class RoutineLibrary
 		form.addCombo("Potions",
 			"Regular strength, super strength, either (super first), ranging, or divine ranging potions.",
 			GemCrabPotionMode.values(), "gemCrabPotionMode", form.config()::gemCrabPotionMode);
-		form.addSpinner("Re-drink at boost",
-			"Drink another potion once the Strength or Ranged boost has dropped to this many levels or less.",
-			"gemCrabBoostThreshold", 0, 15, form.config()::gemCrabBoostThreshold);
+		form.addSpinnerRange("Re-drink at boost (min / max)",
+			"Each drink happens once the Strength or Ranged boost drops to a random value between min and max.",
+			"gemCrabBoostThreshold", "gemCrabBoostThresholdMax", 0, 15,
+			form.config()::gemCrabBoostThreshold, form.config()::gemCrabBoostThresholdMax);
 		form.setHint(APPLIED_ON_START);
 	}
 
