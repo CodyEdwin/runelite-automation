@@ -270,10 +270,10 @@ public class NMZRoutine extends Routine
 					input.turnCameraToward(dominic.get().getWorldLocation());
 					break;
 				}
-				if (ready("dream") && input.interact(dominic.get(), "Dream"))
+				if (ready("dream") && input.click(dominic.get()))
 				{
 					lastClickAt = now;
-					setStatus("Dream on Dominic Onion");
+					setStatus("Clicked Dominic Onion");
 				}
 				break;
 			case KEY_4:
@@ -603,7 +603,7 @@ public class NMZRoutine extends Routine
 			input.turnCameraToward(target.getWorldLocation());
 			return;
 		}
-		if (ready("attack") && input.interact(target, "Attack"))
+		if (ready("attack") && input.click(target))
 		{
 			attackGraceUntil = System.nanoTime() + ATTACK_GRACE_NS;
 			log.info("[NMZ] attacking {}{}", name(target), current != null ? " instead of " + name(current) : "");
