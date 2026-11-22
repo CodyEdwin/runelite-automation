@@ -1,0 +1,707 @@
+/*
+ * Copyright (c) 2026, reich
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice, this
+ *    list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+ * ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+ * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+package net.runelite.rsbuddy.routines;
+
+import java.awt.event.KeyEvent;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Locale;
+import java.util.Optional;
+import java.util.concurrent.ThreadLocalRandom;
+import net.runelite.api.Actor;
+import net.runelite.api.Client;
+import net.runelite.api.NPC;
+import net.runelite.api.NPCComposition;
+import net.runelite.api.Player;
+import net.runelite.api.Skill;
+import net.runelite.api.TileObject;
+import net.runelite.api.WorldView;
+import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.gameval.ItemID;
+import net.runelite.api.gameval.ObjectID;
+import net.runelite.api.gameval.VarbitID;
+import net.runelite.api.widgets.Widget;
+import net.runelite.rsbuddy.input.GameInput;
+import net.runelite.rsbuddy.inventory.Inventory;
+import net.runelite.rsbuddy.routine.Routine;
+import net.runelite.rsbuddy.routine.RoutineContext;
+
+/**
+ * Nightmare Zone: buys a dream from Dominic Onion (Dream, 4, Space, 1), drinks
+ * from the vial, accepts, then inside turns quick prayers on, keeps prayer up
+ * with prayer potions, grabs power-ups and fights by priority. Never attacks
+ * Tanglefoot. Every action waits a random 750-1500 ms (never a round value).
+ */
+public class NMZRoutine extends Routine
+{
+	private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(NMZRoutine.class);
+
+	private static final long DELAY_MIN_MS = 750L;
+	private static final long DELAY_MAX_MS = 1500L;
+	private static final long POWERUP_DELAY_MIN_MS = 250L;
+	private static final long POWERUP_DELAY_MAX_MS = 650L;
+	private static final long STEP_TIMEOUT_NS = 20_000_000_000L;
+	private static final long RECLICK_NS = 8_000_000_000L;
+	private static final long ATTACK_GRACE_NS = 2_700_000_000L;
+	private static final long DRINK_CONFIRM_NS = 3_600_000_000L;
+
+	private static final int PRAYER_MIN = 10;
+	private static final int PRAYER_MAX = 20;
+	private static final int PRAYER_TOP_UP = 35;
+	private static final int SEARCH_DISTANCE = 20;
+
+	private static final String DOMINIC = "Dominic Onion";
+	private static final String TANGLEFOOT = "tanglefoot";
+	private static final String[] PRIORITY = {"black demon", "ice troll king", "dad"};
+
+	private static final int[] PRAYER_POTIONS = {
+		ItemID._1DOSEPRAYERRESTORE,
+		ItemID._2DOSEPRAYERRESTORE,
+		ItemID._3DOSEPRAYERRESTORE,
+		ItemID._4DOSEPRAYERRESTORE
+	};
+
+	private static final int[] OVERLOADS = {
+		ItemID.NZONE1DOSEOVERLOADPOTION,
+		ItemID.NZONE2DOSEOVERLOADPOTION,
+		ItemID.NZONE3DOSEOVERLOADPOTION,
+		ItemID.NZONE4DOSEOVERLOADPOTION
+	};
+
+	private static final int[] COMBAT_POTIONS = {
+		ItemID._1DOSE2COMBAT,
+		ItemID._2DOSE2COMBAT,
+		ItemID._3DOSE2COMBAT,
+		ItemID._4DOSE2COMBAT,
+		ItemID._1DOSECOMBAT,
+		ItemID._2DOSECOMBAT,
+		ItemID._3DOSECOMBAT,
+		ItemID._4DOSECOMBAT
+	};
+
+	private static final int BOOST_MIN = 0;
+	private static final int BOOST_MAX = 3;
+	private static final int OVERLOAD_MIN_HP = 51;
+	private static final long BOOST_CONFIRM_NS = 7_000_000_000L;
+
+	private static final int[] POWERUPS = {
+		ObjectID.NZONE_POWERUP_ZAPPER,
+		ObjectID.NZONE_POWERUP_SPECIALATTACK,
+		ObjectID.NZONE_POWERUP_DAMAGEMULTIPLIER,
+		ObjectID.NZONE_POWERUP_NUKE
+	};
+
+	private enum Step
+	{
+		DREAM,
+		KEY_4,
+		SPACE,
+		KEY_1,
+		VIAL,
+		ACCEPT,
+		ENTER,
+		INSIDE
+	}
+
+	private Step step;
+	private long stepStartedAt;
+	private long lastClickAt;
+	private String pendingKey;
+	private long pendingAt;
+	private int prayerThreshold;
+	private boolean topUp;
+	private int prayerBeforeDrink;
+	private long drinkConfirmUntil;
+	private long attackGraceUntil;
+	private int dosesDrunk;
+	private int boostThreshold;
+	private long boostConfirmUntil;
+	private int boostDoses;
+	private int powerups;
+	private int dreams;
+	private long startedAt;
+	private volatile String targetInfo = "-";
+	private volatile String prayerInfo = "-";
+
+	public NMZRoutine()
+	{
+		super("NMZ", "Nightmare Zone: buys and enters a dream, keeps prayer up, grabs power-ups, never fights Tanglefoot.");
+	}
+
+	@Override
+	protected void onStart()
+	{
+		step = Step.DREAM;
+		stepStartedAt = System.nanoTime();
+		lastClickAt = 0;
+		pendingKey = null;
+		prayerThreshold = roll(PRAYER_MIN, PRAYER_MAX);
+		topUp = false;
+		drinkConfirmUntil = 0;
+		attackGraceUntil = 0;
+		dosesDrunk = 0;
+		boostThreshold = roll(BOOST_MIN, BOOST_MAX);
+		boostConfirmUntil = 0;
+		boostDoses = 0;
+		powerups = 0;
+		dreams = 0;
+		startedAt = System.currentTimeMillis();
+	}
+
+	@Override
+	protected void onGameTick()
+	{
+		if (!getContext().isLoggedIn())
+		{
+			setStatus("Waiting for login");
+		}
+	}
+
+	@Override
+	protected void onClientTick()
+	{
+		RoutineContext context = getContext();
+		if (!context.isLoggedIn())
+		{
+			return;
+		}
+		GameInput input = context.getInput();
+		if (input.isBusy() || input.isCameraBusy())
+		{
+			return;
+		}
+
+		boolean inside = visible(context.getClient(), InterfaceID.NzoneGame.UNIVERSE);
+		if (inside && step != Step.INSIDE)
+		{
+			setStep(Step.INSIDE, "dream started");
+			++dreams;
+			prayerThreshold = roll(PRAYER_MIN, PRAYER_MAX);
+		}
+		else if (!inside && step == Step.INSIDE)
+		{
+			setStep(Step.DREAM, "dream ended");
+		}
+
+		if (step == Step.INSIDE)
+		{
+			inside(context);
+		}
+		else
+		{
+			lobby(context);
+		}
+	}
+
+	private void lobby(RoutineContext context)
+	{
+		Client client = context.getClient();
+		GameInput input = context.getInput();
+		long now = System.nanoTime();
+		boolean options = visible(client, InterfaceID.Chatmenu.OPTIONS);
+		boolean chat = visible(client, InterfaceID.ChatLeft.UNIVERSE) || visible(client, InterfaceID.ChatRight.UNIVERSE)
+			|| visible(client, InterfaceID.Messagebox.UNIVERSE);
+		Widget accept = client.getWidget(InterfaceID.NzoneLists.YES);
+		boolean acceptOpen = accept != null && !accept.isHidden();
+
+		if (acceptOpen && step != Step.ACCEPT && step != Step.ENTER)
+		{
+			setStep(Step.ACCEPT, "accept interface open");
+		}
+		if (step != Step.DREAM && now - stepStartedAt > STEP_TIMEOUT_NS)
+		{
+			setStep(step == Step.ENTER ? Step.VIAL : Step.DREAM, "step timed out");
+		}
+
+		switch (step)
+		{
+			case DREAM:
+				if (options)
+				{
+					setStep(Step.KEY_4, "dream options open");
+					break;
+				}
+				Optional<NPC> dominic = context.getTargets().findNpc(DOMINIC, SEARCH_DISTANCE);
+				if (!dominic.isPresent())
+				{
+					setStatus("Dominic Onion not found");
+					break;
+				}
+				if (now - lastClickAt < RECLICK_NS)
+				{
+					setStatus("Walking to Dominic Onion");
+					break;
+				}
+				if (!input.isVisible(dominic.get()))
+				{
+					input.turnCameraToward(dominic.get().getWorldLocation());
+					break;
+				}
+				if (ready("dream") && input.interact(dominic.get(), "Dream"))
+				{
+					lastClickAt = now;
+					setStatus("Dream on Dominic Onion");
+				}
+				break;
+			case KEY_4:
+				if (options && ready("key4") && input.pressKey(KeyEvent.VK_4))
+				{
+					setStep(Step.SPACE, "pressed 4");
+				}
+				break;
+			case SPACE:
+				if (chat && ready("space") && input.pressSpace())
+				{
+					setStep(Step.KEY_1, "pressed space");
+				}
+				break;
+			case KEY_1:
+				if (options && ready("key1") && input.pressKey(KeyEvent.VK_1))
+				{
+					lastClickAt = 0;
+					setStep(Step.VIAL, "pressed 1");
+				}
+				break;
+			case VIAL:
+				Optional<TileObject> vial = context.getTargets().findTileObject(ObjectID.NZONE_LOBBY_VIAL_FULL, SEARCH_DISTANCE);
+				if (!vial.isPresent())
+				{
+					setStatus("Potion vial not found");
+					break;
+				}
+				if (now - lastClickAt < RECLICK_NS)
+				{
+					setStatus("Walking to vial");
+					break;
+				}
+				if (!input.isVisible(vial.get()))
+				{
+					input.turnCameraToward(vial.get().getWorldLocation());
+					break;
+				}
+				if (ready("vial") && input.interact(vial.get(), "Drink"))
+				{
+					lastClickAt = now;
+					setStatus("Drink from vial");
+				}
+				break;
+			case ACCEPT:
+				if (acceptOpen && ready("accept") && input.click(accept))
+				{
+					setStep(Step.ENTER, "clicked Accept");
+				}
+				break;
+			case ENTER:
+				setStatus("Entering dream");
+				break;
+			default:
+				break;
+		}
+	}
+
+	private void inside(RoutineContext context)
+	{
+		if (prayer(context) || levelUp(context) || quickPrayer(context) || powerup(context) || boost(context))
+		{
+			return;
+		}
+		fight(context);
+	}
+
+	/** Prayer potions come first. @return true while a drink is being handled. */
+	private boolean prayer(RoutineContext context)
+	{
+		Client client = context.getClient();
+		int current = client.getBoostedSkillLevel(Skill.PRAYER);
+		int max = client.getRealSkillLevel(Skill.PRAYER);
+		int restore = 7 + max / 4;
+		long now = System.nanoTime();
+
+		if (drinkConfirmUntil != 0)
+		{
+			if (current > prayerBeforeDrink || now > drinkConfirmUntil)
+			{
+				drinkConfirmUntil = 0;
+				topUp = current <= PRAYER_TOP_UP;
+				if (!topUp)
+				{
+					prayerThreshold = roll(PRAYER_MIN, PRAYER_MAX);
+				}
+				log.info("[NMZ] prayer {} after drink, top up: {}, next at <= {}", current, topUp, prayerThreshold);
+			}
+			else
+			{
+				prayerInfo = current + "/" + max + ", waiting for dose to apply";
+				return false;
+			}
+		}
+
+		boolean low = current <= prayerThreshold || (topUp && current <= PRAYER_TOP_UP);
+		prayerInfo = current + "/" + max + ", drink at <= " + prayerThreshold + (topUp ? ", topping up to > " + PRAYER_TOP_UP : "")
+			+ ", dose +" + restore;
+		if (!low)
+		{
+			cancel("prayer");
+			return false;
+		}
+		if (current + restore > max)
+		{
+			prayerInfo += " (dose would waste)";
+			topUp = false;
+			cancel("prayer");
+			return false;
+		}
+
+		Inventory inventory = context.getInventory();
+		int slot = findSlot(inventory, PRAYER_POTIONS);
+		if (slot < 0)
+		{
+			prayerInfo += " (no prayer potions)";
+			return false;
+		}
+		if (!inventory.isOpen())
+		{
+			if (ready("inventory"))
+			{
+				inventory.open();
+			}
+			return true;
+		}
+		if (!ready("prayer"))
+		{
+			return true;
+		}
+		Widget widget = inventory.getSlotWidget(slot);
+		if (widget != null && context.getInput().click(widget))
+		{
+			prayerBeforeDrink = current;
+			drinkConfirmUntil = now + DRINK_CONFIRM_NS;
+			++dosesDrunk;
+			log.info("[NMZ] drinking prayer potion at {}/{}", current, max);
+			setStatus("Drinking prayer potion");
+		}
+		return true;
+	}
+
+	private boolean levelUp(RoutineContext context)
+	{
+		if (!visible(context.getClient(), InterfaceID.LevelupDisplay.UNIVERSE))
+		{
+			cancel("levelup");
+			return false;
+		}
+		if (ready("levelup") && context.getInput().pressSpace())
+		{
+			setStatus("Closing level-up message");
+		}
+		return true;
+	}
+
+	/** Re-drinks an overload (HP above 50) or super combat once the strength boost wears down. */
+	private boolean boost(RoutineContext context)
+	{
+		Client client = context.getClient();
+		int boost = client.getBoostedSkillLevel(Skill.STRENGTH) - client.getRealSkillLevel(Skill.STRENGTH);
+		long now = System.nanoTime();
+		if (boostConfirmUntil != 0)
+		{
+			if (boost > boostThreshold || now > boostConfirmUntil)
+			{
+				boostConfirmUntil = 0;
+				boostThreshold = roll(BOOST_MIN, BOOST_MAX);
+			}
+			return false;
+		}
+		if (boost > boostThreshold)
+		{
+			cancel("boost");
+			return false;
+		}
+		Inventory inventory = context.getInventory();
+		int slot = client.getBoostedSkillLevel(Skill.HITPOINTS) >= OVERLOAD_MIN_HP ? findSlot(inventory, OVERLOADS) : -1;
+		if (slot < 0)
+		{
+			slot = findSlot(inventory, COMBAT_POTIONS);
+		}
+		if (slot < 0)
+		{
+			cancel("boost");
+			return false;
+		}
+		if (!inventory.isOpen())
+		{
+			if (ready("inventory"))
+			{
+				inventory.open();
+			}
+			return true;
+		}
+		if (!ready("boost"))
+		{
+			return true;
+		}
+		Widget widget = inventory.getSlotWidget(slot);
+		if (widget != null && context.getInput().click(widget))
+		{
+			boostConfirmUntil = now + BOOST_CONFIRM_NS;
+			++boostDoses;
+			attackGraceUntil = now + ATTACK_GRACE_NS;
+			log.info("[NMZ] drinking boost potion at +{}", boost);
+			setStatus("Drinking boost potion");
+		}
+		return true;
+	}
+
+	private boolean powerup(RoutineContext context)
+	{
+		for (int id : POWERUPS)
+		{
+			Optional<TileObject> object = context.getTargets().findTileObject(id, SEARCH_DISTANCE);
+			if (!object.isPresent())
+			{
+				continue;
+			}
+			GameInput input = context.getInput();
+			if (!input.isVisible(object.get()))
+			{
+				input.turnCameraToward(object.get().getWorldLocation());
+				return true;
+			}
+			if (ready("powerup", POWERUP_DELAY_MIN_MS, POWERUP_DELAY_MAX_MS) && input.click(object.get()))
+			{
+				++powerups;
+				attackGraceUntil = System.nanoTime() + ATTACK_GRACE_NS;
+				log.info("[NMZ] clicking power-up {}", id);
+				setStatus("Grabbing power-up");
+			}
+			return true;
+		}
+		cancel("powerup");
+		return false;
+	}
+
+	private boolean quickPrayer(RoutineContext context)
+	{
+		Client client = context.getClient();
+		if (client.getVarbitValue(VarbitID.QUICKPRAYER_ACTIVE) == 1 || client.getBoostedSkillLevel(Skill.PRAYER) == 0)
+		{
+			cancel("quickprayer");
+			return false;
+		}
+		Widget orb = client.getWidget(InterfaceID.Orbs.PRAYERBUTTON);
+		if (orb == null || orb.isHidden())
+		{
+			return false;
+		}
+		if (ready("quickprayer") && context.getInput().click(orb))
+		{
+			log.info("[NMZ] quick prayers on");
+			setStatus("Quick prayers on");
+		}
+		return true;
+	}
+
+	private void fight(RoutineContext context)
+	{
+		Player player = context.getPlayer();
+		WorldView worldView = context.getClient().getTopLevelWorldView();
+		WorldPoint location = context.getPlayerLocation();
+		if (player == null || worldView == null || location == null)
+		{
+			return;
+		}
+
+		NPC current = player.getInteracting() instanceof NPC ? (NPC) player.getInteracting() : null;
+		boolean currentOk = current != null && attackable(current);
+		Optional<NPC> best = worldView.npcs().stream()
+			.map(npc -> (NPC) npc)
+			.filter(npc -> npc != null && attackable(npc) && npc.getWorldLocation() != null
+				&& npc.getWorldLocation().distanceTo(location) <= SEARCH_DISTANCE)
+			.min(Comparator.comparingInt(NMZRoutine::rank)
+				.thenComparingInt(npc -> npc.getWorldLocation().distanceTo(location)));
+
+		if (!best.isPresent())
+		{
+			targetInfo = current == null ? "none (waiting for NPCs)" : name(current) + " (not attackable)";
+			setStatus("Waiting for NPCs");
+			cancel("attack");
+			return;
+		}
+		NPC target = best.get();
+		if (currentOk && rank(current) <= rank(target))
+		{
+			targetInfo = name(current) + " (rank " + rank(current) + ")";
+			setStatus("Fighting " + name(current));
+			cancel("attack");
+			return;
+		}
+		if (current == null && System.nanoTime() < attackGraceUntil)
+		{
+			return;
+		}
+
+		targetInfo = name(target) + " (rank " + rank(target) + ")"
+			+ (current != null ? ", switching from " + name(current) : "");
+		GameInput input = context.getInput();
+		if (!input.isVisible(target))
+		{
+			input.turnCameraToward(target.getWorldLocation());
+			return;
+		}
+		if (ready("attack") && input.interact(target, "Attack"))
+		{
+			attackGraceUntil = System.nanoTime() + ATTACK_GRACE_NS;
+			log.info("[NMZ] attacking {}{}", name(target), current != null ? " instead of " + name(current) : "");
+			setStatus("Attacking " + name(target));
+		}
+	}
+
+	private static boolean attackable(NPC npc)
+	{
+		String name = name(npc);
+		if (npc.isDead() || name.isEmpty() || name.contains(TANGLEFOOT))
+		{
+			return false;
+		}
+		NPCComposition composition = npc.getTransformedComposition();
+		return composition != null && composition.getActions() != null
+			&& Arrays.stream(composition.getActions()).anyMatch("Attack"::equalsIgnoreCase);
+	}
+
+	private static int rank(NPC npc)
+	{
+		String name = name(npc);
+		for (int i = 0; i < PRIORITY.length; i++)
+		{
+			if (name.equals(PRIORITY[i]))
+			{
+				return i;
+			}
+		}
+		return PRIORITY.length;
+	}
+
+	private static String name(Actor actor)
+	{
+		String name = actor.getName();
+		return name == null ? "" : name.replace('\u00a0', ' ').toLowerCase(Locale.ROOT);
+	}
+
+	private static int findSlot(Inventory inventory, int[] ids)
+	{
+		for (int id : ids)
+		{
+			int slot = inventory.findSlot(id);
+			if (slot >= 0)
+			{
+				return slot;
+			}
+		}
+		return -1;
+	}
+
+	private static boolean visible(Client client, int componentId)
+	{
+		Widget widget = client.getWidget(componentId);
+		return widget != null && !widget.isHidden();
+	}
+
+	private void setStep(Step next, String reason)
+	{
+		log.info("[NMZ] {} -> {} ({})", step, next, reason);
+		step = next;
+		stepStartedAt = System.nanoTime();
+		pendingKey = null;
+	}
+
+	private boolean ready(String key)
+	{
+		return ready(key, DELAY_MIN_MS, DELAY_MAX_MS);
+	}
+
+	/** The first call for an action starts its random delay; true once it has passed. */
+	private boolean ready(String key, long minMs, long maxMs)
+	{
+		long now = System.nanoTime();
+		if (!key.equals(pendingKey))
+		{
+			pendingKey = key;
+			pendingAt = now + randomDelayNanos(minMs, maxMs);
+			return false;
+		}
+		if (now < pendingAt)
+		{
+			return false;
+		}
+		pendingKey = null;
+		return true;
+	}
+
+	private void cancel(String key)
+	{
+		if (key.equals(pendingKey))
+		{
+			pendingKey = null;
+		}
+	}
+
+	private static int roll(int min, int max)
+	{
+		return ThreadLocalRandom.current().nextInt(min, max + 1);
+	}
+
+	/** Random delay inside (minMs, maxMs) with sub-millisecond precision, never a round value. */
+	private static long randomDelayNanos(long minMs, long maxMs)
+	{
+		ThreadLocalRandom random = ThreadLocalRandom.current();
+		long nanos;
+		do
+		{
+			nanos = random.nextLong(minMs * 1_000_000L + 1, maxMs * 1_000_000L);
+		}
+		while (nanos % 100_000_000L == 0 || (nanos / 1_000_000L) % 50 == 0);
+		return nanos;
+	}
+
+	@Override
+	public List<String> getOverlayLines()
+	{
+		long now = System.nanoTime();
+		long elapsed = Math.max(1, System.currentTimeMillis() - startedAt);
+		List<String> lines = new ArrayList<>();
+		lines.add("Step: " + step + " | " + getStatus());
+		String key = pendingKey;
+		lines.add("Pending: " + (key == null ? "-" : key + " in " + Math.max(0, (pendingAt - now) / 1_000_000L) + " ms"));
+		lines.add("Prayer: " + prayerInfo);
+		lines.add("Target: " + targetInfo);
+		lines.add("Boost: drink at <= +" + boostThreshold + (boostConfirmUntil != 0 ? " (waiting for dose)" : ""));
+		lines.add("Dreams: " + dreams + ", prayer doses: " + dosesDrunk + ", boost doses: " + boostDoses + ", power-ups: " + powerups
+			+ ", " + elapsed / 60_000L + " min");
+		return lines;
+	}
+}

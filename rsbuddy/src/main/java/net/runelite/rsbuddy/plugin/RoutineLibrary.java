@@ -39,6 +39,7 @@ import net.runelite.rsbuddy.routines.GemCutterScript;
 import net.runelite.rsbuddy.routines.GrandExchangeFlipperScript;
 import net.runelite.rsbuddy.routines.HillGiantScript;
 import net.runelite.rsbuddy.routines.MotherlodeMinerScript;
+import net.runelite.rsbuddy.routines.NMZRoutine;
 import net.runelite.rsbuddy.routines.ObjectInteractScript;
 import net.runelite.rsbuddy.routines.RooftopAgilityTrainerScript;
 import net.runelite.rsbuddy.routines.WestVarrockSmitherRoutine;
@@ -103,6 +104,9 @@ public final class RoutineLibrary
 				config.rooftopCourse().name()),
 			RoutineLibrary::rooftop);
 
+		registry.register(NMZRoutine.class.getName(),
+			loader -> RoutineLoader.load(NMZRoutine.class.getName(), loader),
+			null);
 		registry.register(GemCrabKillerRoutine.class.getName(),
 			loader -> RoutineLoader.load(GemCrabKillerRoutine.class.getName(), loader,
 				config.gemCrabPotionMode().name(), config.gemCrabBoostThreshold(), config.gemCrabBoostThresholdMax()),
