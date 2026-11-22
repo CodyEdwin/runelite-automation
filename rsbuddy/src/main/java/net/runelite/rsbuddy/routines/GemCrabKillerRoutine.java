@@ -106,7 +106,7 @@ public final class GemCrabKillerRoutine extends Routine
 	private static final long SHORT_BREAK_MAX_MS = 25_000L;
 	/** After 1 in 20 kills: a longer pause doing nothing. */
 	private static final long LONG_BREAK_MIN_MS = 30_000L;
-	private static final long LONG_BREAK_MAX_MS = 120_000L;
+	private static final long LONG_BREAK_MAX_MS = 600_000L;
 	/** A delay that elapsed this long ago without its action firing is stale and restarts. */
 	private static final long ACTION_DELAY_STALE_NS = 1_500_000_000L;
 
