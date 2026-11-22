@@ -25,6 +25,7 @@
 package net.runelite.rsbuddy.plugin;
 
 import java.awt.Color;
+import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import net.runelite.client.config.Keybind;
 import net.runelite.client.config.Config;
@@ -520,5 +521,16 @@ public interface RSBuddyConfig extends Config
 	default Keybind startStopHotkey()
 	{
 		return new Keybind(KeyEvent.VK_PAUSE, 0);
+	}
+
+	@ConfigItem(
+		keyName = "skipIdleHotkey",
+		name = "Skip idle hotkey",
+		description = "Ends the running routine's current break or idle and goes to its next action.",
+		position = 34
+	)
+	default Keybind skipIdleHotkey()
+	{
+		return new Keybind(KeyEvent.VK_S, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK);
 	}
 }

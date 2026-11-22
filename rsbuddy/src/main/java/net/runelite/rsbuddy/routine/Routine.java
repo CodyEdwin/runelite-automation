@@ -178,6 +178,11 @@ public abstract class Routine
 		return false;
 	}
 
+	/** Ends any idle break in progress so the routine moves on to its next action. Called off the client thread. */
+	public void skipIdle()
+	{
+	}
+
 	/** Lines drawn while this routine is running. Empty means no text overlay. */
 	public List<String> getOverlayLines()
 	{

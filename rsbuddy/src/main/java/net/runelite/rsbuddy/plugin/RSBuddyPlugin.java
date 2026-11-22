@@ -123,6 +123,7 @@ public class RSBuddyPlugin extends Plugin
 	private volatile GameInput input;
 	private volatile RoutineManager routineManager;
 	private HotkeyListener startStopHotkey;
+	private HotkeyListener skipIdleHotkey;
 	private volatile RoutineRegistry registry;
 	private volatile WidgetWatcher watcher;
 	private volatile GeProbe probe;
@@ -225,6 +226,20 @@ public class RSBuddyPlugin extends Plugin
 			}
 		};
 		keyManager.registerKeyListener(startStopHotkey);
+		skipIdleHotkey = new HotkeyListener(config::skipIdleHotkey)
+		{
+			@Override
+			public void hotkeyPressed()
+			{
+				RoutineManager manager = routineManager;
+				Routine routine = manager == null ? null : manager.getActiveRoutine();
+				if (routine != null)
+				{
+					routine.skipIdle();
+				}
+			}
+		};
+		keyManager.registerKeyListener(skipIdleHotkey);
 		overlayManager.add(mouseOverlay);
 		mouseManager.registerMouseListener(mouseOverlay);
 		log.info("RSBuddy started");
@@ -266,6 +281,11 @@ public class RSBuddyPlugin extends Plugin
 		{
 			keyManager.unregisterKeyListener(startStopHotkey);
 			startStopHotkey = null;
+		}
+		if (skipIdleHotkey != null)
+		{
+			keyManager.unregisterKeyListener(skipIdleHotkey);
+			skipIdleHotkey = null;
 		}
 		overlayManager.remove(mouseOverlay);
 		mouseManager.unregisterMouseListener(mouseOverlay);

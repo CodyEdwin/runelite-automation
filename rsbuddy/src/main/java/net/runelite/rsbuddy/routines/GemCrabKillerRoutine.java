@@ -209,6 +209,7 @@ public final class GemCrabKillerRoutine extends Routine
 	private long nextDivineDrinkAt;
 	private int levelUpWaitTicks;
 	private volatile int lastBoost;
+	private volatile boolean skipRequested;
 	private volatile String lastStyle = "-";
 	private volatile Skill lastSkill;
 	private int potionThreshold;
@@ -334,6 +335,19 @@ public final class GemCrabKillerRoutine extends Routine
 			return;
 		}
 
+		if (skipRequested)
+		{
+			skipRequested = false;
+			if (idleUntil != 0 || skillHoverUntil != 0)
+			{
+				log.info("[GemCrab] idle skipped by hotkey");
+			}
+			idleUntil = 0;
+			if (skillHoverUntil != 0)
+			{
+				endSkillCheck(System.nanoTime());
+			}
+		}
 		if (onBreak())
 		{
 			setStatus("Taking a break (" + (idleUntil - System.nanoTime()) / 1_000_000_000L + "s)");
@@ -474,6 +488,12 @@ public final class GemCrabKillerRoutine extends Routine
 		}
 		while (nanos % 100_000_000L == 0 || (nanos / 1_000_000L) % 100 == 0);
 		return nanos;
+	}
+
+	@Override
+	public void skipIdle()
+	{
+		skipRequested = true;
 	}
 
 	private boolean onBreak()
