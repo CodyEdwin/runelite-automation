@@ -151,6 +151,7 @@ public class NMZRoutine extends Routine
 	private long attackGraceUntil;
 	private int dosesDrunk;
 	private boolean popupHandled;
+	private boolean firstCheck;
 	private int boostThreshold;
 	private long boostConfirmUntil;
 	private int boostDoses;
@@ -181,6 +182,7 @@ public class NMZRoutine extends Routine
 		drinkConfirmUntil = 0;
 		attackGraceUntil = 0;
 		dosesDrunk = 0;
+		firstCheck = true;
 		boostThreshold = roll(BOOST_MIN, BOOST_MAX);
 		boostConfirmUntil = 0;
 		boostDoses = 0;
@@ -219,13 +221,15 @@ public class NMZRoutine extends Routine
 		{
 			setStep(Step.INSIDE, "dream started");
 			++dreams;
-			popupHandled = false;
+			popupHandled = firstCheck;
 			prayerThreshold = roll(PRAYER_MIN, PRAYER_MAX);
 		}
 		else if (!inside && step == Step.INSIDE)
 		{
 			setStep(Step.DREAM, "dream ended");
 		}
+
+		firstCheck = false;
 
 		if (step == Step.INSIDE)
 		{
