@@ -127,7 +127,6 @@ public class NMZRoutine extends Routine
 
 	private static final int[] POWERUPS = {
 		ObjectID.NZONE_POWERUP_ZAPPER,
-		ObjectID.NZONE_POWERUP_SPECIALATTACK,
 		ObjectID.NZONE_POWERUP_DAMAGEMULTIPLIER,
 		ObjectID.NZONE_POWERUP_NUKE
 	};
