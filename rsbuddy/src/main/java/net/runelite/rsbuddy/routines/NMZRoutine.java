@@ -254,6 +254,12 @@ public class NMZRoutine extends Routine
 					setStep(Step.KEY_4, "dream options open");
 					break;
 				}
+				if (dreamBought(context))
+				{
+					lastClickAt = 0;
+					setStep(Step.VIAL, "dream already bought");
+					break;
+				}
 				Optional<NPC> dominic = context.getTargets().findNpc(DOMINIC, SEARCH_DISTANCE);
 				if (!dominic.isPresent())
 				{
@@ -611,6 +617,26 @@ public class NMZRoutine extends Routine
 			log.info("[NMZ] attacking {}{}", name(target), current != null ? " instead of " + name(current) : "");
 			setStatus("Attacking " + name(target));
 		}
+	}
+
+	/** True when the lobby vial shows full, i.e. a dream is already paid for. */
+	private static boolean dreamBought(RoutineContext context)
+	{
+		if (context.getTargets().findTileObject(ObjectID.NZONE_LOBBY_VIAL_FULL, SEARCH_DISTANCE).isPresent())
+		{
+			return true;
+		}
+		Client client = context.getClient();
+		return context.getTargets().getTileObjects(VIAL_LOCATION, 1).stream().anyMatch(object ->
+		{
+			net.runelite.api.ObjectComposition definition = client.getObjectDefinition(object.getId());
+			if (definition == null || definition.getImpostorIds() == null)
+			{
+				return false;
+			}
+			net.runelite.api.ObjectComposition impostor = definition.getImpostor();
+			return impostor != null && impostor.getId() == ObjectID.NZONE_LOBBY_VIAL_FULL;
+		});
 	}
 
 	/** The vial is a multiloc: the scene holds the base id, which shows as the full vial once a dream is bought. */
