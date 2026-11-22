@@ -665,7 +665,9 @@ public class NMZRoutine extends Routine
 				offscreen(context, where, "power-up");
 				return true;
 			}
-			if (ready("powerup", POWERUP_DELAY_MIN_MS, POWERUP_DELAY_MAX_MS) && input.click(object.get()))
+			// Monsters crowd the power-up, so a left click often attacks one; pick Activate from the menu.
+			if (ready("powerup", POWERUP_DELAY_MIN_MS, POWERUP_DELAY_MAX_MS)
+				&& (input.interact(object.get(), "Activate") || input.click(object.get())))
 			{
 				powerupClicked = where;
 				powerupClickedAt = System.nanoTime();
