@@ -210,6 +210,8 @@ public final class GemCrabKillerRoutine extends Routine
 	private int levelUpWaitTicks;
 	private volatile int lastBoost;
 	private volatile boolean skipRequested;
+	private volatile String potionInfo = "-";
+	private boolean drinkUnconfirmed;
 	private volatile String lastStyle = "-";
 	private volatile Skill lastSkill;
 	private int potionThreshold;
@@ -308,6 +310,8 @@ public final class GemCrabKillerRoutine extends Routine
 		actionReadyAt.clear();
 		pendingCrab = null;
 		drinkWaitTicks = 0;
+		drinkUnconfirmed = false;
+		potionInfo = "-";
 		boostBeforeDrink = 0;
 		potionsDrunk = 0;
 		nextDivineDrinkAt = 0;
@@ -1037,10 +1041,21 @@ public final class GemCrabKillerRoutine extends Routine
 			if (boost > boostBeforeDrink)
 			{
 				drinkWaitTicks = 0;
+				drinkUnconfirmed = false;
+				potionInfo = "drink confirmed (boost +" + boost + ")";
 			}
-			else
+			else if (--drinkWaitTicks > 0)
 			{
-				--drinkWaitTicks;
+				return;
+			}
+			else if (drinkUnconfirmed)
+			{
+				// The click did not drink: retry soon with the same threshold.
+				drinkUnconfirmed = false;
+				long retry = randomDelayNanos(ACTION_DELAY_MIN_MS, ACTION_DELAY_MAX_MS);
+				actionReadyAt.put(Action.POTION, System.nanoTime() + retry);
+				potionInfo = "click did not drink, retry in " + retry / 1_000_000L + " ms";
+				log.info("[GemCrab] potion click did not raise boost ({}), retrying in {} ms", boost, retry / 1_000_000L);
 				return;
 			}
 		}
@@ -1055,10 +1070,12 @@ public final class GemCrabKillerRoutine extends Routine
 		}
 		if (findPotionSlot(context.getInventory()) < 0)
 		{
+			potionInfo = "boost low but no " + potionMode + " potion in inventory";
 			return;
 		}
 		long delay = randomDelayNanos(POTION_DELAY_MIN_MS, POTION_DELAY_MAX_MS);
 		actionReadyAt.put(Action.POTION, System.nanoTime() + delay);
+		potionInfo = "boost " + boost + " <= " + potionThreshold + ", drink scheduled";
 		log.info("[GemCrab] boost {} <= {}, drinking in {} ms", boost, potionThreshold, delay / 1_000_000L);
 	}
 
@@ -1070,6 +1087,7 @@ public final class GemCrabKillerRoutine extends Routine
 		int slot = findPotionSlot(inventory);
 		if (slot < 0)
 		{
+			potionInfo = "due, but no potion found";
 			actionReadyAt.remove(Action.POTION);
 			return;
 		}
@@ -1077,40 +1095,55 @@ public final class GemCrabKillerRoutine extends Routine
 		GameInput input = context.getInput();
 		if (input.isBusy() || input.isCameraBusy() || client.isMenuOpen())
 		{
+			potionInfo = "due, waiting: " + (client.isMenuOpen() ? "menu open" : input.isCameraBusy() ? "camera busy" : "mouse busy");
 			return;
 		}
 
 		// The potion slot has no widget until the inventory tab is open.
 		if (!inventory.isOpen())
 		{
-			if (inventory.open())
+			boolean sent = inventory.open();
+			potionInfo = sent ? "due, opening inventory tab" : "due, inventory tab not found";
+			if (sent)
 			{
 				setStatus("Opening inventory");
+			}
+			else
+			{
+				log.info("[GemCrab] potion due but inventory tab widget not found (top level {})", client.getTopLevelInterfaceId());
 			}
 			return;
 		}
 
 		// Drink is the potion's left-click option.
 		Widget widget = inventory.getSlotWidget(slot);
-		if (widget == null)
+		if (widget == null || widget.isHidden() || widget.getBounds() == null || widget.getBounds().isEmpty())
 		{
+			potionInfo = "due, slot " + slot + " widget missing/hidden";
+			log.info("[GemCrab] potion slot {} widget missing or hidden", slot);
 			return;
 		}
-		if (input.click(widget))
+		if (!input.click(widget))
 		{
-			Skill skill = potionMode.skill;
-			actionReadyAt.remove(Action.POTION);
-			boostBeforeDrink = client.getBoostedSkillLevel(skill) - client.getRealSkillLevel(skill);
-			drinkWaitTicks = DRINK_TIMEOUT_TICKS;
-			++potionsDrunk;
-			potionThreshold = rollThreshold();
-			if (potionMode == PotionMode.DIVINE_RANGING)
-			{
-				nextDivineDrinkAt = System.currentTimeMillis() + DIVINE_POTION_MS;
-			}
-			log.info("[GemCrab] drank, next drink at boost <= {}", potionThreshold);
-			setStatus("Drinking " + potionMode);
+			potionInfo = "due, click on slot " + slot + " refused";
+			log.info("[GemCrab] potion click on slot {} at {} refused", slot, widget.getBounds());
+			return;
 		}
+		drinkUnconfirmed = true;
+		potionInfo = "clicked slot " + slot + " at " + widget.getBounds().x + "," + widget.getBounds().y;
+		log.info("[GemCrab] clicked potion slot {} at {}", slot, widget.getBounds());
+		Skill skill = potionMode.skill;
+		actionReadyAt.remove(Action.POTION);
+		boostBeforeDrink = client.getBoostedSkillLevel(skill) - client.getRealSkillLevel(skill);
+		drinkWaitTicks = DRINK_TIMEOUT_TICKS;
+		++potionsDrunk;
+		potionThreshold = rollThreshold();
+		if (potionMode == PotionMode.DIVINE_RANGING)
+		{
+			nextDivineDrinkAt = System.currentTimeMillis() + DIVINE_POTION_MS;
+		}
+		log.info("[GemCrab] drank, next drink at boost <= {}", potionThreshold);
+		setStatus("Drinking " + potionMode);
 	}
 
 	private int findPotionSlot(Inventory inventory)
@@ -1240,6 +1273,7 @@ public final class GemCrabKillerRoutine extends Routine
 		{
 			lines.add("Divine active: " + (nextDivineDrinkAt - System.currentTimeMillis()) / 1000L + " s left");
 		}
+		lines.add("Potion: " + potionInfo);
 		lines.add("Style: " + lastStyle + " -> " + (lastSkill == null ? "-" : lastSkill.getName()));
 		lines.add(skillHoverUntil != 0
 			? "Hovering skill: " + Math.max(0, (skillHoverUntil - now) / 1_000_000L) + " ms left"
