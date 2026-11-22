@@ -836,17 +836,16 @@ public class NMZRoutine extends Routine
 		}
 		// A left click can land on another NPC standing in front; if the last click on this
 		// target didn't take, pick Attack on it from the menu instead.
-		boolean missed = target == lastAttacked && current != target;
 		if (!standingStill(target))
 		{
 			setStatus("Waiting for " + name(target) + " to stop moving");
 			return;
 		}
-		if (ready("attack", ATTACK_DELAY_MIN_MS, ATTACK_DELAY_MAX_MS) && (missed ? input.interact(target, "Attack") : input.click(target)))
+		if (ready("attack", ATTACK_DELAY_MIN_MS, ATTACK_DELAY_MAX_MS) && input.click(target))
 		{
 			lastAttacked = target;
 			attackGraceUntil = System.nanoTime() + ATTACK_GRACE_NS;
-			log.info("[NMZ] attacking {}{}{}", name(target), current != null ? " instead of " + name(current) : "", missed ? " (menu)" : "");
+			log.info("[NMZ] attacking {}{}{}", name(target), current != null ? " instead of " + name(current) : "", "");
 			setStatus("Attacking " + name(target));
 		}
 	}
