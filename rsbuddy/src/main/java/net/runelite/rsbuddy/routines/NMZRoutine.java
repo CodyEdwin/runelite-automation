@@ -89,7 +89,7 @@ public class NMZRoutine extends Routine
 	};
 
 	private static final int PRAYER_MIN = 10;
-	private static final int PRAYER_MAX = 20;
+	private static final int PRAYER_BELOW_MAX = 42;
 	private static final int PRAYER_TOP_UP = 35;
 	private static final int SEARCH_DISTANCE = 20;
 	private static final int[] NMZ_REGION = {9033};
@@ -199,7 +199,7 @@ public class NMZRoutine extends Routine
 		stepStartedAt = System.nanoTime();
 		lastClickAt = 0;
 		pendingKey = null;
-		prayerThreshold = roll(PRAYER_MIN, PRAYER_MAX);
+		prayerThreshold = rollPrayer();
 		topUp = false;
 		drinkConfirmUntil = 0;
 		attackGraceUntil = 0;
@@ -244,7 +244,7 @@ public class NMZRoutine extends Routine
 			setStep(Step.INSIDE, "dream started");
 			++dreams;
 			popupHandled = firstCheck;
-			prayerThreshold = roll(PRAYER_MIN, PRAYER_MAX);
+			prayerThreshold = rollPrayer();
 		}
 		else if (!inside && step == Step.INSIDE)
 		{
@@ -405,6 +405,13 @@ public class NMZRoutine extends Routine
 		fight(context);
 	}
 
+	/** One dose at a random prayer between 10 and 42 below max. */
+	private int rollPrayer()
+	{
+		int max = getContext() == null ? 0 : getContext().getClient().getRealSkillLevel(Skill.PRAYER);
+		return roll(PRAYER_MIN, Math.max(PRAYER_MIN, max - PRAYER_BELOW_MAX));
+	}
+
 	/** Prayer potions come first. @return true while a drink is being handled. */
 	private boolean prayer(RoutineContext context)
 	{
@@ -419,11 +426,8 @@ public class NMZRoutine extends Routine
 			if (current > prayerBeforeDrink || now > drinkConfirmUntil)
 			{
 				drinkConfirmUntil = 0;
-				topUp = current <= PRAYER_TOP_UP;
-				if (!topUp)
-				{
-					prayerThreshold = roll(PRAYER_MIN, PRAYER_MAX);
-				}
+				topUp = false;
+				prayerThreshold = rollPrayer();
 				log.info("[NMZ] prayer {} after drink, top up: {}, next at <= {}", current, topUp, prayerThreshold);
 			}
 			else
