@@ -67,6 +67,7 @@ public class NMZRoutine extends Routine
 {
 	private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(NMZRoutine.class);
 
+	private static final long EXTRA_DELAY_MS = 1000L;
 	private static final long DELAY_MIN_MS = 750L;
 	private static final long DELAY_MAX_MS = 1500L;
 	private static final long ATTACK_DELAY_MIN_MS = 500L;
@@ -1164,7 +1165,7 @@ public class NMZRoutine extends Routine
 		if (!key.equals(pendingKey))
 		{
 			pendingKey = key;
-			pendingAt = now + randomDelayNanos(minMs, maxMs);
+			pendingAt = now + randomDelayNanos(minMs + EXTRA_DELAY_MS, maxMs + EXTRA_DELAY_MS);
 			return false;
 		}
 		if (now < pendingAt)
