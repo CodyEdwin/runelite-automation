@@ -129,6 +129,7 @@ public class NMZRoutine extends Routine
 	private static final long OVERLOAD_DURATION_NS = 300_000_000_000L;
 	private static final int OVERLOAD_HP_JUMP = 20;
 
+	private static final int[] MAIN_WEAPONS = {ItemID.DUAL_MACUAHUITL, ItemID.BR_DUAL_MACUAHUITL};
 	private static final int[] SECATEURS = {ItemID.NZONE_FAIRYSECATEURS, ItemID.FAIRY_ENCHANTED_SECATEURS};
 
 	private static final int[] POWERUPS = {
@@ -722,7 +723,7 @@ public class NMZRoutine extends Routine
 		{
 			return;
 		}
-		if (best.isPresent() && rewield(context))
+		if (rewield(context))
 		{
 			return;
 		}
@@ -903,15 +904,20 @@ public class NMZRoutine extends Routine
 		return true;
 	}
 
-	/** Puts the main weapon back on once other monsters are around again. */
+	/** Wields the Dual macuahuitl (or the weapon swapped out for secateurs) whenever it isn't on. */
 	private boolean rewield(RoutineContext context)
 	{
-		if (mainWeapon <= 0 || !isSecateurs(wornWeapon(context.getClient())))
+		int worn = wornWeapon(context.getClient());
+		if (Arrays.stream(MAIN_WEAPONS).anyMatch(id -> id == worn))
 		{
 			return false;
 		}
 		Inventory inventory = context.getInventory();
-		int slot = inventory.findSlot(mainWeapon);
+		int slot = findSlot(inventory, MAIN_WEAPONS);
+		if (slot < 0 && mainWeapon > 0 && isSecateurs(worn))
+		{
+			slot = inventory.findSlot(mainWeapon);
+		}
 		if (slot < 0)
 		{
 			return false;
