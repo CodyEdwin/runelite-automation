@@ -74,6 +74,7 @@ public class NMZRoutine extends Routine
 	private static final int PRAYER_MAX = 20;
 	private static final int PRAYER_TOP_UP = 35;
 	private static final int SEARCH_DISTANCE = 20;
+	private static final WorldPoint VIAL_LOCATION = new WorldPoint(2605, 3117, 0);
 
 	private static final String DOMINIC = "Dominic Onion";
 	private static final String TANGLEFOOT = "tanglefoot";
@@ -295,7 +296,7 @@ public class NMZRoutine extends Routine
 				}
 				break;
 			case VIAL:
-				Optional<TileObject> vial = context.getTargets().findTileObject(ObjectID.NZONE_LOBBY_VIAL_FULL, SEARCH_DISTANCE);
+				Optional<TileObject> vial = findVial(context);
 				if (!vial.isPresent())
 				{
 					setStatus("Potion vial not found");
@@ -608,6 +609,24 @@ public class NMZRoutine extends Routine
 			log.info("[NMZ] attacking {}{}", name(target), current != null ? " instead of " + name(current) : "");
 			setStatus("Attacking " + name(target));
 		}
+	}
+
+	/** The vial is a multiloc: the scene holds the base id, which shows as the full vial once a dream is bought. */
+	private static Optional<TileObject> findVial(RoutineContext context)
+	{
+		Optional<TileObject> vial = context.getTargets().findTileObject(ObjectID.NZONE_LOBBY_VIAL_FULL, SEARCH_DISTANCE);
+		if (!vial.isPresent())
+		{
+			vial = context.getTargets().findTileObject(ObjectID.NZONE_LOBBY_VIAL, SEARCH_DISTANCE);
+		}
+		if (!vial.isPresent())
+		{
+			vial = context.getTargets().getTileObjects(VIAL_LOCATION, 1).stream()
+				.filter(object -> object.getId() == ObjectID.NZONE_LOBBY_VIAL_EMPTY || object.getId() == ObjectID.NZONE_LOBBY_VIAL_FULL
+					|| object.getId() == ObjectID.NZONE_LOBBY_VIAL)
+				.findFirst();
+		}
+		return vial;
 	}
 
 	private static boolean attackable(NPC npc)
