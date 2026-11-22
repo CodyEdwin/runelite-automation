@@ -172,6 +172,8 @@ public class NMZRoutine extends Routine
 	private NPC lastAttacked;
 	private NPC tanglefootTarget;
 	private boolean tanglefootDone;
+	private java.util.Set<Integer> tanglefootBaseline;
+	private boolean tanglefootArmed;
 	private long lastStateLogAt;
 	private static final long STATE_LOG_NS = 5_000_000_000L;
 	private long lastCameraTurnAt;
@@ -922,11 +924,37 @@ public class NMZRoutine extends Routine
 		if (othersLeft)
 		{
 			tanglefootDone = false;
+			tanglefootBaseline = null;
+			tanglefootArmed = false;
 			return false;
 		}
 		if (tanglefootDone)
 		{
 			return false;
+		}
+		if (!tanglefootArmed)
+		{
+			// Only switch once the next spawn turns out to be a Tanglefoot too.
+			java.util.Set<Integer> now = new java.util.HashSet<>();
+			context.getClient().getTopLevelWorldView().npcs().stream()
+				.filter(npc -> npc != null && !npc.isDead() && name(npc).contains(TANGLEFOOT))
+				.forEach(npc -> now.add(npc.getIndex()));
+			if (tanglefootBaseline == null)
+			{
+				tanglefootBaseline = now;
+				log.info("[NMZ] only Tanglefoots left ({}), waiting for next spawn", now.size());
+			}
+			else if (!tanglefootBaseline.containsAll(now))
+			{
+				tanglefootArmed = true;
+				log.info("[NMZ] new Tanglefoot spawned, switching to secateurs");
+			}
+			if (!tanglefootArmed)
+			{
+				targetInfo = "none (waiting for next spawn)";
+				setStatus("Only Tanglefoots left, waiting for next spawn");
+				return true;
+			}
 		}
 		Optional<NPC> tanglefoot = context.getClient().getTopLevelWorldView().npcs().stream()
 			.map(npc -> (NPC) npc)
