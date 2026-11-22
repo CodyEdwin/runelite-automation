@@ -69,6 +69,13 @@ public class NMZRoutine extends Routine
 	private static final long RECLICK_NS = 8_000_000_000L;
 	private static final long ATTACK_GRACE_NS = 2_700_000_000L;
 	private static final long DRINK_CONFIRM_NS = 3_600_000_000L;
+	private static final long POPUP_WAIT_NS = 22_000_000_000L;
+	private static final int[] MAIN_MODALS = {
+		InterfaceID.ToplevelOsrsStretch.MAINMODAL,
+		InterfaceID.ToplevelPreEoc.MAINMODAL,
+		InterfaceID.Toplevel.MAINMODAL,
+		InterfaceID.ToplevelOsm.MAINMODAL
+	};
 
 	private static final int PRAYER_MIN = 10;
 	private static final int PRAYER_MAX = 20;
@@ -142,6 +149,7 @@ public class NMZRoutine extends Routine
 	private long drinkConfirmUntil;
 	private long attackGraceUntil;
 	private int dosesDrunk;
+	private boolean popupHandled;
 	private int boostThreshold;
 	private long boostConfirmUntil;
 	private int boostDoses;
@@ -209,6 +217,7 @@ public class NMZRoutine extends Routine
 		{
 			setStep(Step.INSIDE, "dream started");
 			++dreams;
+			popupHandled = false;
 			prayerThreshold = roll(PRAYER_MIN, PRAYER_MAX);
 		}
 		else if (!inside && step == Step.INSIDE)
@@ -352,7 +361,7 @@ public class NMZRoutine extends Routine
 
 	private void inside(RoutineContext context)
 	{
-		if (prayer(context) || levelUp(context) || quickPrayer(context) || powerup(context) || boost(context))
+		if (prayer(context) || levelUp(context) || popup(context) || quickPrayer(context) || powerup(context) || boost(context))
 		{
 			return;
 		}
@@ -432,6 +441,48 @@ public class NMZRoutine extends Routine
 			setStatus("Drinking prayer potion");
 		}
 		return true;
+	}
+
+	/** About 10 s into a dream a window opens; Esc closes it before quick prayers go on. */
+	private boolean popup(RoutineContext context)
+	{
+		boolean open = modalOpen(context.getClient());
+		if (!open && (popupHandled || System.nanoTime() - stepStartedAt > POPUP_WAIT_NS))
+		{
+			popupHandled = true;
+			cancel("escape");
+			return false;
+		}
+		if (!open)
+		{
+			setStatus("Waiting for the dream popup");
+			return true;
+		}
+		if (ready("escape") && context.getInput().pressKey(KeyEvent.VK_ESCAPE))
+		{
+			popupHandled = true;
+			log.info("[NMZ] closed popup with Esc");
+			setStatus("Closing popup");
+		}
+		return true;
+	}
+
+	private static boolean modalOpen(Client client)
+	{
+		for (int id : MAIN_MODALS)
+		{
+			Widget modal = client.getWidget(id);
+			if (modal == null || modal.isHidden())
+			{
+				continue;
+			}
+			Widget[] nested = modal.getNestedChildren();
+			if (nested != null && Arrays.stream(nested).anyMatch(child -> child != null && !child.isHidden()))
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private boolean levelUp(RoutineContext context)
