@@ -433,6 +433,9 @@ public class NMZRoutine extends Routine
 	}
 
 	/** Prayer potions come first. @return true while a drink is being handled. */
+	private boolean secondDose;
+	private boolean drinkingSecond;
+
 	private boolean prayer(RoutineContext context)
 	{
 		Client client = context.getClient();
@@ -447,8 +450,11 @@ public class NMZRoutine extends Routine
 			{
 				drinkConfirmUntil = 0;
 				topUp = false;
+				// 1 in 3 times follow up with a second dose (only if it won't waste).
+				secondDose = !drinkingSecond && ThreadLocalRandom.current().nextInt(3) == 0;
+				drinkingSecond = false;
 				prayerThreshold = rollPrayer();
-				log.info("[NMZ] prayer {} after drink, top up: {}, next at <= {}", current, topUp, prayerThreshold);
+				log.info("[NMZ] prayer {} after drink, second dose: {}, next at <= {}", current, secondDose, prayerThreshold);
 			}
 			else
 			{
@@ -457,7 +463,7 @@ public class NMZRoutine extends Routine
 			}
 		}
 
-		boolean low = current <= prayerThreshold || (topUp && current <= PRAYER_TOP_UP);
+		boolean low = current <= prayerThreshold || secondDose || (topUp && current <= PRAYER_TOP_UP);
 		prayerInfo = current + "/" + max + ", drink at <= " + prayerThreshold + (topUp ? ", topping up to > " + PRAYER_TOP_UP : "")
 			+ ", dose +" + restore;
 		if (!low)
@@ -469,6 +475,7 @@ public class NMZRoutine extends Routine
 		{
 			prayerInfo += " (dose would waste)";
 			topUp = false;
+			secondDose = false;
 			cancel("prayer");
 			return false;
 		}
@@ -497,6 +504,8 @@ public class NMZRoutine extends Routine
 		{
 			prayerBeforeDrink = current;
 			drinkConfirmUntil = now + DRINK_CONFIRM_NS;
+			drinkingSecond = secondDose;
+			secondDose = false;
 			++dosesDrunk;
 			log.info("[NMZ] drinking prayer potion at {}/{}", current, max);
 			setStatus("Drinking prayer potion");
