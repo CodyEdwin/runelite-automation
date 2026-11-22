@@ -1701,6 +1701,10 @@ public final class GameInput
 		}
 
 		ObjectComposition composition = client.getObjectDefinition(object.getId());
+		if (composition != null && composition.getImpostorIds() != null && composition.getImpostor() != null)
+		{
+			composition = composition.getImpostor();
+		}
 		if (composition == null)
 		{
 			return false;

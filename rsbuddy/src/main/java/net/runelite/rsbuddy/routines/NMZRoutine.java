@@ -317,13 +317,23 @@ public class NMZRoutine extends Routine
 				}
 				if (!input.isVisible(vial.get()))
 				{
+					setStatus("Turning camera to vial " + vial.get().getId());
 					input.turnCameraToward(vial.get().getWorldLocation());
 					break;
 				}
-				if (ready("vial") && input.interact(vial.get(), "Drink"))
+				if (!ready("vial"))
+				{
+					setStatus("Vial " + vial.get().getId() + " found, clicking soon");
+					break;
+				}
+				if (input.interact(vial.get(), "Drink") || input.click(vial.get()))
 				{
 					lastClickAt = now;
-					setStatus("Drink from vial");
+					setStatus("Drink Potion on vial " + vial.get().getId());
+				}
+				else
+				{
+					setStatus("Vial " + vial.get().getId() + " click refused");
 				}
 				break;
 			case ACCEPT:
