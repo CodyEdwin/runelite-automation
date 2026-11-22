@@ -354,7 +354,7 @@ public final class GemCrabKillerRoutine extends Routine
 			return;
 		}
 
-		drinkPotionIfNeeded(context);
+		checkPotion(context);
 		skillCheck(context);
 
 		if (cooldown > 0)
@@ -1021,32 +1021,19 @@ public final class GemCrabKillerRoutine extends Routine
 	}
 
 	/**
-	 * Drinks a potion whenever the matching boost (boosted level minus real
-	 * level) is the configured threshold (default 3) or less, which includes
-	 * being unboosted. Does nothing when the selected potions are not in the
-	 * inventory. Drinking does not interrupt combat, so this runs in every
-	 * state, but never while the mouse is moving, the camera is turning, or a
-	 * menu is open.
+	 * Runs once per game tick: when the boost is at or below this drink's rolled
+	 * threshold, schedules one drink 5-30 s later. A scheduled drink is never re-rolled.
 	 */
-	private void drinkPotionIfNeeded(RoutineContext context)
+	private void checkPotion(RoutineContext context)
 	{
 		Client client = context.getClient();
 		Skill skill = potionMode.skill;
 		int boost = client.getBoostedSkillLevel(skill) - client.getRealSkillLevel(skill);
 		lastBoost = boost;
 
-		// A divine potion holds its boost for five minutes. Never drink
-		// another one during that window, even if the boost reading is odd.
-		if (potionMode == PotionMode.DIVINE_RANGING
-			&& System.currentTimeMillis() < nextDivineDrinkAt)
-		{
-			return;
-		}
-
 		if (drinkWaitTicks > 0)
 		{
-			// Wait for the last drink to show up in the boosted level so the
-			// same potion is not drunk twice.
+			// Wait for the last drink to show up in the boosted level.
 			if (boost > boostBeforeDrink)
 			{
 				drinkWaitTicks = 0;
@@ -1057,32 +1044,33 @@ public final class GemCrabKillerRoutine extends Routine
 				return;
 			}
 		}
-
-		if (boost > potionThreshold)
+		if (actionReadyAt.containsKey(Action.POTION) || boost > potionThreshold)
 		{
-			actionReadyAt.remove(Action.POTION);
 			return;
 		}
+		// A divine potion holds its boost for five minutes.
+		if (potionMode == PotionMode.DIVINE_RANGING && System.currentTimeMillis() < nextDivineDrinkAt)
+		{
+			return;
+		}
+		if (findPotionSlot(context.getInventory()) < 0)
+		{
+			return;
+		}
+		long delay = randomDelayNanos(POTION_DELAY_MIN_MS, POTION_DELAY_MAX_MS);
+		actionReadyAt.put(Action.POTION, System.nanoTime() + delay);
+		log.info("[GemCrab] boost {} <= {}, drinking in {} ms", boost, potionThreshold, delay / 1_000_000L);
+	}
 
+	/** Called once the scheduled drink is due: opens the inventory if needed and drinks. */
+	private void drinkPotionIfNeeded(RoutineContext context)
+	{
+		Client client = context.getClient();
 		Inventory inventory = context.getInventory();
 		int slot = findPotionSlot(inventory);
 		if (slot < 0)
 		{
 			actionReadyAt.remove(Action.POTION);
-			return;
-		}
-
-		// A human notices the boost has dropped a while before drinking.
-		Long readyAt = actionReadyAt.get(Action.POTION);
-		if (readyAt == null)
-		{
-			long delay = randomDelayNanos(POTION_DELAY_MIN_MS, POTION_DELAY_MAX_MS);
-			actionReadyAt.put(Action.POTION, System.nanoTime() + delay);
-			log.info("[GemCrab] boost {} <= {}, drinking in {} ms", boost, potionThreshold, delay / 1_000_000L);
-			return;
-		}
-		if (System.nanoTime() < readyAt)
-		{
 			return;
 		}
 
@@ -1110,8 +1098,9 @@ public final class GemCrabKillerRoutine extends Routine
 		}
 		if (input.click(widget))
 		{
+			Skill skill = potionMode.skill;
 			actionReadyAt.remove(Action.POTION);
-			boostBeforeDrink = boost;
+			boostBeforeDrink = client.getBoostedSkillLevel(skill) - client.getRealSkillLevel(skill);
 			drinkWaitTicks = DRINK_TIMEOUT_TICKS;
 			++potionsDrunk;
 			potionThreshold = rollThreshold();
@@ -1119,6 +1108,7 @@ public final class GemCrabKillerRoutine extends Routine
 			{
 				nextDivineDrinkAt = System.currentTimeMillis() + DIVINE_POTION_MS;
 			}
+			log.info("[GemCrab] drank, next drink at boost <= {}", potionThreshold);
 			setStatus("Drinking " + potionMode);
 		}
 	}
