@@ -162,6 +162,7 @@ public class NMZRoutine extends Routine
 	private long attackGraceUntil;
 	private int dosesDrunk;
 	private int mainWeapon = -1;
+	private NPC lastAttacked;
 	private long lastStateLogAt;
 	private static final long STATE_LOG_NS = 5_000_000_000L;
 	private long lastCameraTurnAt;
@@ -755,10 +756,14 @@ public class NMZRoutine extends Routine
 			offscreen(context, target.getWorldLocation(), name(target));
 			return;
 		}
-		if (ready("attack") && input.click(target))
+		// A left click can land on another NPC standing in front; if the last click on this
+		// target didn't take, pick Attack on it from the menu instead.
+		boolean missed = target == lastAttacked && current != target;
+		if (ready("attack") && (missed ? input.interact(target, "Attack") : input.click(target)))
 		{
+			lastAttacked = target;
 			attackGraceUntil = System.nanoTime() + ATTACK_GRACE_NS;
-			log.info("[NMZ] attacking {}{}", name(target), current != null ? " instead of " + name(current) : "");
+			log.info("[NMZ] attacking {}{}{}", name(target), current != null ? " instead of " + name(current) : "", missed ? " (menu)" : "");
 			setStatus("Attacking " + name(target));
 		}
 	}
