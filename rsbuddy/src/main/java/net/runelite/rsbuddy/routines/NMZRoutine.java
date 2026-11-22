@@ -69,6 +69,8 @@ public class NMZRoutine extends Routine
 
 	private static final long DELAY_MIN_MS = 750L;
 	private static final long DELAY_MAX_MS = 1500L;
+	private static final long ATTACK_DELAY_MIN_MS = 500L;
+	private static final long ATTACK_DELAY_MAX_MS = 1500L;
 	private static final long POWERUP_DELAY_MIN_MS = 250L;
 	private static final long POWERUP_DELAY_MAX_MS = 650L;
 	private static final long STEP_TIMEOUT_NS = 20_000_000_000L;
@@ -761,7 +763,7 @@ public class NMZRoutine extends Routine
 		// A left click can land on another NPC standing in front; if the last click on this
 		// target didn't take, pick Attack on it from the menu instead.
 		boolean missed = target == lastAttacked && current != target;
-		if (ready("attack") && (missed ? input.interact(target, "Attack") : input.click(target)))
+		if (ready("attack", ATTACK_DELAY_MIN_MS, ATTACK_DELAY_MAX_MS) && (missed ? input.interact(target, "Attack") : input.click(target)))
 		{
 			lastAttacked = target;
 			attackGraceUntil = System.nanoTime() + ATTACK_GRACE_NS;
@@ -903,7 +905,7 @@ public class NMZRoutine extends Routine
 			offscreen(context, target.getWorldLocation(), "Tanglefoot");
 			return true;
 		}
-		if (System.nanoTime() >= attackGraceUntil && ready("attack") && input.click(target))
+		if (System.nanoTime() >= attackGraceUntil && ready("attack", ATTACK_DELAY_MIN_MS, ATTACK_DELAY_MAX_MS) && input.click(target))
 		{
 			attackGraceUntil = System.nanoTime() + ATTACK_GRACE_NS;
 			setStatus("Attacking Tanglefoot with secateurs");
