@@ -299,7 +299,9 @@ public class NMZRoutine extends Routine
 				Optional<TileObject> vial = findVial(context);
 				if (!vial.isPresent())
 				{
-					setStatus("Potion vial not found");
+					setStatus("Potion vial not found, objects near 2605,3117: " + context.getTargets().getTileObjects(VIAL_LOCATION, 1).stream()
+						.map(object -> object.getId() + "@" + object.getWorldLocation().getX() + "," + object.getWorldLocation().getY())
+						.collect(java.util.stream.Collectors.joining(" ")));
 					break;
 				}
 				if (now - lastClickAt < RECLICK_NS)
@@ -625,6 +627,10 @@ public class NMZRoutine extends Routine
 				.filter(object -> object.getId() == ObjectID.NZONE_LOBBY_VIAL_EMPTY || object.getId() == ObjectID.NZONE_LOBBY_VIAL_FULL
 					|| object.getId() == ObjectID.NZONE_LOBBY_VIAL)
 				.findFirst();
+		}
+		if (!vial.isPresent())
+		{
+			vial = context.getTargets().getTileObjects(VIAL_LOCATION, 0).stream().findFirst();
 		}
 		return vial;
 	}
