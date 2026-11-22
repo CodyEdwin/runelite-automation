@@ -69,6 +69,7 @@ public class NMZRoutine extends Routine
 	private static final long RECLICK_NS = 8_000_000_000L;
 	private static final long ATTACK_GRACE_NS = 2_700_000_000L;
 	private static final long DRINK_CONFIRM_NS = 3_600_000_000L;
+	private static final long POWERUP_RECLICK_NS = 7_000_000_000L;
 	private static final long POPUP_WAIT_NS = 22_000_000_000L;
 	private static final int[] MAIN_MODALS = {
 		InterfaceID.ToplevelOsrsStretch.MAINMODAL,
@@ -150,6 +151,8 @@ public class NMZRoutine extends Routine
 	private long drinkConfirmUntil;
 	private long attackGraceUntil;
 	private int dosesDrunk;
+	private WorldPoint powerupClicked;
+	private long powerupClickedAt;
 	private boolean popupHandled;
 	private boolean firstCheck;
 	private int boostThreshold;
@@ -603,13 +606,28 @@ public class NMZRoutine extends Routine
 				continue;
 			}
 			GameInput input = context.getInput();
+			WorldPoint where = object.get().getWorldLocation();
+			Player player = context.getPlayer();
+			if (where != null && where.equals(powerupClicked) && System.nanoTime() - powerupClickedAt < POWERUP_RECLICK_NS
+				&& player != null && player.getPoseAnimation() != player.getIdlePoseAnimation())
+			{
+				setStatus("Walking to power-up");
+				return true;
+			}
+			if (where != null && where.equals(powerupClicked) && System.nanoTime() - powerupClickedAt < POWERUP_RECLICK_NS)
+			{
+				setStatus("Waiting on power-up");
+				return false;
+			}
 			if (!input.isVisible(object.get()))
 			{
-				input.turnCameraToward(object.get().getWorldLocation());
+				input.turnCameraToward(where);
 				return true;
 			}
 			if (ready("powerup", POWERUP_DELAY_MIN_MS, POWERUP_DELAY_MAX_MS) && input.click(object.get()))
 			{
+				powerupClicked = where;
+				powerupClickedAt = System.nanoTime();
 				++powerups;
 				attackGraceUntil = System.nanoTime() + ATTACK_GRACE_NS;
 				log.info("[NMZ] clicking power-up {}", id);
