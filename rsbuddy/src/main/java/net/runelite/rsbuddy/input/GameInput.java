@@ -4308,24 +4308,84 @@ public final class GameInput
 			return null;
 		}
 
-		double centerX = bounds.getCenterX();
-		double centerY = bounds.getCenterY();
-
-		for (int i = 0; i < RANDOM_POINT_ATTEMPTS; i++)
+		// Aim near the middle of the hull (area centroid, not the bounding box,
+		// which can sit on a thin edge), and only accept points that have a
+		// margin of hull on every side so clicks never land on the outline.
+		double[] c = centroid(shape, bounds);
+		double margin = Math.max(3.0, Math.min(bounds.width, bounds.height) * 0.15);
+		for (int i = 0; i < RANDOM_POINT_ATTEMPTS * 2; i++)
 		{
-			int x = (int) Math.round(centerX + (random.nextDouble() * 2.0 - 1.0) * bounds.width * 0.15);
-			int y = (int) Math.round(centerY + (random.nextDouble() * 2.0 - 1.0) * bounds.height * 0.15);
-			if (shape.contains(x, y) && isInViewport(x, y) && !isCoveredByInterface(x, y))
+			double gx = Math.max(-2.0, Math.min(2.0, random.nextGaussian()));
+			double gy = Math.max(-2.0, Math.min(2.0, random.nextGaussian()));
+			int x = (int) Math.round(c[0] + gx * bounds.width * 0.07);
+			int y = (int) Math.round(c[1] + gy * bounds.height * 0.07);
+			if (deepInside(shape, x, y, margin))
 			{
 				return new Point(x, y);
 			}
 		}
 
-		int x = (int) Math.round(centerX);
-		int y = (int) Math.round(centerY);
+		// Odd shapes: closest well-inside point to the centroid.
+		Point best = null;
+		double bestDist = Double.MAX_VALUE;
+		for (int i = 0; i < 60; i++)
+		{
+			int x = bounds.x + random.nextInt(bounds.width);
+			int y = bounds.y + random.nextInt(bounds.height);
+			double d = Math.hypot(x - c[0], y - c[1]);
+			if (d < bestDist && deepInside(shape, x, y, margin))
+			{
+				best = new Point(x, y);
+				bestDist = d;
+			}
+		}
+		if (best != null)
+		{
+			return best;
+		}
+
+		int x = (int) Math.round(c[0]);
+		int y = (int) Math.round(c[1]);
 		return shape.contains(x, y) && isInViewport(x, y) && !isCoveredByInterface(x, y)
 			? new Point(x, y)
 			: null;
+	}
+
+	private boolean deepInside(Shape shape, int x, int y, double margin)
+	{
+		int m = (int) Math.round(margin);
+		return shape.contains(x, y)
+			&& shape.contains(x - m, y) && shape.contains(x + m, y)
+			&& shape.contains(x, y - m) && shape.contains(x, y + m)
+			&& isInViewport(x, y) && !isCoveredByInterface(x, y);
+	}
+
+	private static double[] centroid(Shape shape, Rectangle bounds)
+	{
+		double cx = bounds.getCenterX();
+		double cy = bounds.getCenterY();
+		if (shape instanceof Polygon)
+		{
+			Polygon p = (Polygon) shape;
+			double a = 0, x = 0, y = 0;
+			for (int i = 0; i < p.npoints; i++)
+			{
+				int j = (i + 1) % p.npoints;
+				double cross = (double) p.xpoints[i] * p.ypoints[j] - (double) p.xpoints[j] * p.ypoints[i];
+				a += cross;
+				x += (p.xpoints[i] + p.xpoints[j]) * cross;
+				y += (p.ypoints[i] + p.ypoints[j]) * cross;
+			}
+			if (Math.abs(a) > 1e-6)
+			{
+				double px = x / (3 * a), py = y / (3 * a);
+				if (shape.contains(px, py))
+				{
+					return new double[]{px, py};
+				}
+			}
+		}
+		return new double[]{cx, cy};
 	}
 
 	/**
