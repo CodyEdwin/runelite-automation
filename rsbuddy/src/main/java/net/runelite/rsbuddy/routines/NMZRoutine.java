@@ -81,6 +81,7 @@ public class NMZRoutine extends Routine
 	private static final int PRAYER_MAX = 20;
 	private static final int PRAYER_TOP_UP = 35;
 	private static final int SEARCH_DISTANCE = 20;
+	private static final int[] NMZ_REGION = {9033};
 	private static final WorldPoint VIAL_LOCATION = new WorldPoint(2605, 3117, 0);
 
 	private static final String DOMINIC = "Dominic Onion";
@@ -161,6 +162,7 @@ public class NMZRoutine extends Routine
 	private long startedAt;
 	private volatile String targetInfo = "-";
 	private volatile String prayerInfo = "-";
+	private volatile String insideInfo = "-";
 
 	public NMZRoutine()
 	{
@@ -212,7 +214,7 @@ public class NMZRoutine extends Routine
 			return;
 		}
 
-		boolean inside = visible(context.getClient(), InterfaceID.NzoneGame.UNIVERSE);
+		boolean inside = inDream(context);
 		if (inside && step != Step.INSIDE)
 		{
 			setStep(Step.INSIDE, "dream started");
@@ -465,6 +467,17 @@ public class NMZRoutine extends Routine
 			setStatus("Closing popup");
 		}
 		return true;
+	}
+
+	/** Same check as RuneLite's Nightmare Zone plugin: region 9033 on planes 1-3, or the dream overlay showing. */
+	private boolean inDream(RoutineContext context)
+	{
+		Client client = context.getClient();
+		WorldPoint location = context.getPlayerLocation();
+		boolean region = location != null && location.getPlane() > 0 && Arrays.equals(client.getMapRegions(), NMZ_REGION);
+		boolean overlay = visible(client, InterfaceID.NzoneGame.UNIVERSE);
+		insideInfo = "region " + region + ", overlay " + overlay + ", plane " + (location == null ? "-" : location.getPlane());
+		return region || overlay;
 	}
 
 	private static boolean modalOpen(Client client)
@@ -842,6 +855,7 @@ public class NMZRoutine extends Routine
 		lines.add("Step: " + step + " | " + getStatus());
 		String key = pendingKey;
 		lines.add("Pending: " + (key == null ? "-" : key + " in " + Math.max(0, (pendingAt - now) / 1_000_000L) + " ms"));
+		lines.add("Inside: " + insideInfo);
 		lines.add("Prayer: " + prayerInfo);
 		lines.add("Target: " + targetInfo);
 		lines.add("Boost: " + boostInfo);
