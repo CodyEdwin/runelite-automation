@@ -34,6 +34,9 @@ import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 import net.runelite.api.Actor;
 import net.runelite.api.Client;
+import net.runelite.api.EquipmentInventorySlot;
+import net.runelite.api.Item;
+import net.runelite.api.ItemContainer;
 import net.runelite.api.NPC;
 import net.runelite.api.NPCComposition;
 import net.runelite.api.Perspective;
@@ -44,6 +47,7 @@ import net.runelite.api.WorldView;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.gameval.InventoryID;
 import net.runelite.api.gameval.ItemID;
 import net.runelite.api.gameval.ObjectID;
 import net.runelite.api.gameval.VarbitID;
@@ -125,6 +129,8 @@ public class NMZRoutine extends Routine
 	private static final long OVERLOAD_DURATION_NS = 300_000_000_000L;
 	private static final int OVERLOAD_HP_JUMP = 20;
 
+	private static final int[] SECATEURS = {ItemID.NZONE_FAIRYSECATEURS, ItemID.FAIRY_ENCHANTED_SECATEURS};
+
 	private static final int[] POWERUPS = {
 		ObjectID.NZONE_POWERUP_ZAPPER,
 		ObjectID.NZONE_POWERUP_DAMAGEMULTIPLIER,
@@ -154,6 +160,7 @@ public class NMZRoutine extends Routine
 	private long drinkConfirmUntil;
 	private long attackGraceUntil;
 	private int dosesDrunk;
+	private int mainWeapon = -1;
 	private long lastCameraTurnAt;
 	private WorldPoint powerupClicked;
 	private long powerupClickedAt;
@@ -700,6 +707,14 @@ public class NMZRoutine extends Routine
 			.min(Comparator.comparingInt(NMZRoutine::rank)
 				.thenComparingInt(npc -> npc.getWorldLocation().distanceTo(location)));
 
+		if (tanglefootOnly(context, best.isPresent(), current, location))
+		{
+			return;
+		}
+		if (best.isPresent() && rewield(context))
+		{
+			return;
+		}
 		if (!best.isPresent())
 		{
 			targetInfo = current == null ? "none (waiting for NPCs)" : name(current) + " (not attackable)";
@@ -780,6 +795,143 @@ public class NMZRoutine extends Routine
 			vial = context.getTargets().getTileObjects(VIAL_LOCATION, 0).stream().findFirst();
 		}
 		return vial;
+	}
+
+	/**
+	 * When only Tanglefoots are left: take Magic secateurs if none are held, wield them and
+	 * kill a Tanglefoot. @return true while handling that.
+	 */
+	private boolean tanglefootOnly(RoutineContext context, boolean othersLeft, NPC current, WorldPoint location)
+	{
+		if (othersLeft)
+		{
+			return false;
+		}
+		Optional<NPC> tanglefoot = context.getClient().getTopLevelWorldView().npcs().stream()
+			.map(npc -> (NPC) npc)
+			.filter(npc -> npc != null && !npc.isDead() && name(npc).contains(TANGLEFOOT) && npc.getWorldLocation() != null
+				&& npc.getWorldLocation().distanceTo(location) <= SEARCH_DISTANCE)
+			.min(Comparator.comparingInt(npc -> npc.getWorldLocation().distanceTo(location)));
+		if (!tanglefoot.isPresent())
+		{
+			return false;
+		}
+
+		GameInput input = context.getInput();
+		Inventory inventory = context.getInventory();
+		int weapon = wornWeapon(context.getClient());
+		if (!isSecateurs(weapon))
+		{
+			int slot = findSlot(inventory, SECATEURS);
+			if (slot >= 0)
+			{
+				if (weapon > 0)
+				{
+					mainWeapon = weapon;
+				}
+				if (!inventory.isOpen())
+				{
+					if (ready("inventory"))
+					{
+						inventory.open();
+					}
+					return true;
+				}
+				Widget widget = inventory.getSlotWidget(slot);
+				if (ready("wield secateurs") && widget != null && input.click(widget))
+				{
+					log.info("[NMZ] wielding Magic secateurs (main weapon {})", mainWeapon);
+					setStatus("Wielding Magic secateurs");
+				}
+				return true;
+			}
+			Optional<TileObject> pickup = context.getTargets().findTileObject(ObjectID.NZONE_FAIRYSECATEURS, 40);
+			if (!pickup.isPresent())
+			{
+				setStatus("Only Tanglefoots left, Magic secateurs not found");
+				return false;
+			}
+			if (!input.isVisible(pickup.get()))
+			{
+				offscreen(context, pickup.get().getWorldLocation(), "Magic secateurs");
+				return true;
+			}
+			if (System.nanoTime() - lastClickAt < POWERUP_RECLICK_NS)
+			{
+				setStatus("Walking to Magic secateurs");
+				return true;
+			}
+			if (ready("take secateurs") && (input.interact(pickup.get(), "Pick-up", "Take") || input.click(pickup.get())))
+			{
+				lastClickAt = System.nanoTime();
+				setStatus("Pick-up Magic secateurs");
+			}
+			return true;
+		}
+
+		lastClickAt = 0;
+		NPC target = tanglefoot.get();
+		if (current != null && name(current).contains(TANGLEFOOT))
+		{
+			targetInfo = "tanglefoot (with secateurs)";
+			setStatus("Fighting Tanglefoot with secateurs");
+			cancel("attack");
+			return true;
+		}
+		targetInfo = "tanglefoot (only Tanglefoots left)";
+		if (!input.isVisible(target))
+		{
+			offscreen(context, target.getWorldLocation(), "Tanglefoot");
+			return true;
+		}
+		if (System.nanoTime() >= attackGraceUntil && ready("attack") && input.click(target))
+		{
+			attackGraceUntil = System.nanoTime() + ATTACK_GRACE_NS;
+			setStatus("Attacking Tanglefoot with secateurs");
+		}
+		return true;
+	}
+
+	/** Puts the main weapon back on once other monsters are around again. */
+	private boolean rewield(RoutineContext context)
+	{
+		if (mainWeapon <= 0 || !isSecateurs(wornWeapon(context.getClient())))
+		{
+			return false;
+		}
+		Inventory inventory = context.getInventory();
+		int slot = inventory.findSlot(mainWeapon);
+		if (slot < 0)
+		{
+			return false;
+		}
+		if (!inventory.isOpen())
+		{
+			if (ready("inventory"))
+			{
+				inventory.open();
+			}
+			return true;
+		}
+		Widget widget = inventory.getSlotWidget(slot);
+		if (ready("rewield") && widget != null && context.getInput().click(widget))
+		{
+			log.info("[NMZ] re-wielding main weapon {}", mainWeapon);
+			setStatus("Re-wielding main weapon");
+		}
+		return true;
+	}
+
+	private static int wornWeapon(Client client)
+	{
+		ItemContainer worn = client.getItemContainer(InventoryID.WORN);
+		Item item = worn == null ? null : worn.getItem(EquipmentInventorySlot.WEAPON.getSlotIdx());
+		return item == null ? -1 : item.getId();
+	}
+
+	private static boolean isSecateurs(int itemId)
+	{
+		return Arrays.stream(SECATEURS).anyMatch(id -> id == itemId);
 	}
 
 	private static boolean attackable(NPC npc)
