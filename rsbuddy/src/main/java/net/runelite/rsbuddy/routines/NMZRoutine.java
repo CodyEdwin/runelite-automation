@@ -79,6 +79,9 @@ public class NMZRoutine extends Routine
 	private static final long DRINK_CONFIRM_NS = 3_600_000_000L;
 	private static final long POWERUP_RECLICK_NS = 12_000_000_000L;
 	private static final long POWERUP_SETTLE_NS = 1_800_000_000L;
+	private static final int CAMERA_SETTLED_UNITS = 128;
+	private static final long CAMERA_SETTLE_MIN_MS = 350L;
+	private static final long CAMERA_SETTLE_MAX_MS = 700L;
 	private static final long CAMERA_TURN_GAP_NS = 6_000_000_000L;
 	private static final long POPUP_WAIT_NS = 22_000_000_000L;
 	private static final int[] MAIN_MODALS = {
@@ -170,6 +173,7 @@ public class NMZRoutine extends Routine
 	private long lastStateLogAt;
 	private static final long STATE_LOG_NS = 5_000_000_000L;
 	private long lastCameraTurnAt;
+	private long cameraStillAt;
 	private WorldPoint powerupClicked;
 	private long powerupClickedAt;
 	private boolean popupHandled;
@@ -257,7 +261,7 @@ public class NMZRoutine extends Routine
 		{
 			inside(context);
 		}
-		else
+		else if (!cameraMoving(context.getClient()))
 		{
 			lobby(context);
 		}
@@ -398,7 +402,16 @@ public class NMZRoutine extends Routine
 				client.getBoostedSkillLevel(Skill.HITPOINTS), client.getRealSkillLevel(Skill.HITPOINTS),
 				client.getVarbitValue(VarbitID.QUICKPRAYER_ACTIVE) == 1, prayerInfo, boostInfo, targetInfo, getStatus());
 		}
-		if (prayer(context) || levelUp(context) || popup(context) || quickPrayer(context) || powerup(context) || boost(context))
+		if (prayer(context))
+		{
+			return;
+		}
+		if (cameraMoving(context.getClient()))
+		{
+			setStatus("Waiting for the camera to settle");
+			return;
+		}
+		if (levelUp(context) || popup(context) || quickPrayer(context) || powerup(context) || boost(context))
 		{
 			return;
 		}
@@ -522,12 +535,22 @@ public class NMZRoutine extends Routine
 	/** One camera turn at most every 6 s; between turns it walks toward the target on the minimap. */
 	private void offscreen(RoutineContext context, WorldPoint where, String label)
 	{
+		offscreen(context, where, label, true);
+	}
+
+	private void offscreen(RoutineContext context, WorldPoint where, String label, boolean walk)
+	{
 		long now = System.nanoTime();
 		if (now - lastCameraTurnAt > CAMERA_TURN_GAP_NS)
 		{
 			lastCameraTurnAt = now;
 			setStatus("Turning camera to " + label);
 			context.getInput().turnCameraToward(where);
+			return;
+		}
+		if (!walk)
+		{
+			setStatus("Waiting for " + label + " to come on screen");
 			return;
 		}
 		setStatus(label + " off-screen, walking toward it");
@@ -537,6 +560,28 @@ public class NMZRoutine extends Routine
 		{
 			context.getInput().click(new java.awt.Point(minimap.getX(), minimap.getY()));
 		}
+	}
+
+	/** True while the camera is still easing toward its target yaw or just finished a turn. */
+	private boolean cameraMoving(Client client)
+	{
+		int diff = Math.abs(client.getCameraYaw() - client.getCameraYawTarget()) & 16383;
+		if (Math.min(diff, 16384 - diff) > CAMERA_SETTLED_UNITS)
+		{
+			cameraStillAt = 0;
+			return true;
+		}
+		long now = System.nanoTime();
+		if (cameraStillAt == 0)
+		{
+			cameraStillAt = now + rollNs(CAMERA_SETTLE_MIN_MS, CAMERA_SETTLE_MAX_MS);
+		}
+		return now < cameraStillAt || now - lastCameraTurnAt < CAMERA_SETTLE_MIN_MS * 1_000_000L;
+	}
+
+	private static long rollNs(long minMs, long maxMs)
+	{
+		return (minMs + (long) (Math.random() * (maxMs - minMs))) * 1_000_000L + (long) (Math.random() * 1_000_000L);
 	}
 
 	private static boolean modalOpen(Client client)
@@ -763,7 +808,7 @@ public class NMZRoutine extends Routine
 		GameInput input = context.getInput();
 		if (!input.isVisible(target))
 		{
-			offscreen(context, target.getWorldLocation(), name(target));
+			offscreen(context, target.getWorldLocation(), name(target), false);
 			return;
 		}
 		// A left click can land on another NPC standing in front; if the last click on this
@@ -921,7 +966,7 @@ public class NMZRoutine extends Routine
 		targetInfo = "tanglefoot (only Tanglefoots left)";
 		if (!input.isVisible(target))
 		{
-			offscreen(context, target.getWorldLocation(), "Tanglefoot");
+			offscreen(context, target.getWorldLocation(), "Tanglefoot", false);
 			return true;
 		}
 		if (System.nanoTime() >= attackGraceUntil && ready("attack", ATTACK_DELAY_MIN_MS, ATTACK_DELAY_MAX_MS) && input.click(target))
