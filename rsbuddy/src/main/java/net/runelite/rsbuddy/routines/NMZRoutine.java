@@ -161,6 +161,8 @@ public class NMZRoutine extends Routine
 	private long attackGraceUntil;
 	private int dosesDrunk;
 	private int mainWeapon = -1;
+	private long lastStateLogAt;
+	private static final long STATE_LOG_NS = 5_000_000_000L;
 	private long lastCameraTurnAt;
 	private WorldPoint powerupClicked;
 	private long powerupClickedAt;
@@ -381,6 +383,15 @@ public class NMZRoutine extends Routine
 
 	private void inside(RoutineContext context)
 	{
+		long now = System.nanoTime();
+		if (now - lastStateLogAt > STATE_LOG_NS)
+		{
+			lastStateLogAt = now;
+			Client client = context.getClient();
+			log.info("[NMZ] state: HP {}/{}, quick prayer {}, prayer [{}], boost [{}], target [{}], status [{}]",
+				client.getBoostedSkillLevel(Skill.HITPOINTS), client.getRealSkillLevel(Skill.HITPOINTS),
+				client.getVarbitValue(VarbitID.QUICKPRAYER_ACTIVE) == 1, prayerInfo, boostInfo, targetInfo, getStatus());
+		}
 		if (prayer(context) || levelUp(context) || popup(context) || quickPrayer(context) || powerup(context) || boost(context))
 		{
 			return;
