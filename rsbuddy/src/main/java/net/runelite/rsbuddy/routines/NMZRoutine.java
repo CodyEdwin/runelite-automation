@@ -165,6 +165,8 @@ public class NMZRoutine extends Routine
 	private int dosesDrunk;
 	private int mainWeapon = -1;
 	private NPC lastAttacked;
+	private NPC tanglefootTarget;
+	private boolean tanglefootDone;
 	private long lastStateLogAt;
 	private static final long STATE_LOG_NS = 5_000_000_000L;
 	private long lastCameraTurnAt;
@@ -824,7 +826,19 @@ public class NMZRoutine extends Routine
 	 */
 	private boolean tanglefootOnly(RoutineContext context, boolean othersLeft, NPC current, WorldPoint location)
 	{
+		if (tanglefootTarget != null && (tanglefootTarget.isDead()
+			|| context.getClient().getTopLevelWorldView().npcs().stream().noneMatch(npc -> npc == tanglefootTarget)))
+		{
+			log.info("[NMZ] Tanglefoot killed, switching back");
+			tanglefootTarget = null;
+			tanglefootDone = true;
+		}
 		if (othersLeft)
+		{
+			tanglefootDone = false;
+			return false;
+		}
+		if (tanglefootDone)
 		{
 			return false;
 		}
@@ -894,6 +908,7 @@ public class NMZRoutine extends Routine
 		NPC target = tanglefoot.get();
 		if (current != null && name(current).contains(TANGLEFOOT))
 		{
+			tanglefootTarget = current;
 			targetInfo = "tanglefoot (with secateurs)";
 			setStatus("Fighting Tanglefoot with secateurs");
 			cancel("attack");
