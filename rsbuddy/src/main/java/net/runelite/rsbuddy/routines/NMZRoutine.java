@@ -36,10 +36,12 @@ import net.runelite.api.Actor;
 import net.runelite.api.Client;
 import net.runelite.api.NPC;
 import net.runelite.api.NPCComposition;
+import net.runelite.api.Perspective;
 import net.runelite.api.Player;
 import net.runelite.api.Skill;
 import net.runelite.api.TileObject;
 import net.runelite.api.WorldView;
+import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.coords.WorldPoint;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.gameval.ItemID;
@@ -70,6 +72,7 @@ public class NMZRoutine extends Routine
 	private static final long ATTACK_GRACE_NS = 2_700_000_000L;
 	private static final long DRINK_CONFIRM_NS = 3_600_000_000L;
 	private static final long POWERUP_RECLICK_NS = 7_000_000_000L;
+	private static final long CAMERA_TURN_GAP_NS = 6_000_000_000L;
 	private static final long POPUP_WAIT_NS = 22_000_000_000L;
 	private static final int[] MAIN_MODALS = {
 		InterfaceID.ToplevelOsrsStretch.MAINMODAL,
@@ -151,6 +154,7 @@ public class NMZRoutine extends Routine
 	private long drinkConfirmUntil;
 	private long attackGraceUntil;
 	private int dosesDrunk;
+	private long lastCameraTurnAt;
 	private WorldPoint powerupClicked;
 	private long powerupClickedAt;
 	private boolean popupHandled;
@@ -291,7 +295,7 @@ public class NMZRoutine extends Routine
 				}
 				if (!input.isVisible(dominic.get()))
 				{
-					input.turnCameraToward(dominic.get().getWorldLocation());
+					offscreen(context, dominic.get().getWorldLocation(), "Dominic Onion");
 					break;
 				}
 				if (ready("dream") && input.click(dominic.get()))
@@ -336,7 +340,7 @@ public class NMZRoutine extends Routine
 				if (!input.isVisible(vial.get()))
 				{
 					setStatus("Turning camera to vial " + vial.get().getId());
-					input.turnCameraToward(vial.get().getWorldLocation());
+					offscreen(context, vial.get().getWorldLocation(), "vial");
 					break;
 				}
 				if (!ready("vial"))
@@ -487,6 +491,26 @@ public class NMZRoutine extends Routine
 		return region || overlay;
 	}
 
+	/** One camera turn at most every 6 s; between turns it walks toward the target on the minimap. */
+	private void offscreen(RoutineContext context, WorldPoint where, String label)
+	{
+		long now = System.nanoTime();
+		if (now - lastCameraTurnAt > CAMERA_TURN_GAP_NS)
+		{
+			lastCameraTurnAt = now;
+			setStatus("Turning camera to " + label);
+			context.getInput().turnCameraToward(where);
+			return;
+		}
+		setStatus(label + " off-screen, walking toward it");
+		LocalPoint local = where == null ? null : LocalPoint.fromWorld(context.getClient(), where);
+		net.runelite.api.Point minimap = local == null ? null : Perspective.localToMinimap(context.getClient(), local);
+		if (minimap != null && ready("minimap"))
+		{
+			context.getInput().click(new java.awt.Point(minimap.getX(), minimap.getY()));
+		}
+	}
+
 	private static boolean modalOpen(Client client)
 	{
 		for (int id : MAIN_MODALS)
@@ -621,7 +645,7 @@ public class NMZRoutine extends Routine
 			}
 			if (!input.isVisible(object.get()))
 			{
-				input.turnCameraToward(where);
+				offscreen(context, where, "power-up");
 				return true;
 			}
 			if (ready("powerup", POWERUP_DELAY_MIN_MS, POWERUP_DELAY_MAX_MS) && input.click(object.get()))
@@ -704,7 +728,7 @@ public class NMZRoutine extends Routine
 		GameInput input = context.getInput();
 		if (!input.isVisible(target))
 		{
-			input.turnCameraToward(target.getWorldLocation());
+			offscreen(context, target.getWorldLocation(), name(target));
 			return;
 		}
 		if (ready("attack") && input.click(target))
