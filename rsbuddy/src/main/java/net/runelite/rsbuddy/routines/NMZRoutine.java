@@ -79,6 +79,8 @@ public class NMZRoutine extends Routine
 	private static final long DRINK_CONFIRM_NS = 3_600_000_000L;
 	private static final long POWERUP_RECLICK_NS = 12_000_000_000L;
 	private static final long POWERUP_SETTLE_NS = 1_800_000_000L;
+	private static final long NPC_STILL_MIN_MS = 250L;
+	private static final long NPC_STILL_MAX_MS = 550L;
 	private static final int CAMERA_SETTLED_UNITS = 128;
 	private static final long CAMERA_SETTLE_MIN_MS = 350L;
 	private static final long CAMERA_SETTLE_MAX_MS = 700L;
@@ -174,6 +176,9 @@ public class NMZRoutine extends Routine
 	private static final long STATE_LOG_NS = 5_000_000_000L;
 	private long lastCameraTurnAt;
 	private long cameraStillAt;
+	private NPC stillNpc;
+	private LocalPoint stillAt;
+	private long stillUntil;
 	private WorldPoint powerupClicked;
 	private long powerupClickedAt;
 	private boolean popupHandled;
@@ -584,6 +589,24 @@ public class NMZRoutine extends Routine
 		return (minMs + (long) (Math.random() * (maxMs - minMs))) * 1_000_000L + (long) (Math.random() * 1_000_000L);
 	}
 
+	/** True once the NPC has stayed on the same spot, not walking, for a short random moment. */
+	private boolean standingStill(NPC npc)
+	{
+		LocalPoint at = npc.getLocalLocation();
+		int pose = npc.getPoseAnimation();
+		boolean walking = pose != -1 && (pose == npc.getWalkAnimation() || pose == npc.getRunAnimation())
+			&& pose != npc.getIdlePoseAnimation();
+		long now = System.nanoTime();
+		if (npc != stillNpc || at == null || !at.equals(stillAt) || walking)
+		{
+			stillNpc = npc;
+			stillAt = at;
+			stillUntil = now + rollNs(NPC_STILL_MIN_MS, NPC_STILL_MAX_MS);
+			return false;
+		}
+		return now >= stillUntil;
+	}
+
 	private static boolean modalOpen(Client client)
 	{
 		for (int id : MAIN_MODALS)
@@ -814,6 +837,11 @@ public class NMZRoutine extends Routine
 		// A left click can land on another NPC standing in front; if the last click on this
 		// target didn't take, pick Attack on it from the menu instead.
 		boolean missed = target == lastAttacked && current != target;
+		if (!standingStill(target))
+		{
+			setStatus("Waiting for " + name(target) + " to stop moving");
+			return;
+		}
 		if (ready("attack", ATTACK_DELAY_MIN_MS, ATTACK_DELAY_MAX_MS) && (missed ? input.interact(target, "Attack") : input.click(target)))
 		{
 			lastAttacked = target;
@@ -967,6 +995,11 @@ public class NMZRoutine extends Routine
 		if (!input.isVisible(target))
 		{
 			offscreen(context, target.getWorldLocation(), "Tanglefoot", false);
+			return true;
+		}
+		if (!standingStill(target))
+		{
+			setStatus("Waiting for Tanglefoot to stop moving");
 			return true;
 		}
 		if (System.nanoTime() >= attackGraceUntil && ready("attack", ATTACK_DELAY_MIN_MS, ATTACK_DELAY_MAX_MS) && input.click(target))
