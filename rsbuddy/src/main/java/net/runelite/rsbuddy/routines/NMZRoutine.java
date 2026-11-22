@@ -108,6 +108,8 @@ public class NMZRoutine extends Routine
 	private static final int BOOST_MAX = 3;
 	private static final int OVERLOAD_MIN_HP = 51;
 	private static final long BOOST_CONFIRM_NS = 7_000_000_000L;
+	private static final long OVERLOAD_DURATION_NS = 300_000_000_000L;
+	private static final int OVERLOAD_HP_JUMP = 20;
 
 	private static final int[] POWERUPS = {
 		ObjectID.NZONE_POWERUP_ZAPPER,
@@ -142,6 +144,9 @@ public class NMZRoutine extends Routine
 	private int boostThreshold;
 	private long boostConfirmUntil;
 	private int boostDoses;
+	private long overloadUntil;
+	private int lastHp = -1;
+	private volatile String boostInfo = "-";
 	private int powerups;
 	private int dreams;
 	private long startedAt;
@@ -168,6 +173,8 @@ public class NMZRoutine extends Routine
 		boostThreshold = roll(BOOST_MIN, BOOST_MAX);
 		boostConfirmUntil = 0;
 		boostDoses = 0;
+		overloadUntil = 0;
+		lastHp = -1;
 		powerups = 0;
 		dreams = 0;
 		startedAt = System.currentTimeMillis();
@@ -422,33 +429,47 @@ public class NMZRoutine extends Routine
 		return true;
 	}
 
-	/** Re-drinks an overload (HP above 50) or super combat once the strength boost wears down. */
+	/**
+	 * Overloads last 5 minutes and cost 50 HP; when one ends the HP comes back, so it re-drinks
+	 * as soon as the effect is gone and HP is above 50. Without overloads it re-drinks a
+	 * (super) combat potion once the Strength boost wears down.
+	 */
 	private boolean boost(RoutineContext context)
 	{
 		Client client = context.getClient();
+		Inventory inventory = context.getInventory();
+		int hp = client.getBoostedSkillLevel(Skill.HITPOINTS);
 		int boost = client.getBoostedSkillLevel(Skill.STRENGTH) - client.getRealSkillLevel(Skill.STRENGTH);
 		long now = System.nanoTime();
-		if (boostConfirmUntil != 0)
+		boolean hpJumped = lastHp >= 0 && hp - lastHp >= OVERLOAD_HP_JUMP;
+		lastHp = hp;
+		boolean overloadEffect = client.getVarbitValue(VarbitID.NZONE_OVERLOAD_POTION_EFFECTS) != 0;
+		if (hpJumped && !overloadEffect)
 		{
-			if (boost > boostThreshold || now > boostConfirmUntil)
+			overloadUntil = 0;
+		}
+
+		int slot = findSlot(inventory, OVERLOADS);
+		boolean want;
+		if (slot >= 0)
+		{
+			boolean active = overloadEffect || now < overloadUntil;
+			want = !active && hp >= OVERLOAD_MIN_HP;
+			boostInfo = "overload " + (active ? "active" + (overloadUntil > now ? ", " + (overloadUntil - now) / 1_000_000_000L + " s left" : "")
+				: hp >= OVERLOAD_MIN_HP ? "due" : "waiting for HP > 50") + ", HP " + hp;
+		}
+		else
+		{
+			if (boostConfirmUntil != 0 && (boost > boostThreshold || now > boostConfirmUntil))
 			{
 				boostConfirmUntil = 0;
 				boostThreshold = roll(BOOST_MIN, BOOST_MAX);
 			}
-			return false;
-		}
-		if (boost > boostThreshold)
-		{
-			cancel("boost");
-			return false;
-		}
-		Inventory inventory = context.getInventory();
-		int slot = client.getBoostedSkillLevel(Skill.HITPOINTS) >= OVERLOAD_MIN_HP ? findSlot(inventory, OVERLOADS) : -1;
-		if (slot < 0)
-		{
 			slot = findSlot(inventory, COMBAT_POTIONS);
+			want = slot >= 0 && boostConfirmUntil == 0 && boost <= boostThreshold;
+			boostInfo = slot < 0 ? "no overloads or combat potions" : "+" + boost + ", drink at <= +" + boostThreshold;
 		}
-		if (slot < 0)
+		if (!want)
 		{
 			cancel("boost");
 			return false;
@@ -466,13 +487,21 @@ public class NMZRoutine extends Routine
 			return true;
 		}
 		Widget widget = inventory.getSlotWidget(slot);
+		boolean overload = findSlot(inventory, OVERLOADS) == slot;
 		if (widget != null && context.getInput().click(widget))
 		{
-			boostConfirmUntil = now + BOOST_CONFIRM_NS;
+			if (overload)
+			{
+				overloadUntil = now + OVERLOAD_DURATION_NS;
+			}
+			else
+			{
+				boostConfirmUntil = now + BOOST_CONFIRM_NS;
+			}
 			++boostDoses;
 			attackGraceUntil = now + ATTACK_GRACE_NS;
-			log.info("[NMZ] drinking boost potion at +{}", boost);
-			setStatus("Drinking boost potion");
+			log.info("[NMZ] drinking {} at HP {}, boost +{}", overload ? "overload" : "combat potion", hp, boost);
+			setStatus(overload ? "Drinking overload" : "Drinking combat potion");
 		}
 		return true;
 	}
@@ -699,7 +728,7 @@ public class NMZRoutine extends Routine
 		lines.add("Pending: " + (key == null ? "-" : key + " in " + Math.max(0, (pendingAt - now) / 1_000_000L) + " ms"));
 		lines.add("Prayer: " + prayerInfo);
 		lines.add("Target: " + targetInfo);
-		lines.add("Boost: drink at <= +" + boostThreshold + (boostConfirmUntil != 0 ? " (waiting for dose)" : ""));
+		lines.add("Boost: " + boostInfo);
 		lines.add("Dreams: " + dreams + ", prayer doses: " + dosesDrunk + ", boost doses: " + boostDoses + ", power-ups: " + powerups
 			+ ", " + elapsed / 60_000L + " min");
 		return lines;
