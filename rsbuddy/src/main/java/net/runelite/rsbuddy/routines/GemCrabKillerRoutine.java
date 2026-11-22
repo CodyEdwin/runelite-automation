@@ -208,6 +208,9 @@ public final class GemCrabKillerRoutine extends Routine
 	private int potionsDrunk;
 	private long nextDivineDrinkAt;
 	private int levelUpWaitTicks;
+	private volatile int lastBoost;
+	private volatile String lastStyle = "-";
+	private volatile Skill lastSkill;
 	private int potionThreshold;
 	private long idleUntil;
 	private long nextSkillCheckAt;
@@ -516,6 +519,7 @@ public final class GemCrabKillerRoutine extends Routine
 		}
 
 		Skill skill = trainedSkill(client);
+		lastSkill = skill;
 		Widget skillWidget = client.getWidget(skillWidgetId(skill));
 		if (skillWidget == null || skillWidget.isHidden() || skillWidget.getBounds() == null
 			|| skillWidget.getBounds().isEmpty())
@@ -559,6 +563,7 @@ public final class GemCrabKillerRoutine extends Routine
 				if (styleIndex >= 0 && styleIndex < styles.length)
 				{
 					String name = client.getStructComposition(styles[styleIndex]).getStringValue(ParamID.ATTACK_STYLE_NAME);
+					lastStyle = name == null ? "?" : name;
 					switch (name == null ? "" : name.toLowerCase(java.util.Locale.ROOT))
 					{
 						case "accurate":
@@ -1008,6 +1013,7 @@ public final class GemCrabKillerRoutine extends Routine
 		Client client = context.getClient();
 		Skill skill = potionMode.skill;
 		int boost = client.getBoostedSkillLevel(skill) - client.getRealSkillLevel(skill);
+		lastBoost = boost;
 
 		// A divine potion holds its boost for five minutes. Never drink
 		// another one during that window, even if the boost reading is odd.
@@ -1201,10 +1207,38 @@ public final class GemCrabKillerRoutine extends Routine
 	{
 		long elapsed = Math.max(1, System.currentTimeMillis() - startedAt);
 		long perHour = kills * 3_600_000L / elapsed;
-		return Arrays.asList(
-			"State: " + (state == null ? "-" : state.name()),
-			"Kills: " + kills + " (" + perHour + "/hr)",
-			"Potions: " + potionsDrunk + " (" + potionMode + ", at " + potionMode.skill.getName()
-				+ " boost <= " + potionThreshold + ", range " + boostMin + "-" + boostMax + ")");
+		long now = System.nanoTime();
+		List<String> lines = new java.util.ArrayList<>();
+		lines.add("State: " + (state == null ? "-" : state.name()) + " | " + getStatus());
+		lines.add("Kills: " + kills + " (" + perHour + "/hr), potions: " + potionsDrunk);
+		for (Action action : Action.values())
+		{
+			Long readyAt = actionReadyAt.get(action);
+			if (readyAt != null)
+			{
+				long left = (readyAt - now) / 1_000_000L;
+				lines.add("Delay " + action + ": " + (left > 0 ? left + " ms" : "ready"));
+			}
+		}
+		lines.add("Boost: " + potionMode.skill.getName() + " +" + lastBoost + ", drink at <= " + potionThreshold
+			+ " (range " + boostMin + "-" + boostMax + ", " + potionMode + ")");
+		if (drinkWaitTicks > 0)
+		{
+			lines.add("Waiting for drink to apply: " + drinkWaitTicks + " ticks");
+		}
+		if (nextDivineDrinkAt > System.currentTimeMillis())
+		{
+			lines.add("Divine active: " + (nextDivineDrinkAt - System.currentTimeMillis()) / 1000L + " s left");
+		}
+		lines.add("Style: " + lastStyle + " -> " + (lastSkill == null ? "-" : lastSkill.getName()));
+		lines.add(skillHoverUntil != 0
+			? "Hovering skill: " + Math.max(0, (skillHoverUntil - now) / 1_000_000L) + " ms left"
+			: "Next skill check: " + Math.max(0, (nextSkillCheckAt - now) / 1_000_000L) + " ms");
+		lines.add(idleUntil != 0
+			? "Break: " + Math.max(0, (idleUntil - now) / 1_000_000L) + " ms left"
+			: "Break: none");
+		lines.add("Ticks: cooldown " + cooldown + ", idle " + idleTicks + ", wait " + waitTicks
+			+ ", crawl clicks " + crawlClicks);
+		return lines;
 	}
 }
