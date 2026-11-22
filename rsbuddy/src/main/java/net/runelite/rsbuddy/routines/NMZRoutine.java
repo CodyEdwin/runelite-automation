@@ -616,7 +616,11 @@ public class NMZRoutine extends Routine
 	/** The vial is a multiloc: the scene holds the base id, which shows as the full vial once a dream is bought. */
 	private static Optional<TileObject> findVial(RoutineContext context)
 	{
-		Optional<TileObject> vial = context.getTargets().findTileObject(ObjectID.NZONE_LOBBY_VIAL_FULL, SEARCH_DISTANCE);
+		Optional<TileObject> vial = context.getTargets().findObject("Potion", "Drink", SEARCH_DISTANCE).map(object -> (TileObject) object);
+		if (!vial.isPresent())
+		{
+			vial = context.getTargets().findTileObject(ObjectID.NZONE_LOBBY_VIAL_FULL, SEARCH_DISTANCE);
+		}
 		if (!vial.isPresent())
 		{
 			vial = context.getTargets().findTileObject(ObjectID.NZONE_LOBBY_VIAL, SEARCH_DISTANCE);
