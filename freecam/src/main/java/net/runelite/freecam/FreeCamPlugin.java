@@ -1,7 +1,6 @@
 package net.runelite.freecam;
 
 import java.awt.event.KeyEvent;
-import java.awt.event.MouseEvent;
 import net.runelite.client.input.KeyListener;
 import javax.inject.Inject;
 import net.runelite.api.Client;
@@ -16,14 +15,12 @@ import net.runelite.api.events.BeforeRender;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.input.KeyManager;
-import net.runelite.client.input.MouseAdapter;
-import net.runelite.client.input.MouseManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 
 @PluginDescriptor(
 	name = "Free Cam",
-	description = "Backtick toggles a ground-level explore camera. WASD to walk with collision, Shift to run, mouse to look.",
+	description = "Backtick toggles a ground-level explore camera. WASD to walk with collision, Shift to run, drag/arrows to look.",
 	tags = {"camera", "fps", "explore", "fly"}
 )
 public class FreeCamPlugin extends Plugin implements KeyListener
@@ -45,67 +42,17 @@ public class FreeCamPlugin extends Plugin implements KeyListener
 	private boolean heightIsY;
 	private double x, y;
 	private long lastNanos;
-	private int lastMouseX = -1, lastMouseY;
-
-	@Inject
-	private MouseManager mouseManager;
-
-	private static final double LOOK = 3.0; // camera units per pixel
-
-	private final MouseAdapter look = new MouseAdapter()
-	{
-		@Override
-		public MouseEvent mouseMoved(MouseEvent e)
-		{
-			turn(e);
-			return e;
-		}
-
-		@Override
-		public MouseEvent mouseDragged(MouseEvent e)
-		{
-			turn(e);
-			return e;
-		}
-	};
-
-	/** Mouse-look: moving right turns right, moving up looks up. */
-	private void turn(MouseEvent e)
-	{
-		if (!active)
-		{
-			return;
-		}
-		int mx = e.getX(), my = e.getY();
-		int dx = mx - lastMouseX, dy = my - lastMouseY;
-		boolean jump = lastMouseX < 0 || Math.abs(dx) > 150 || Math.abs(dy) > 150; // touch taps teleport the pointer
-		lastMouseX = mx;
-		lastMouseY = my;
-		if (jump || (dx == 0 && dy == 0))
-		{
-			return;
-		}
-		clientThread.invokeLater(() ->
-		{
-			int yaw = (client.getCameraYawTarget() - (int) (dx * LOOK)) & 2047;
-			int pitch = Math.max(128, Math.min(383, client.getCameraPitchTarget() - (int) (dy * LOOK)));
-			client.setCameraYawTarget(yaw);
-			client.setCameraPitchTarget(pitch);
-		});
-	}
 
 	@Override
 	protected void startUp()
 	{
 		keyManager.registerKeyListener(this);
-		mouseManager.registerMouseListener(look);
 	}
 
 	@Override
 	protected void shutDown()
 	{
 		keyManager.unregisterKeyListener(this);
-		mouseManager.unregisterMouseListener(look);
 		clientThread.invokeLater(this::disable);
 	}
 
@@ -120,12 +67,11 @@ public class FreeCamPlugin extends Plugin implements KeyListener
 		client.setCameraMode(1);
 		client.setFreeCameraSpeed(0);
 		float fx = client.getCameraFocalPointX(), fy = client.getCameraFocalPointY(), fz = client.getCameraFocalPointZ();
-		// Heights are negative and scene coordinates positive, so the smaller one is the height axis.
-		heightIsY = fy < fz;
+		// Work out which focal axis is height: the horizontal pair is the one nearest the player.
+		heightIsY = Math.abs(fx - lp.getX()) + Math.abs(fz - lp.getY()) <= Math.abs(fx - lp.getX()) + Math.abs(fy - lp.getY());
 		x = lp.getX();
 		y = lp.getY();
 		lastNanos = System.nanoTime();
-		lastMouseX = -1;
 		active = true;
 	}
 
@@ -158,18 +104,8 @@ public class FreeCamPlugin extends Plugin implements KeyListener
 		int f = (fwd ? 1 : 0) - (back ? 1 : 0), s = (right ? 1 : 0) - (left ? 1 : 0);
 		if (f != 0 || s != 0)
 		{
-			// Forward is from the camera to the point it looks at, so it always matches the view.
-			double fx = x - client.getCameraFpX(), fy = y - client.getCameraFpY();
-			double fl = Math.hypot(fx, fy);
-			if (fl < 1)
-			{
-				double yaw = client.getCameraFpYaw();
-				fx = -Math.sin(yaw);
-				fy = Math.cos(yaw);
-				fl = 1;
-			}
-			fx /= fl;
-			fy /= fl;
+			double yaw = client.getCameraYaw() * Perspective.UNIT;
+			double fx = -Math.sin(yaw), fy = Math.cos(yaw); // forward on the ground
 			double sx = fy, sy = -fx;                       // right
 			double len = Math.hypot(f, s), step = (run ? RUN : WALK) * dt / len;
 			WorldView wv0 = client.getTopLevelWorldView();
