@@ -4,12 +4,8 @@ import com.google.inject.Provides;
 import java.awt.Canvas;
 import java.awt.GraphicsConfiguration;
 import java.awt.geom.AffineTransform;
-import java.io.File;
-import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import javax.inject.Inject;
 import net.runelite.api.Client;
 import net.runelite.api.hooks.DrawCallbacks;
@@ -33,11 +29,6 @@ public class MobileHdPlugin extends Plugin
 {
 	private static final Logger log = LoggerFactory.getLogger(MobileHdPlugin.class);
 
-	private static final String FOG_LINE = "vec3 mixedColor = mix(c.rgb, fogColor.rgb, fFogAmount);";
-	private static final String SMOOTH_FOG = "float mhdFog = smoothstep(0.0, 1.0, fFogAmount);\n"
-		+ "  c.rgb = mix(c.rgb, vec3(dot(c.rgb, vec3(0.299, 0.587, 0.114))), mhdFog * 0.3);\n"
-		+ "  vec3 mixedColor = mix(c.rgb, fogColor.rgb, mhdFog);";
-
 	@Inject
 	private Client client;
 
@@ -52,7 +43,7 @@ public class MobileHdPlugin extends Plugin
 	private Field fboScene;
 	private Field fboWidth;
 	private Field fboHeight;
-	private boolean fogApplied;
+	private String appliedScene;
 
 	private volatile boolean grading;
 	private volatile boolean fxaa;
@@ -60,6 +51,9 @@ public class MobileHdPlugin extends Plugin
 	private volatile float saturation;
 	private volatile float contrast;
 	private volatile float warmth;
+	private volatile float bloom;
+	private volatile float vignette;
+	private volatile DetailLevel detail = DetailLevel.MEDIUM;
 
 	@Provides
 	MobileHdConfig provideConfig(ConfigManager configManager)
@@ -77,7 +71,7 @@ public class MobileHdPlugin extends Plugin
 		clientThread.invokeLater(() ->
 		{
 			attach();
-			applyFog(config.smoothFog());
+			applyScene();
 		});
 	}
 
@@ -92,7 +86,7 @@ public class MobileHdPlugin extends Plugin
 			}
 			hook = null;
 			post.free();
-			applyFog(false);
+			restoreScene();
 		});
 	}
 
@@ -104,10 +98,7 @@ public class MobileHdPlugin extends Plugin
 			return;
 		}
 		loadConfig();
-		if ("smoothFog".equals(e.getKey()))
-		{
-			clientThread.invokeLater(() -> applyFog(config.smoothFog()));
-		}
+		clientThread.invokeLater(this::applyScene);
 	}
 
 	@Subscribe
@@ -124,6 +115,9 @@ public class MobileHdPlugin extends Plugin
 		saturation = config.saturation() / 100f;
 		contrast = config.contrast() / 100f;
 		warmth = config.warmth() / 100f * 0.06f;
+		bloom = config.bloom() ? config.bloomStrength() / 100f * 0.8f : 0f;
+		vignette = config.vignette() ? config.vignetteStrength() / 100f * 0.6f : 0f;
+		detail = config.detailLevel();
 	}
 
 	/** Wraps the GPU plugin's draw callbacks; re-wraps if the GPU plugin restarts. */
@@ -135,22 +129,17 @@ public class MobileHdPlugin extends Plugin
 			hook = new HookedCallbacks(cb, this::postPass);
 			client.setDrawCallbacks(hook);
 			log.info("Mobile HD: attached to GPU plugin");
-			if (config.smoothFog() && !fogApplied)
-			{
-				applyFog(true);
-			}
 		}
 		else if (cb != hook)
 		{
 			hook = null;
-			fogApplied = false;
 		}
 	}
 
 	private void postPass()
 	{
 		boolean grade = grading;
-		if (!grade && !fxaa && sharpen <= 0 || post.failed() || hook == null)
+		if (!grade && !fxaa && sharpen <= 0 && bloom <= 0 && vignette <= 0 || post.failed() || hook == null)
 		{
 			return;
 		}
@@ -173,7 +162,7 @@ public class MobileHdPlugin extends Plugin
 				h = (int) (h * t.getScaleY());
 			}
 			post.run(fbo, w, h, fxaa, sharpen,
-				grade ? saturation : 1f, grade ? contrast : 1f, grade ? warmth : 0f);
+				grade ? saturation : 1f, grade ? contrast : 1f, grade ? warmth : 0f, bloom, detail, vignette);
 		}
 		catch (Throwable t)
 		{
@@ -182,58 +171,65 @@ public class MobileHdPlugin extends Plugin
 		}
 	}
 
-	/**
-	 * The GPU plugin loads shaders from the classpath, and on Android a writable directory sits ahead of
-	 * RuneLite's jar. Write a fog-patched frag.glsl there and have the GPU plugin recompile.
-	 */
-	private void applyFog(boolean on)
+	/** Writes scene shaders for the current settings and has the GPU plugin recompile if they changed. */
+	private void applyScene()
 	{
-		String dir = System.getProperty("runelite.android.gpuDir");
-		if (dir == null || on == fogApplied)
+		if (!SceneShaders.available())
+		{
+			return;
+		}
+		String sig = SceneShaders.signature(config);
+		if (sig.equals(appliedScene))
 		{
 			return;
 		}
 		try
 		{
-			String src;
-			try (InputStream in = GpuPlugin.class.getResourceAsStream("frag.glsl"))
+			if (!SceneShaders.write(config))
 			{
-				if (in == null)
-				{
-					return;
-				}
-				src = new String(in.readAllBytes(), StandardCharsets.UTF_8).replace(SMOOTH_FOG, FOG_LINE);
+				log.warn("Mobile HD: GPU shaders changed, scene effects unavailable");
+				return;
 			}
-			if (on)
-			{
-				if (!src.contains(FOG_LINE))
-				{
-					log.warn("Mobile HD: fog line not found in frag.glsl, smooth fog unavailable");
-					return;
-				}
-				src = src.replace(FOG_LINE, SMOOTH_FOG);
-			}
-			File out = new File(dir, "net/runelite/client/plugins/gpu/frag.glsl");
-			out.getParentFile().mkdirs();
-			Files.write(out.toPath(), src.getBytes(StandardCharsets.UTF_8));
-			fogApplied = on;
-
-			DrawCallbacks cb = client.getDrawCallbacks();
-			Object gpu = cb instanceof HookedCallbacks ? ((HookedCallbacks) cb).gpu : cb;
-			if (gpu instanceof GpuPlugin)
-			{
-				Method shutdown = GpuPlugin.class.getDeclaredMethod("shutdownProgram");
-				Method init = GpuPlugin.class.getDeclaredMethod("initProgram");
-				shutdown.setAccessible(true);
-				init.setAccessible(true);
-				shutdown.invoke(gpu);
-				init.invoke(gpu);
-				log.info("Mobile HD: smooth fog {}", on ? "on" : "off");
-			}
+			appliedScene = sig;
+			recompile();
 		}
 		catch (Throwable t)
 		{
-			log.warn("Mobile HD: fog patch failed", t);
+			log.warn("Mobile HD: scene shader patch failed", t);
+		}
+	}
+
+	private void restoreScene()
+	{
+		if (!SceneShaders.available() || appliedScene == null)
+		{
+			return;
+		}
+		try
+		{
+			SceneShaders.writeStock();
+			appliedScene = null;
+			recompile();
+		}
+		catch (Throwable t)
+		{
+			log.warn("Mobile HD: scene shader restore failed", t);
+		}
+	}
+
+	private void recompile() throws ReflectiveOperationException
+	{
+		DrawCallbacks cb = client.getDrawCallbacks();
+		Object gpu = cb instanceof HookedCallbacks ? ((HookedCallbacks) cb).gpu : cb;
+		if (gpu instanceof GpuPlugin)
+		{
+			Method shutdown = GpuPlugin.class.getDeclaredMethod("shutdownProgram");
+			Method init = GpuPlugin.class.getDeclaredMethod("initProgram");
+			shutdown.setAccessible(true);
+			init.setAccessible(true);
+			shutdown.invoke(gpu);
+			init.invoke(gpu);
+			log.info("Mobile HD: GPU shaders recompiled ({})", appliedScene);
 		}
 	}
 
