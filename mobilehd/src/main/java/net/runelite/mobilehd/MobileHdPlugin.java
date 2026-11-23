@@ -22,8 +22,8 @@ import org.slf4j.LoggerFactory;
 
 @PluginDescriptor(
 	name = "Mobile HD",
-	description = "Lightweight graphics boost for the GPU plugin: color grading, FXAA, sharpening and smoother fog",
-	tags = {"hd", "graphics", "gpu", "fxaa", "sharpen", "color", "fog", "mobile"}
+	description = "Lightweight graphics boost for the GPU plugin: ground textures, sun lighting, bloom, color grading, FXAA and sharpening",
+	tags = {"hd", "graphics", "gpu", "fxaa", "sharpen", "color", "fog", "textures", "mobile"}
 )
 public class MobileHdPlugin extends Plugin
 {
@@ -39,6 +39,7 @@ public class MobileHdPlugin extends Plugin
 	private MobileHdConfig config;
 
 	private final PostProcess post = new PostProcess();
+	private final GroundTextures ground = new GroundTextures();
 	private HookedCallbacks hook;
 	private Field fboScene;
 	private Field fboWidth;
@@ -87,6 +88,7 @@ public class MobileHdPlugin extends Plugin
 			hook = null;
 			post.free();
 			restoreScene();
+			ground.free();
 		});
 	}
 
@@ -126,7 +128,7 @@ public class MobileHdPlugin extends Plugin
 		DrawCallbacks cb = client.getDrawCallbacks();
 		if (cb instanceof GpuPlugin)
 		{
-			hook = new HookedCallbacks(cb, this::postPass);
+			hook = new HookedCallbacks(cb, this::postPass, this::preScene);
 			client.setDrawCallbacks(hook);
 			log.info("Mobile HD: attached to GPU plugin");
 		}
@@ -171,6 +173,19 @@ public class MobileHdPlugin extends Plugin
 		}
 	}
 
+	private void preScene()
+	{
+		try
+		{
+			ground.bind();
+		}
+		catch (Throwable t)
+		{
+			log.warn("Mobile HD: ground texture bind failed", t);
+			ground.free();
+		}
+	}
+
 	/** Writes scene shaders for the current settings and has the GPU plugin recompile if they changed. */
 	private void applyScene()
 	{
@@ -178,14 +193,26 @@ public class MobileHdPlugin extends Plugin
 		{
 			return;
 		}
-		String sig = SceneShaders.signature(config);
+		boolean textures = false;
+		if (config.groundTextures())
+		{
+			try
+			{
+				textures = ground.ensure();
+			}
+			catch (Throwable t)
+			{
+				log.warn("Mobile HD: ground textures unavailable", t);
+			}
+		}
+		String sig = SceneShaders.signature(config, textures);
 		if (sig.equals(appliedScene))
 		{
 			return;
 		}
 		try
 		{
-			if (!SceneShaders.write(config))
+			if (!SceneShaders.write(config, textures))
 			{
 				log.warn("Mobile HD: GPU shaders changed, scene effects unavailable");
 				return;

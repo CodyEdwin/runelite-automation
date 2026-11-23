@@ -18,12 +18,14 @@ final class HookedCallbacks implements DrawCallbacks
 {
 	final DrawCallbacks gpu;
 	private final Runnable postPass;
+	private final Runnable preScene;
 	private boolean sceneDrawn;
 
-	HookedCallbacks(DrawCallbacks gpu, Runnable postPass)
+	HookedCallbacks(DrawCallbacks gpu, Runnable postPass, Runnable preScene)
 	{
 		this.gpu = gpu;
 		this.postPass = postPass;
+		this.preScene = preScene;
 	}
 
 	@Override
@@ -123,6 +125,7 @@ final class HookedCallbacks implements DrawCallbacks
 	public void preSceneDraw(Scene scene, Projection entityProjection, float cameraX, float cameraY, float cameraZ, float cameraPitch, float cameraYaw,
 		int minLevel, int level, int maxLevel, Set<Integer> hideRoofIds)
 	{
+		preScene.run();
 		gpu.preSceneDraw(scene, entityProjection, cameraX, cameraY, cameraZ, cameraPitch, cameraYaw, minLevel, level, maxLevel, hideRoofIds);
 	}
 
@@ -131,6 +134,7 @@ final class HookedCallbacks implements DrawCallbacks
 	public void preSceneDraw(Scene scene, float cameraX, float cameraY, float cameraZ, float cameraPitch, float cameraYaw,
 		int minLevel, int level, int maxLevel, Set<Integer> hideRoofIds)
 	{
+		preScene.run();
 		gpu.preSceneDraw(scene, cameraX, cameraY, cameraZ, cameraPitch, cameraYaw, minLevel, level, maxLevel, hideRoofIds);
 	}
 

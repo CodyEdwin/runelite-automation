@@ -38,13 +38,27 @@ public interface MobileHdConfig extends Config
 		return 60;
 	}
 
-	@ConfigItem(keyName = "groundDetail", name = "Ground detail", description = "Grass, dirt and stone grain on flat-colored ground", position = 13, section = scene)
-	default boolean groundDetail()
+	@ConfigItem(keyName = "groundTextures", name = "Ground textures", description = "Grass, dirt, sand, rock, gravel and snow textures on ground, picked from the tile color", position = 13, section = scene)
+	default boolean groundTextures()
 	{
 		return true;
 	}
 
-	@ConfigItem(keyName = "smoothFog", name = "Smooth fog", description = "Softer fog falloff with distance haze", position = 14, section = scene)
+	@Range(max = 100)
+	@Units(Units.PERCENT)
+	@ConfigItem(keyName = "textureStrength", name = "Texture strength", description = "How strongly ground textures show", position = 14, section = scene)
+	default int textureStrength()
+	{
+		return 70;
+	}
+
+	@ConfigItem(keyName = "groundGrain", name = "Ground grain", description = "Generated noise grain on ground, cheaper than textures", position = 15, section = scene)
+	default boolean groundDetail()
+	{
+		return false;
+	}
+
+	@ConfigItem(keyName = "smoothFog", name = "Smooth fog", description = "Softer fog falloff with distance haze", position = 16, section = scene)
 	default boolean smoothFog()
 	{
 		return true;
