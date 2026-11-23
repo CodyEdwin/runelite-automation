@@ -49,7 +49,7 @@ public interface MobileHdConfig extends Config
 	@ConfigItem(keyName = "textureStrength", name = "Texture strength", description = "How strongly ground textures show", position = 14, section = scene)
 	default int textureStrength()
 	{
-		return 70;
+		return 50;
 	}
 
 	@ConfigItem(keyName = "groundGrain", name = "Ground grain", description = "Generated noise grain on ground, cheaper than textures", position = 15, section = scene)

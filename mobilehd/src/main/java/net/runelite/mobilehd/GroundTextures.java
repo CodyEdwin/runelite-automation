@@ -19,6 +19,8 @@ final class GroundTextures
 	/** Order must match the layer indices in SceneShaders. */
 	private static final String[] NAMES = {"grass", "dirt", "sand", "rock", "gravel", "snow"};
 	private static final int SIZE = 256;
+	private static final int GL_TEXTURE_MAX_ANISOTROPY = 0x84FE;
+	private static final int GL_MAX_TEXTURE_MAX_ANISOTROPY = 0x84FF;
 	/** The GPU plugin uses units 0 and 1. */
 	static final int UNIT = 4;
 
@@ -55,6 +57,14 @@ final class GroundTextures
 			glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 			glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
 			glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
+			float maxAniso = glGetFloat(GL_MAX_TEXTURE_MAX_ANISOTROPY);
+			if (maxAniso > 1f)
+			{
+				glTexParameterf(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAX_ANISOTROPY, Math.min(4f, maxAniso));
+			}
+			while (glGetError() != GL_NO_ERROR)
+			{
+			}
 			glActiveTexture(prevActive);
 			glProgram = GpuPlugin.class.getDeclaredField("glProgram");
 			glProgram.setAccessible(true);
@@ -99,6 +109,13 @@ final class GroundTextures
 		{
 			throw new IllegalStateException(e);
 		}
+	}
+
+	/** Drops the texture without deleting it, for when its GL context is already gone. */
+	void forget()
+	{
+		tex = 0;
+		programSet = 0;
 	}
 
 	void free()

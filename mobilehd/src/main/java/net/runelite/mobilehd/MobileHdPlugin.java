@@ -131,6 +131,10 @@ public class MobileHdPlugin extends Plugin
 			hook = new HookedCallbacks(cb, this::postPass, this::preScene);
 			client.setDrawCallbacks(hook);
 			log.info("Mobile HD: attached to GPU plugin");
+			// A (re)started GPU plugin has a new GL context and compiled whatever shaders were on disk.
+			ground.forget();
+			appliedScene = null;
+			clientThread.invokeLater(this::applyScene);
 		}
 		else if (cb != hook)
 		{
@@ -189,7 +193,7 @@ public class MobileHdPlugin extends Plugin
 	/** Writes scene shaders for the current settings and has the GPU plugin recompile if they changed. */
 	private void applyScene()
 	{
-		if (!SceneShaders.available())
+		if (!SceneShaders.available() || hook == null)
 		{
 			return;
 		}
