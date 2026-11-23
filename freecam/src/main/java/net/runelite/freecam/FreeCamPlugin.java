@@ -4,6 +4,8 @@ import java.awt.event.KeyEvent;
 import net.runelite.client.input.KeyListener;
 import javax.inject.Inject;
 import net.runelite.api.Client;
+import net.runelite.api.CollisionData;
+import net.runelite.api.CollisionDataFlag;
 import net.runelite.api.GameState;
 import net.runelite.api.Perspective;
 import net.runelite.api.Player;
@@ -18,12 +20,13 @@ import net.runelite.client.plugins.PluginDescriptor;
 
 @PluginDescriptor(
 	name = "Free Cam",
-	description = "Backtick toggles a ground-level explore camera. WASD to walk, Shift to run, drag/arrows to look.",
+	description = "Backtick toggles a ground-level explore camera. WASD to walk with collision, Shift to run, drag/arrows to look.",
 	tags = {"camera", "fps", "explore", "fly"}
 )
 public class FreeCamPlugin extends Plugin implements KeyListener
 {
 	private static final int EYE_HEIGHT = 180;
+	private static final int RADIUS = 24;
 	private static final double WALK = 900, RUN = 2400; // local units per second
 
 	@Inject
@@ -105,8 +108,16 @@ public class FreeCamPlugin extends Plugin implements KeyListener
 			double fx = -Math.sin(yaw), fy = Math.cos(yaw); // forward on the ground
 			double sx = fy, sy = -fx;                       // right
 			double len = Math.hypot(f, s), step = (run ? RUN : WALK) * dt / len;
-			x += (fx * f + sx * s) * step;
-			y += (fy * f + sy * s) * step;
+			WorldView wv0 = client.getTopLevelWorldView();
+			double dx = (fx * f + sx * s) * step, dy = (fy * f + sy * s) * step;
+			if (canMove(wv0, x, y, x + dx + Math.signum(dx) * RADIUS, y))
+			{
+				x += dx;
+			}
+			if (canMove(wv0, x, y, x, y + dy + Math.signum(dy) * RADIUS))
+			{
+				y += dy;
+			}
 		}
 
 		WorldView wv = client.getTopLevelWorldView();
@@ -128,6 +139,44 @@ public class FreeCamPlugin extends Plugin implements KeyListener
 			client.setCameraFocalPointY((float) y);
 			client.setCameraFocalPointZ(h);
 		}
+	}
+
+	/** Same rules as walking: blocked tiles and walls between tiles stop you. */
+	private static boolean canMove(WorldView wv, double x0, double y0, double x1, double y1)
+	{
+		int ax = (int) x0 >> 7, ay = (int) y0 >> 7, bx = (int) x1 >> 7, by = (int) y1 >> 7;
+		if (ax == bx && ay == by)
+		{
+			return true;
+		}
+		CollisionData[] maps = wv.getCollisionMaps();
+		if (maps == null || maps[wv.getPlane()] == null)
+		{
+			return true;
+		}
+		int[][] fl = maps[wv.getPlane()].getFlags();
+		if (bx < 0 || by < 0 || bx >= fl.length || by >= fl[0].length || ax < 0 || ay < 0 || ax >= fl.length || ay >= fl[0].length)
+		{
+			return false;
+		}
+		int a = fl[ax][ay], b = fl[bx][by];
+		if ((b & CollisionDataFlag.BLOCK_MOVEMENT_FULL) != 0)
+		{
+			return false;
+		}
+		if (bx > ax && ((a & CollisionDataFlag.BLOCK_MOVEMENT_EAST) != 0 || (b & CollisionDataFlag.BLOCK_MOVEMENT_WEST) != 0))
+		{
+			return false;
+		}
+		if (bx < ax && ((a & CollisionDataFlag.BLOCK_MOVEMENT_WEST) != 0 || (b & CollisionDataFlag.BLOCK_MOVEMENT_EAST) != 0))
+		{
+			return false;
+		}
+		if (by > ay && ((a & CollisionDataFlag.BLOCK_MOVEMENT_NORTH) != 0 || (b & CollisionDataFlag.BLOCK_MOVEMENT_SOUTH) != 0))
+		{
+			return false;
+		}
+		return !(by < ay && ((a & CollisionDataFlag.BLOCK_MOVEMENT_SOUTH) != 0 || (b & CollisionDataFlag.BLOCK_MOVEMENT_NORTH) != 0));
 	}
 
 	@Override
