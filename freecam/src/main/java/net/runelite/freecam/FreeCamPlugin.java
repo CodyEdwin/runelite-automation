@@ -78,11 +78,7 @@ public class FreeCamPlugin extends Plugin implements KeyListener
 		}
 		int mx = e.getX(), my = e.getY();
 		int dx = mx - lastMouseX, dy = my - lastMouseY;
-		// In FPS mode the app puts the hidden cursor back at 45%/50% of the screen near the edges;
-		// landing exactly there is a recenter, not a turn. Huge jumps are touch taps.
-		java.awt.Dimension screen = java.awt.Toolkit.getDefaultToolkit().getScreenSize();
-		boolean home = e.getXOnScreen() == Math.round(screen.width * 0.45f) && e.getYOnScreen() == Math.round(screen.height * 0.5f);
-		boolean jump = lastMouseX < 0 || home || Math.abs(dx) > 300 || Math.abs(dy) > 300;
+		boolean jump = lastMouseX < 0 || Math.abs(dx) > 50 || Math.abs(dy) > 50; // touch taps teleport the pointer
 		lastMouseX = mx;
 		lastMouseY = my;
 		if (jump || (dx == 0 && dy == 0))
