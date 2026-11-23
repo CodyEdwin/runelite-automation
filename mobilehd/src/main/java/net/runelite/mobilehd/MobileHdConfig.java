@@ -75,7 +75,7 @@ public interface MobileHdConfig extends Config
 	@ConfigItem(keyName = "saturation", name = "Saturation", description = "Color saturation", position = 22, section = screen)
 	default int saturation()
 	{
-		return 120;
+		return 110;
 	}
 
 	@Range(min = 50, max = 200)
@@ -90,7 +90,7 @@ public interface MobileHdConfig extends Config
 	@ConfigItem(keyName = "warmth", name = "Warmth", description = "Negative is cooler, positive is warmer", position = 24, section = screen)
 	default int warmth()
 	{
-		return 20;
+		return 0;
 	}
 
 	@ConfigItem(keyName = "bloom", name = "Bloom", description = "Soft glow around bright areas", position = 25, section = screen)

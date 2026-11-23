@@ -112,7 +112,7 @@ final class SceneShaders
 		+ "  vec3 mhdSun = normalize(vec3(-0.45, -0.8, -0.4));\n"
 		+ "  float ndl = dot(mhdN, mhdSun);\n"
 		+ "  float diff = ndl * 0.5 + 0.5;\n"
-		+ "  c.rgb *= mix(vec3(1.0), mix(vec3(0.82, 0.86, 0.95), vec3(1.12, 1.07, 0.98), diff), MHD_SUN_STRENGTH);\n"
+		+ "  c.rgb *= mix(vec3(1.0), mix(vec3(0.85, 0.87, 0.93), vec3(1.08, 1.06, 1.02), diff), MHD_SUN_STRENGTH);\n"
 		+ "#if MHD_SPECULAR\n"
 		+ "  if (!mhdGround && ndl > 0.0) {\n"
 		+ "    vec3 h = normalize(mhdSun + normalize(fView));\n"
