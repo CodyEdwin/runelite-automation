@@ -78,7 +78,7 @@ public class FreeCamPlugin extends Plugin implements KeyListener
 		}
 		int mx = e.getX(), my = e.getY();
 		int dx = mx - lastMouseX, dy = my - lastMouseY;
-		boolean jump = lastMouseX < 0 || Math.abs(dx) > 50 || Math.abs(dy) > 50; // touch taps teleport the pointer
+		boolean jump = lastMouseX < 0 || Math.abs(dx) > 150 || Math.abs(dy) > 150; // touch taps teleport the pointer
 		lastMouseX = mx;
 		lastMouseY = my;
 		if (jump || (dx == 0 && dy == 0))
